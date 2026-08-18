@@ -193,12 +193,28 @@ a config field that a factory reset or firmware update can quietly revert.
 
 `VERIFY before ordering:` **buy the Gen2 "Plus 1PM" specifically.** ESPHome
 flashing is well-trodden on Gen2 (ESP32); Gen3/Gen4 are newer and less proven.
-Flashing needs a one-off serial connection to the internal header.
 
-**Fallback if you would rather not flash it:** stock firmware exposes a local
-HTTP API with no cloud, and `van-core` can drive it via `http_request`. Then set
-power-on state to `off` **explicitly**, and treat that setting as a documented
-pre-trip check — it is the whole safety case.
+`VERIFY before ordering — this one is load-bearing:` **that ESPHome can read the
+metering IC.** Shelly Plus 1PM is believed to use an **ADE7953**, for which
+ESPHome has a component — but confirm against a working community config for
+this exact model. If the metering cannot be read, half the argument for the
+Shelly over a dumb relay disappears (no `P_heater`, no dead-element detection)
+and the choice is worth revisiting.
+
+**Flashing — bench work, never on mains.** Serial to the internal UART header:
+3.3V USB-UART, GPIO0 low for download mode. Straightforward, but do it **before
+installation, with mains completely disconnected**. A USB-UART ground referenced
+to a live mains device destroys the laptop and can kill the operator — and on a
+*floating* supply (D1c) there is no RCD to intervene.
+
+**Fallback if you would rather not flash it:** stock firmware works fully offline
+— provisioning is via the Shelly's *own* AP and a local web UI at 192.168.33.1,
+so it joins `van-core`'s SoftAP with a static IP and never sees the internet
+(unlike the Tuya/MiBoxer devices in §7, which cannot be provisioned offline at
+all). Gen2's local RPC API over HTTP is then driven from `van-core` with
+`http_request`. Costs: disable cloud, set power-on state to `off` **explicitly**,
+and treat that setting as a documented pre-trip check — it is the whole safety
+case, living in a config field rather than in git.
 
 **Still rejected: the SSR.** It fails *closed* under a 1–2kW heating element.
 
@@ -215,22 +231,53 @@ opportunistic-solar one**:
 
 Otherwise one shower costs half a day of fridge autonomy.
 
-### D1c — 230V safety `VERIFY FIRST`
+### D1c — 230V safety — `CONFIRMED FLOATING. Now the project's top risk.`
 
-**Determine whether the P310's AC output is neutral-earth bonded or floating.**
-Most portable stations float. On a floating output **an RCD will not trip** —
-there is no reference for fault current to return through, so protection you
-would assume exists does not. A single fault gives no shock path (not inherently
-unsafe), but double faults go undetected, with 1–2kW of mains running to a water
-heater in a damp vehicle.
+`CONFIRMED 2026-08-18`: the P310's AC output **floats** — no neutral–earth bond.
+That is an IT system, and it makes an RCD inoperative on this supply.
 
-Minimum measures regardless:
+**Why this outranks everything else in this document.** Every other failure mode
+here costs a flat battery or warm food. This one is an electrocution path. And
+the heater is the worst load to expose it: **element-to-sheath insulation
+breakdown is the normal end-of-life failure of an immersion element**, so the
+"first fault" that an IT system is supposed to tolerate is not a remote
+possibility — it is the expected way this appliance dies.
+
+The failure sequence:
+1. Element leaks to its sheath → tank → chassis. **No current flows, no RCD
+   trips, nothing indicates anything.** The van now has its 230V supply
+   referenced to chassis through a fault.
+2. Any second fault, anywhere on the 230V system, completes a circuit. In a van
+   the chassis is the sink, the tap, the frame, every other appliance's exposed
+   metal.
+3. There is no protective device in the system that responds to either event.
+
+**Decision — do not energise a fixed immersion heater on a floating supply.**
+One of these must be true first:
+
+- **Preferred: bond N–E at a single point and fit a 30mA Type A RCBO.** This
+  converts the installation to TN-S and restores conventional protection —
+  the same thing a generator bonding plug does. Bond the heater tank and all
+  exposed 230V-adjacent metal to chassis.
+  `VERIFY FIRST — this is the new blocker:` **does the P310 tolerate an N–E bond
+  on its output?** Many portable inverters drive a symmetric H-bridge where both
+  output legs swing ~115V relative to ground; forcing one leg to chassis can
+  trip the unit's protection or damage it. Confirm with AFERIY, or measure each
+  leg to chassis with a high-impedance meter and a known load before bonding
+  anything.
+- **If the P310 will not tolerate bonding:** the fixed heater does not go on
+  this supply. That is a genuine stop, not a hedge. An insulation monitoring
+  device is the textbook answer for an unbonded IT system, but specifying one
+  for a van is disproportionate — the bond is the practical route.
+
+**The fridge is on the same floating supply**, at 35W and lower consequence, but
+the topology is identical. Bonding fixes both at once.
+
+Measures required regardless of the above:
 - All 230V terminations inside an enclosed, non-accessible box
 - 2.5mm² mains-rated cable
 - No terminal blocks inside a locker that gets reached into
-
-Making an RCD functional requires bonding N–E in the van, which has its own
-consequences and should be decided separately.
+- Heater tank bonded to chassis
 
 ### D1d — Where the heater logic and the water-temp estimator live
 

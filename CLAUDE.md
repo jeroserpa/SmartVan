@@ -231,6 +231,32 @@ Raise `max_connection` on the SoftAP to 8 (default 4).
 HTTP REST against each node's `web_server`. `van-water` GETs core's sensor JSON
 every 30s to read SOC and surplus power. No MQTT broker, no HA, no extra hardware.
 
+### No router — confirmed workable end to end
+
+Every piece of this runs with no router and no internet, including provisioning:
+
+| Concern | How it works without a router |
+|---|---|
+| Node addressing | Static IPs on core's SoftAP. mDNS is unreliable on SoftAP — never depend on hostnames |
+| Shelly provisioning | Its own AP + local web UI at `192.168.33.1`. Set SSID, static IP, cloud off, power-on state — all offline. **Contrast §7:** Tuya/MiBoxer cannot be provisioned without internet at all |
+| Shelly control | ESPHome node on the SoftAP (or stock RPC over HTTP). Either way, plain HTTP on the local subnet |
+| Clock | No SNTP → DS3231 RTC (BOM item 15). Already required for logging |
+| Log retrieval | `sd_file_server` over the SoftAP from a phone. No card removal |
+| Firmware updates | ESPHome OTA to the static IP |
+
+**Practical gotchas:**
+- **OTA needs the laptop joined to the SoftAP, which then has no internet.**
+  ESPHome may want to fetch platform packages on first compile. *Compile at home,
+  then join the AP and upload* — or use a second interface. Do not discover this
+  in a car park.
+- **`max_connection` must be raised to 8.** The default of 4 is already met by
+  phone + water + heater + vehicle, with no headroom for a second phone.
+- **The heater node appears and disappears by design** — it is only powered while
+  the inverter is on. `van-core` must treat its absence as normal, never as a
+  fault, and must not let a missing heater reply stall the arbiter (§5.1).
+- Each extra SoftAP client is load on the node also running BLE, the web server
+  and the display (§2 risk note). Poll the heater at low rate.
+
 **Escape hatch (documented, not default):** if inverter EMI degrades the 2.4GHz
 link — plausible with 3300W of switching a metre away — migrate inter-node comms
 to **RS485 twisted pair (MAX485) or CAN (native TWAI + SN65HVD230)**. In a van
