@@ -438,8 +438,47 @@ Mi-Light / MiBoxer 2.4GHz remote family, 30m repeat between fixtures.
   natively, so you replace only the WiFi brain and keep PWM + RF intact. If
   single-chip, you lose RF; fall back to B.
 
+### Route D — join them to `van-core`'s SoftAP on stock firmware? `NO`
+
+Asked directly, so recorded. **Associating is not controlling**, and both halves
+fail independently:
+
+- **Provisioning needs the cloud.** Tuya activation requires reaching Tuya's
+  servers; without it the device never completes pairing, so it will not even
+  reach the association step in the van. *Workaround:* pair at home, then set
+  `van-core`'s SoftAP SSID and password identical to the house network so the
+  device believes it is on the same LAN. This solves association only.
+- **`van-core` still cannot speak to them.** Commanding a Tuya device on the LAN
+  means the **Tuya LAN protocol** — AES-128, CRC, JSON on port 6668, keyed by a
+  `local_key` obtainable only through a Tuya IoT developer account at pairing
+  time. **ESPHome has no client for this.** Note the trap: ESPHome's `tuya`
+  component is the *serial* protocol between a Tuya WiFi module and a co-MCU
+  (which is what makes route C work) — it is not a LAN client, despite the name.
+  Implementing the LAN stack in C++ on the node that must not starve its BLE task
+  (§2) is the wrong place to spend that risk.
+
+**Route C is the clean version of what this question wants:** reflashed, they are
+ordinary ESPHome nodes and join the SoftAP like any other. See BOM D1f — BK7231N
+is LibreTiny's *best*-supported target, which is why this is the sanctioned
+hacking target and the Meross is not.
+
+### Standby power may decide this before control does
+
 **Measure first:** an unprovisioned Tuya module can idle at 0.5–1W while
 scanning. Three of them ≈ 40–70 Wh/day for nothing. Meter one before deciding.
+
+These are **permanently powered on the 12V habitation bus** — they must be, to
+receive an "on" command — so this is continuous draw, not occasional. At 3 × 1W
+it **exceeds the entire §5.4 2W control-system budget on its own**, before
+`van-core` is switched on, and costs ~7–14% of the project's whole saving to run
+light switches that are off.
+
+Two consequences:
+- This is an argument *for* route A or B, where the WiFi radio is never used.
+- Counterintuitively, **provisioning might lower standby** rather than raise it —
+  an associated idle radio can draw less than one endlessly scanning. But a
+  device associated yet unable to reach the cloud may instead retry hard and cost
+  more. `UNVERIFIED both ways` — this is a meter question, not an argument.
 
 ---
 
