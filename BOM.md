@@ -308,6 +308,42 @@ display anyway.
 | Blue SRD-05VDC relay module | Datasheet says 10A/250V, but the screw terminals and PCB traces are not good for 8.7A continuous, and the "optocoupler" usually shares ground so the isolation is illusory |
 | Automotive relay (item 31) | Contacts rated for 12V DC, not 230V AC — AC arc behaviour is entirely different |
 | DIN contactor + 12V coil | Workable, but see D1 — it solves a sequencing problem that does not exist, at the cost of a coil driver, a GPIO and a DIY 230V box |
+| **Meross MSS315 (owned)** | **Matter.** Needs a fabric controller on IPv6 + mDNS — i.e. HA/Apple/Google running 24/7. **ESPHome cannot be a Matter controller**, so `van-core` has no way to command it. See §2; also already commissioned to the house fabric |
+| **Any plug-in smart plug** | Wrong *shape* for this load in a vehicle — see D1e |
+
+### D1e — Why not a plug-in smart plug
+
+The question recurs, so the reasoning is recorded rather than re-derived.
+
+Nothing is wrong with plug-form smart plugs electrically; the objections are
+van-specific and stack badly with D1c:
+
+- **Vibration versus a 6–9A connection.** A 1–2kW element pulls 4.3–8.7A
+  continuously for ~20 minutes. Plug/socket contacts work loose with road
+  vibration, and a loose joint at that current heats. This is the mechanism
+  behind most smart-plug fires, and a van applies the one stress a house never
+  does. The connector policy already bans Dupont jumpers for exactly this reason;
+  the stakes here are simply higher.
+- **It adds interfaces to a now safety-critical earth path.** D1c makes the
+  heater tank's bond to chassis load-bearing, because a floating supply has no
+  RCD behind it. A plug and socket insert two more contacts into that path.
+- **The heater may not even be plug-connected.** If it is hardwired, using a
+  plug means *adding* a socket and plug purely to accommodate the plug — strictly
+  worse on every axis above.
+- **Consumer 16A ratings are optimistic** and rarely qualified for continuous
+  duty; the relay and screw terminals are the usual weak point.
+
+The Shelly Plus 1PM is the right shape precisely because it is designed to be
+hardwired into a back-box behind a fixed load, with no connector in the current
+path.
+
+**If serial flashing is the real objection, there are two routes that avoid it:**
+- **Athom** ships devices with **ESPHome pre-installed** — no flashing, no cloud,
+  joins the SoftAP directly. `VERIFY` whether they offer a *hardwired inline*
+  module with metering rather than only plug-form; plug-form loses on the points
+  above.
+- **Shelly on stock firmware** — fully offline, local RPC API, per D1. Costs only
+  that `restore_mode` becomes a config field instead of a line in git.
 
 ### D2 — Self-power hazard for `van-core` — `REVISED: UPS dropped`
 
