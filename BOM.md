@@ -37,37 +37,44 @@ where a part is trip-critical, buy locally.
 
 ## Phase 2 — `van-water`
 
+Item numbers continue from Phase 1 — they are order-list identifiers, not
+per-phase counters. (Phase 2 previously restarted at 16 and collided with
+Phase 1; D1's "item 20" was ambiguous as a result.)
+
 | # | Item | Qty | ~€ | Notes |
 |---|---|---|---|---|
-| 16 | ESP32 WROOM-32 devkit | 1 | 7 | No display needed; no BLE requirement |
-| 17 | ADS1115 16-bit ADC module | 1 | 4 | ESP32 internal ADC is too nonlinear for the sender |
-| 18 | Divider resistor for sender | 1 | — | **Value pending §8.7 measurement.** 220Ω if 0–190Ω sender. Sender run **confirmed <1m — no shielding needed** |
-| 19 | Logic-level MOSFET (AO3400 / 2N7000) | 1 | 1 | Gates sender excitation — continuous DC corrodes a submerged wiper |
-| 20 | DIN contactor, 12V DC coil, 20A/230V + enclosure | 1 | 25 | **Not an SSR** (fails closed) and not a mains-powered smart relay — see D1 |
-| 21 | Buck 12V→5V 3A + fuse holder + fuses | 1 | 7 | |
-| 22 | ABS enclosure IP65 + glands | 1 | 7 | |
-| 23 | Automotive relay 30A + socket (future pump) | 1 | 4 | Phase 2b |
-| | **Subtotal** | | **~40–50** | |
+| 22 | **ESP32-C3 SuperMini** — already owned | 1 | 0 | Replaces the WROOM-32 devkit. D0 rules the SuperMinis out for `van-core` but clears them "as sensor nodes" — no BLE here, and the load is I²C + three GPIOs. **`VERIFY` RSSI at the installed position first:** the C3 SuperMini's PCB antenna is poorly matched (same radio weakness D0 cites for the C6) and this node holds a SoftAP link across a metal-bodied van. Fall back to a WROOM-32 devkit (€7) if margin is thin |
+| 23 | ADS1115 16-bit ADC module | 1 | 4 | ESP32 internal ADC is too nonlinear for the sender |
+| 24 | Divider resistor for sender | 1 | — | **Value pending §8.7 measurement.** 220Ω if 0–190Ω sender. Sender run **confirmed <1m — no shielding needed** |
+| 25 | Logic-level MOSFET (AO3400 / 2N7000) | 1 | 1 | Gates sender excitation — continuous DC corrodes a submerged wiper |
+| 26 | DIN contactor, 12V DC coil, 20A/230V + enclosure | 1 | 25 | **Not an SSR** (fails closed) and not a mains-powered smart relay — see D1 |
+| 27 | **Contactor coil driver** — AO3400 + 1N4007 + 100Ω + 10kΩ | 1 | 1 | **Was missing.** A 12V contactor coil pulls 200–400mA — far past a GPIO. See D1d for why the 10k gate pulldown is a safety part, not a nicety |
+| 28 | DS18B20 waterproof probe, 1m | 1 | 3 | **Cabin temperature** — the `T_cabin` term in the water-temp estimator (CLAUDE.md §9 Phase 2). Local to `van-water`, so the estimator needs no network |
+| 29 | Buck 12V→5V 3A + fuse holder + fuses | 1 | 7 | |
+| 30 | ABS enclosure IP65 + glands | 1 | 7 | |
+| 31 | Automotive relay 30A + socket (future pump) | 1 | 4 | Phase 2b. **12V DC contacts — never repurpose one for the 230V heater** |
+| | **Subtotal** | | **~52** | Contactor is half of it |
 
 ## Shared wiring stock
 
 | # | Item | ~€ | Notes |
 |---|---|---|---|
-| 24 | Silicone-insulated stranded wire 0.5mm² (signal) | 10 | Silicone stays flexible cold; PVC cracks |
-| 25 | Silicone stranded 1.0mm² (12V feeds) | 10 | |
-| 26 | JST-XH connector kit + crimper | 12 | Board-level connections |
-| 27 | Wago 221 lever connectors, assorted | 8 | 12V branch distribution |
-| 28 | Bootlace ferrule kit + ratchet crimper | 20 | One-off tool. Non-negotiable for stranded wire into screw terminals |
-| 29 | Adhesive-lined heatshrink assortment | 8 | Adhesive-lined, not plain — moisture ingress |
-| 30 | Cable labels / label printer tape | 5 | |
-| | **Subtotal** | **~73** | Much of it reusable stock |
+| 32 | Silicone-insulated stranded wire 0.5mm² (signal) | 10 | Silicone stays flexible cold; PVC cracks |
+| 33 | Silicone stranded 1.0mm² (12V feeds) | 10 | |
+| 34 | **Mains-rated cable 2.5mm²** | 8 | Heater feed, 4.3–8.7A. See D1c |
+| 35 | JST-XH connector kit + crimper | 12 | Board-level connections |
+| 36 | Wago 221 lever connectors, assorted | 8 | 12V branch distribution |
+| 37 | Bootlace ferrule kit + ratchet crimper | 20 | One-off tool. Non-negotiable for stranded wire into screw terminals |
+| 38 | Adhesive-lined heatshrink assortment | 8 | Adhesive-lined, not plain — moisture ingress |
+| 39 | Cable labels / label printer tape | 5 | |
+| | **Subtotal** | **~81** | Much of it reusable stock |
 
 ## Measurement tools
 
 | # | Item | ~€ | Justifies |
 |---|---|---|---|
-| 31 | DC clamp meter, 200A+ | 30 | Confirms the 1200W alternator figure (§9 Phase 4). Also invaluable for every future debug |
-| 32 | Cheap plug-in energy meter | 12 | Independent cross-check of P310 readings |
+| 40 | DC clamp meter, 200A+ | 30 | Confirms the 1200W alternator figure (§9 Phase 4). Also invaluable for every future debug |
+| 41 | Cheap plug-in energy meter | 12 | Independent cross-check of P310 readings |
 
 ---
 
@@ -76,10 +83,10 @@ where a part is trip-critical, buy locally.
 | | ~€ |
 |---|---|
 | Phase 1 | 93 |
-| Phase 2 | 40–50 |
-| Wiring stock | 73 |
+| Phase 2 | 52 |
+| Wiring stock | 81 |
 | Tools | 42 |
-| **All-in** | **~253** |
+| **All-in** | **~268** |
 | **Phase 1 only, using existing stock** | **~93** |
 
 Against a saving in the region of 0.5 kWh/day plus the sleep-mode benefit, Phase 1
@@ -147,7 +154,7 @@ setpoint is an adjustable `number`. Retrofits to the same terminal block.
 SPI (display), SDMMC (card), I2C (RTC), 1-Wire, three buttons. The S3 has the
 pins; the header may not break them all out.
 
-### D1 — Mains switching for the water heater (item 20) — `REVISED`
+### D1 — Mains switching for the water heater (item 26) — `REVISED`
 
 `CONFIRMED`: heater is **230V, 1–2kW**.
 
@@ -196,6 +203,38 @@ Minimum measures regardless:
 
 Making an RCD functional requires bonding N–E in the van, which has its own
 consequences and should be decided separately.
+
+### D1d — Driving the contactor coil (item 27) — the "easy integration" answer
+
+The contactor is not harder to integrate than a smart relay; it is *three
+passives* off one GPIO. A 12V coil draws 200–400mA, so it cannot hang off a pin
+directly:
+
+```
+GPIO ──100Ω──┬── AO3400 gate        coil+ ── +12V
+             │                      coil− ── AO3400 drain
+            10kΩ                    1N4007 across the coil,
+             │                      cathode to +12V
+            GND                     AO3400 source ── GND
+```
+
+- **The 10kΩ gate pulldown is a safety part.** It holds the contactor open while
+  the ESP32 is in reset, boot, or flashing — the window where GPIOs float. This
+  is what physically implements the "heater fails OFF" rule (CLAUDE.md §5.1),
+  which runs *opposite* to the fridge's fail-toward-powered convention. Do not
+  omit it.
+- **The 1N4007 is mandatory, not optional.** A contactor coil is strongly
+  inductive; without a flyback path the turn-off spike kills the MOSFET.
+- Same AO3400 part as item 25, so it is one line on the order either way.
+
+**Rejected alternatives, for the record:**
+
+| Option | Why not |
+|---|---|
+| Shelly / mains-powered smart relay | Powered downstream of the inverter the arbiter cycles — reboots every cycle, 10–20s to rejoin SoftAP. See D1 |
+| SSR | Fails **closed** under a 1–2kW element |
+| Blue SRD-05VDC relay module | Datasheet says 10A/250V, but the screw terminals and PCB traces are not good for 8.7A continuous, and the "optocoupler" usually shares ground so the isolation is illusory |
+| Automotive relay (item 31) | Contacts rated for 12V DC, not 230V AC — AC arc behaviour is entirely different |
 
 ### D2 — Self-power hazard for `van-core` — `REVISED: UPS dropped`
 
