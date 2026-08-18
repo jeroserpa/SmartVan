@@ -349,6 +349,40 @@ Alternative if Athom is unavailable: **Shelly Plug S** — plug-form, fully offl
 via local RPC. `VERIFY the rating first`: Plug S is 10A/2500W, which is tight for
 a 2kW element and would rule it out.
 
+### D1f — Can the owned Meross MSS315 be reflashed? — `NO (poor expected value)`
+
+Asked and investigated rather than assumed, since the plug is already in the van
+and free to repurpose.
+
+**Teardown finding: the MSS315 uses a Realtek RTL8720CM**, not an ESP32, with an
+HF32FV-16 16A relay. That removes the easy path and leaves three problems:
+
+1. **ESPHome cannot target it.** The only route is LibreTiny's `realtek-ambz2`
+   platform (Ameba Z2). LibreTiny's mature target is BK7231N/T; Ameba Z2 is
+   markedly less proven, and this is the one subsystem where "mostly works" is
+   not a useful state.
+2. **Matter argues against flashability.** Matter certification requires
+   protecting a Device Attestation Certificate private key, so vendors commonly
+   enable secure boot and flash encryption. If those eFuses are burned, custom
+   firmware is *permanently* impossible — a hard stop, not a difficulty.
+3. **No known community port for this model**, and the teardown does not identify
+   the energy metering IC, so that would need tracing before metering worked.
+
+**The cheap decision procedure, if attempted anyway (~30 min):** open it, attach
+a 3.3V USB-UART to the debug pads, read the boot log — the ROM reports secure
+boot and flash encryption state — and try `ltchiptool` to see whether flash is
+readable. **Mains fully disconnected**; on a floating supply with no RCD (D1c)
+this is not a corner to cut.
+
+**Verdict:** an evening on LibreTiny's least-supported target, against a device
+that may be cryptographically locked, to avoid a €15 purchase that arrives
+working. Buy the Athom.
+
+**Better target for the same effort: the MiBoxer E2-WR (§7C).** That decision is
+still genuinely open, the module is likely a BK7231N — LibreTiny's *best*
+supported chip — and unlike the heater plug there is no €15 part that solves it.
+If there is reverse-engineering appetite, spend it there.
+
 The hardwired Shelly Plus 1PM (item 26) remains valid but is now the *second*
 choice — it is the right answer only if the heater were hardwired, which it is
 not.

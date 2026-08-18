@@ -79,8 +79,13 @@ under 2W total.
   `van-core` has no way to command it, router or no router. The limitation is the
   protocol, not the plug's form factor or rating: it has handled the 1–2kW load
   in this van without trouble (see BOM D1e, where the vibration and rating
-  objections are retracted on that evidence). **Decision: replace with an
-  ESPHome-preflashed plug in the same socket; the Meross returns to the house.**
+  objections are retracted on that evidence).
+  **Reflashing it was investigated and rejected — see BOM D1f.** Teardown shows a
+  **Realtek RTL8720CM**, not an ESP32: ESPHome cannot target it, the only route
+  is LibreTiny's least-mature platform, and Matter devices commonly burn secure
+  boot fuses to protect attestation keys, which would make custom firmware
+  permanently impossible. **Decision: replace with an ESPHome-preflashed plug in
+  the same socket; the Meross returns to the house.**
 - **MiBoxer E2-WR** LED controllers (dual-white/CCT, WiFi+BLE+2.4G RF, Tuya).
   Tuya WiFi side requires internet to provision → unusable in the van as-is.
   The 2.4GHz RF side works standalone. See §7 for the three routes.
