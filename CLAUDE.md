@@ -553,6 +553,14 @@ no crimp tool for field repairs.
   `throttle_average: 60s` (sloshing while driving makes raw readings useless),
   calibrate with `calibrate_linear` against **actual litres poured**, not the
   nominal curve — these senders are rarely linear near the ends.
+- **Future: estimated water temperature on the display.** The heater tank is a
+  sealed, isolated 230V unit — no draw-off during heating, so no unmodeled
+  disturbance. Lumped thermal-capacitance model on `van-water`:
+  `dT/dt = (P_heater − UA·(T_water − T_cabin)) / (m·c)`, driven by heater
+  relay on/off state and cabin temperature. Runs on 230V AC (via the arbiter's
+  `surplus_req` path), so no voltage-sag correction needed — nameplate power
+  is accurate. Calibrate `UA` once: heat to a known temp, let it coast, log
+  decay against cabin temp. No physical water temp sensor required.
 
 ### Phase 3 — lighting
 - Route A/B/C per §7.
