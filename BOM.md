@@ -47,7 +47,7 @@ Phase 1; D1's "item 20" was ambiguous as a result.)
 | 23 | ADS1115 16-bit ADC module | 1 | 4 | ESP32 internal ADC is too nonlinear for the sender |
 | 24 | Divider resistor for sender | 1 | — | **Value pending §8.7 measurement.** 220Ω if 0–190Ω sender. Sender run **confirmed <1m — no shielding needed** |
 | 25 | Logic-level MOSFET (AO3400 / 2N7000) | 1 | 1 | Gates sender excitation — continuous DC corrodes a submerged wiper |
-| 26 | **Shelly Plus 1PM (Gen2)** | 1 | 25 | Heater switching + power metering, flashed with ESPHome. **Gen2 specifically** — see D1. Its own node; not wired to `van-water` |
+| 26 | **Athom ESPHome-preflashed smart plug, 16A EU** | 1 | 15 | **Chosen — see D1e.** Heater switching + power metering. Ships with ESPHome: no flashing, no cloud, no router. Uses the existing wall socket and heater plug; nothing in the 230V install is modified. `VERIFY` 16A rating and that metering is exposed. Fallback: hardwired Shelly Plus 1PM (~€25) |
 | 27 | Buck 12V→5V 3A + fuse holder + fuses | 1 | 7 | |
 | 28 | ABS enclosure IP65 + glands | 1 | 7 | |
 | 29 | Automotive relay 30A + socket (future pump) | 1 | 4 | Phase 2b. **12V DC contacts — never repurpose one for the 230V heater** |
@@ -252,32 +252,36 @@ The failure sequence:
    metal.
 3. There is no protective device in the system that responds to either event.
 
-**Decision — do not energise a fixed immersion heater on a floating supply.**
-One of these must be true first:
+**`ACCEPTED RISK` — owner decision, 2026-08-18.** The existing earthing
+arrangement will not be modified; the installation is in service and working.
+Recorded here as a deliberate, informed decision rather than an oversight, which
+is the only thing this section can usefully do now.
 
-- **Preferred: bond N–E at a single point and fit a 30mA Type A RCBO.** This
-  converts the installation to TN-S and restores conventional protection —
-  the same thing a generator bonding plug does. Bond the heater tank and all
-  exposed 230V-adjacent metal to chassis.
-  `VERIFY FIRST — this is the new blocker:` **does the P310 tolerate an N–E bond
-  on its output?** Many portable inverters drive a symmetric H-bridge where both
-  output legs swing ~115V relative to ground; forcing one leg to chassis can
-  trip the unit's protection or damage it. Confirm with AFERIY, or measure each
-  leg to chassis with a high-impedance meter and a known load before bonding
-  anything.
-- **If the P310 will not tolerate bonding:** the fixed heater does not go on
-  this supply. That is a genuine stop, not a hedge. An insulation monitoring
-  device is the textbook answer for an unbonded IT system, but specifying one
-  for a van is disproportionate — the bond is the practical route.
+**What the decision does and does not change.** The heater has already been
+running on this supply through a manual plug. Automating it **adds no electrical
+risk** — the topology, the fault modes and the absence of an RCD are all
+unchanged. What automation adds is *unattended* operation, and that is the only
+delta worth managing.
 
-**The fridge is on the same floating supply**, at 35W and lower consequence, but
-the topology is identical. Bonding fixes both at once.
+**Therefore, one constraint, implemented in software at zero cost:**
+> **Never energise the heater unattended.** D1b already permits heating only when
+> SOC > 85% **and** (alternator charging **or** `input_power` > 400W) — which in
+> practice means driving or strong sun, i.e. someone present. That rule was
+> written for the energy budget; it now carries a second job. **Do not relax it
+> for convenience, and never allow the heater during sleep mode** (already
+> required by CLAUDE.md §6).
 
-Measures required regardless of the above:
+Retained as good practice, none of which touches the existing earthing:
 - All 230V terminations inside an enclosed, non-accessible box
-- 2.5mm² mains-rated cable
 - No terminal blocks inside a locker that gets reached into
-- Heater tank bonded to chassis
+- If the element is ever replaced, that is the free moment to revisit bonding
+
+**For the record, in case it is ever revisited:** bonding N–E at a single point
+and fitting a 30mA Type A RCBO converts the installation to TN-S and restores
+conventional protection. It would first need confirming that the P310 tolerates
+an N–E bond at all — many portable inverters swing both output legs ~115V to
+ground and can trip or fail when one is forced to chassis. The fridge sits on the
+same floating supply at lower consequence; a bond would fix both at once.
 
 ### D1d — Where the heater logic and the water-temp estimator live
 
@@ -315,35 +319,39 @@ display anyway.
 
 The question recurs, so the reasoning is recorded rather than re-derived.
 
-Nothing is wrong with plug-form smart plugs electrically; the objections are
-van-specific and stack badly with D1c:
+**`RETRACTED` — the vibration and rating objections.** An earlier version of this
+section argued that plug/socket contacts work loose under road vibration and that
+consumer 16A ratings are optimistic for continuous duty. `MEASURED`: the heater
+has already been running through a plug-in Meross MSS315 in this van, used as a
+manual on/off switch, handling the load without trouble. In-situ experience beats
+a theoretical failure mode — the objection is withdrawn, and the socket and plug
+already in place are treated as given.
 
-- **Vibration versus a 6–9A connection.** A 1–2kW element pulls 4.3–8.7A
-  continuously for ~20 minutes. Plug/socket contacts work loose with road
-  vibration, and a loose joint at that current heats. This is the mechanism
-  behind most smart-plug fires, and a van applies the one stress a house never
-  does. The connector policy already bans Dupont jumpers for exactly this reason;
-  the stakes here are simply higher.
-- **It adds interfaces to a now safety-critical earth path.** D1c makes the
-  heater tank's bond to chassis load-bearing, because a floating supply has no
-  RCD behind it. A plug and socket insert two more contacts into that path.
-- **The heater may not even be plug-connected.** If it is hardwired, using a
-  plug means *adding* a socket and plug purely to accommodate the plug — strictly
-  worse on every axis above.
-- **Consumer 16A ratings are optimistic** and rarely qualified for continuous
-  duty; the relay and screw terminals are the usual weak point.
+What survives is only the **Matter** problem, which is about the protocol and not
+the form factor: the MSS315 needs a fabric controller on IPv6 + mDNS, and ESPHome
+cannot be one. So the existing plug cannot be commanded by `van-core` — but a
+*different* plug in the same socket can.
 
-The Shelly Plus 1PM is the right shape precisely because it is designed to be
-hardwired into a back-box behind a fixed load, with no connector in the current
-path.
+**`DECIDED`: plug-form is fine. Use an ESPHome-preflashed plug.**
 
-**If serial flashing is the real objection, there are two routes that avoid it:**
-- **Athom** ships devices with **ESPHome pre-installed** — no flashing, no cloud,
-  joins the SoftAP directly. `VERIFY` whether they offer a *hardwired inline*
-  module with metering rather than only plug-form; plug-form loses on the points
-  above.
-- **Shelly on stock firmware** — fully offline, local RPC API, per D1. Costs only
-  that `restore_mode` becomes a config field instead of a line in git.
+**Athom** ships smart plugs with **ESPHome already installed** — no flashing, no
+cloud, no router, power metering included, ~€15.
+- Setup is offline: power it, join its own setup AP from a phone, point it at
+  `van-core`'s SoftAP with a static IP. Then OTA your own config carrying
+  `restore_mode: ALWAYS_OFF`.
+- Uses the wall socket and the heater's plug exactly as they are. Nothing in the
+  230V installation is modified.
+- `VERIFY before ordering:` the EU model's current rating (a 2kW element is
+  8.7A — a 16A model, not a 10A one) and that the metering chip is exposed in
+  the shipped ESPHome config.
+
+Alternative if Athom is unavailable: **Shelly Plug S** — plug-form, fully offline
+via local RPC. `VERIFY the rating first`: Plug S is 10A/2500W, which is tight for
+a 2kW element and would rule it out.
+
+The hardwired Shelly Plus 1PM (item 26) remains valid but is now the *second*
+choice — it is the right answer only if the heater were hardwired, which it is
+not.
 
 ### D2 — Self-power hazard for `van-core` — `REVISED: UPS dropped`
 

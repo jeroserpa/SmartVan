@@ -72,10 +72,15 @@ under 2W total.
   at ~800W when the engine runs.
 
 ### Existing smart devices
-- **Meross MSS315 (Matter/WiFi, energy monitoring)** — *not used in the van.*
+- **Meross MSS315 (Matter/WiFi, energy monitoring)** — *has been used in the van
+  as a manual on/off switch for the water heater*, but cannot be automated here.
   Matter-over-WiFi needs a Matter controller + IPv6 + mDNS on the LAN, i.e. a
-  Pi/HA running 24/7 (~4W). Energy monitoring was historically not exposed over
-  Matter. **Decision: this plug stays on the house HA instance.**
+  Pi/HA running 24/7 (~4W), and **ESPHome cannot be a Matter controller** — so
+  `van-core` has no way to command it, router or no router. The limitation is the
+  protocol, not the plug's form factor or rating: it has handled the 1–2kW load
+  in this van without trouble (see BOM D1e, where the vibration and rating
+  objections are retracted on that evidence). **Decision: replace with an
+  ESPHome-preflashed plug in the same socket; the Meross returns to the house.**
 - **MiBoxer E2-WR** LED controllers (dual-white/CCT, WiFi+BLE+2.4G RF, Tuya).
   Tuya WiFi side requires internet to provision → unusable in the van as-is.
   The 2.4GHz RF side works standalone. See §7 for the three routes.
@@ -135,7 +140,9 @@ under 2W total.
     reference thermometer, settle for a few hours, record the offset to the wall
     sensor. That single number is what makes the food-safety ceiling meaningful.
 - ADS1115 (water level ADC — the ESP32 internal ADC is too nonlinear/noisy).
-- Shelly Plus 1PM (Gen2) for the water heater, flashed with ESPHome — see BOM D1.
+- **Athom ESPHome-preflashed smart plug (16A EU)** for the water heater — see BOM
+  D1e. Ships with ESPHome, so no flashing, no cloud, no router. Uses the wall
+  socket and heater plug already in place; the 230V install is not modified.
 - Momentary push button with integrated RGB LED (manual AC request).
 - **Waveshare ESP32-S3-LCD-1.47** as the `van-core` board, ~€13 — `DECIDED`, see
   BOM D0. ESP32-S3R8, 8MB PSRAM, 16MB flash, 172×320 on **plain SPI ST7789**
@@ -219,7 +226,7 @@ No router. `van-core` runs SoftAP; other nodes join it as WiFi clients with
 | Node | Location | Responsibilities |
 |---|---|---|
 | `van-core` | beside fridge / P310 | BLE→P310, fridge + cabin DS18B20, manual AC button + LED, AC arbiter, heater permit rules, water-temp estimator, SoftAP, web UI |
-| `van-heater` | on the 230V heater feed | Shelly Plus 1PM (ESPHome): relay + power metering. **Only powered while the inverter is on** — expected, see BOM D1 |
+| `van-heater` | wall socket by the heater | ESPHome-preflashed plug: relay + power metering. **Only powered while the inverter is on** — expected, see BOM D1e |
 | `van-water` | beside tank | level sender (ADS1115), future pump control |
 | `van-vehicle` | engine bay / dash | ignition + D+ sense, alternator charge limiting (future) |
 
@@ -238,8 +245,8 @@ Every piece of this runs with no router and no internet, including provisioning:
 | Concern | How it works without a router |
 |---|---|
 | Node addressing | Static IPs on core's SoftAP. mDNS is unreliable on SoftAP — never depend on hostnames |
-| Shelly provisioning | Its own AP + local web UI at `192.168.33.1`. Set SSID, static IP, cloud off, power-on state — all offline. **Contrast §7:** Tuya/MiBoxer cannot be provisioned without internet at all |
-| Shelly control | ESPHome node on the SoftAP (or stock RPC over HTTP). Either way, plain HTTP on the local subnet |
+| Heater plug provisioning | Its own setup AP from a phone: point it at core's SoftAP with a static IP, then OTA your own config. All offline. **Contrast §7:** Tuya/MiBoxer cannot be provisioned without internet at all |
+| Heater plug control | A normal ESPHome node on the SoftAP — plain HTTP on the local subnet |
 | Clock | No SNTP → DS3231 RTC (BOM item 15). Already required for logging |
 | Log retrieval | `sd_file_server` over the SoftAP from a phone. No card removal |
 | Firmware updates | ESPHome OTA to the static IP |
@@ -574,14 +581,24 @@ no crimp tool for field repairs.
 - Cable entries through glands, vents for the buck converter.
 
 ### Phase 2 — services
-- **Heater: a Shelly Plus 1PM flashed with ESPHome**, as its own node on the
-  230V line. `REVISED` — an earlier version of this section said "dumb GPIO +
-  optocoupler, **not** a smart plug", on the grounds that a mains-powered relay
-  reboots whenever the arbiter cycles the inverter. That objection does not
-  survive contact with the fact that **the heater cannot heat without AC
+- **Heater: an ESPHome-preflashed smart plug** (Athom or equivalent), in the wall
+  socket already there, as its own node. `REVISED TWICE` — this section once said
+  "dumb GPIO + optocoupler, **not** a smart plug", on the grounds that a
+  mains-powered relay reboots whenever the arbiter cycles the inverter. That
+  objection does not survive the fact that **the heater cannot heat without AC
   anyway**, so the relay has no useful state to hold while the inverter is off.
-  See BOM D1. `restore_mode: ALWAYS_OFF` puts the fail-OFF property in git, and
-  the onboard metering is the `P_heater` term the estimator needs.
+  A later revision added vibration and current-rating objections to plug-form
+  devices; those are **retracted** — the heater has been running through a
+  plug-in Meross in this van without trouble. See BOM D1 and D1e.
+  `restore_mode: ALWAYS_OFF` puts the fail-OFF property in git, and the plug's
+  metering is the `P_heater` term the estimator needs.
+- **Heater safety constraint — `ACCEPTED RISK`, see BOM D1c.** The AC supply
+  floats and the earthing will not be modified, so there is no RCD behind the
+  heater. Automating it adds no *electrical* risk (it already ran on this supply
+  manually); what it adds is unattended operation. The D1b permit rules — SOC
+  > 85% **and** charging or strong sun — keep heating to times when someone is
+  present. **That constraint now does safety work as well as energy work: do not
+  relax it, and never heat during sleep mode.**
 - `van-water`: level sender via ADS1115. **No heater involvement** — it reduces
   to the tank sender alone.
 - Sender conditioning: excite through a MOSFET/GPIO only during a reading (DC
@@ -595,7 +612,7 @@ no crimp tool for field repairs.
   `dT/dt = (P_heater − UA·(T_water − T_cabin)) / (m·c)`.
   **Runs on `van-core`**, which holds all three inputs already: it commands the
   heater, it carries the cabin/ambient DS18B20, and it reads `P_heater` from the
-  Shelly's metering (better than nameplate — it also catches a dead element as
+  plug's metering (better than nameplate — it also catches a dead element as
   "commanded on, drawing 0W"). No cross-node staleness to reason about, and it
   is the node with the display. Calibrate `UA` once: heat to a known temp, let
   it coast, log decay against cabin temp. No physical water temp sensor needed.
@@ -861,3 +878,17 @@ custom firmware justified.
 - Watch for scope creep toward "just run Home Assistant in the van" — it has been
   evaluated and rejected on a power budget basis. Reopening it requires new
   numbers, not new enthusiasm.
+  **Reopened and re-closed 2026-08-18**, as the easiest way to drive a smart
+  plug. The numbers that closed it again:
+  - An HA host must be up 24/7. A Pi 4 idles ~4W = **96Wh/day**, against a
+    project saving of ~500Wh/day — **~19% of the entire benefit**, spent to
+    switch a heater that runs ~20 min/day.
+  - It does **not** replace `van-core`. ESP-FBot's BLE link, the fail-safe
+    arbiter and node autonomy (§5.1) all still have to exist, so this is 96Wh/day
+    *on top*, plus a router or second AP, plus the central dependency §5.1 exists
+    to avoid.
+  - The thing actually wanted — a plug switched from `van-core` with no router
+    and no soldering — is solved by an **ESPHome-preflashed plug** (BOM D1e) at
+    ~€15 and no measurable standby, since it is powered only while the inverter
+    is on.
+  HA remains welcome at home (Phase 6) for history and graphs.
