@@ -38,6 +38,17 @@ Consequences, in order:
 
 See BOM D1c for the decision this forces.
 
+## 2026-08-18 — P310 input power reporting
+
+- **AC-input and DC/solar-input power are reported separately: CONFIRMED.**
+- **But AC-input power is not a valid engine-running signal.** The charging
+  inverter sits behind a manual high-current switch, so the reading tracks the
+  *charger*, not the engine, and fails both ways: 0W with the engine running and
+  the switch off; >0W with the engine off and the switch left on (which is the
+  known starter-battery-drain hazard).
+- Consequence: engine state for the Phase 4 drive-time AC inhibit must come from
+  `van-vehicle`, not from BLE. See CLAUDE.md §9 Phase 4.
+
 ## TODO next
 - [ ] Duty cycle: 24h `fbot_probe.py log` with inverter permanently on
 - [ ] D3: does P310 12V output stay on at ~100mA

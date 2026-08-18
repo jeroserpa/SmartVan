@@ -826,12 +826,41 @@ fail-safe direction stated explicitly:**
   **Never restructure this so that `van-core` must ask permission to run the
   fridge.**
 
-`VERIFY — decides whether the network is involved at all:` **does ESP-FBot expose
-AC-input and DC/solar-input power separately, or only aggregate `input_power`?**
-If separately, `van-core` can detect alternator charging locally over BLE and the
-inhibit needs no network and no `van-vehicle` at all — much the better design.
-If only aggregate, 750W of solar is indistinguishable from the alternator and the
-signal must come from `van-vehicle`'s voltage sensing.
+#### Engine detection for the inhibit — `ANSWERED: must come from the vehicle`
+
+`CONFIRMED`: the P310 does report AC-input and DC/solar-input power separately.
+**It does not help.** AC-input power measures the *charger*, not the *engine*,
+and the charger sits behind a manual switch:
+- Switch off, engine running → reads 0W. Engine missed.
+- Switch left on, engine off → reads >0W. Engine falsely detected — and this is
+  precisely the documented starter-battery-drain hazard, not a hypothetical.
+
+So it fails in both directions and cannot be used. `van-core` cannot determine
+engine state over BLE; the signal must come from `van-vehicle`.
+
+**Preferred signal: `van-vehicle`'s own existence.** The node already runs from
+**switched ignition, not permanent 12V**, so *the node being alive is the key-on
+signal* — no extra sensor, no extra wiring. `van-core` applies the inhibit while
+it is hearing from `van-vehicle` and releases it after ~30s of silence, which
+degrades in the correct direction by construction.
+
+**Do not use the Phase 4 voltage thresholds for this.** They detect *alternator
+producing*, which on a Euro 6 smart alternator is not the same as *engine
+running* — during a cruise phase the rail sits at 12.2–12.8V and looks exactly
+like key-off. The inhibit would flicker off mid-drive. Those thresholds exist for
+charge limiting, where "is the alternator producing" is the actual question.
+
+`If voltage sensing is used here anyway:` **sense upstream of the manual
+switch.** Downstream, the sense point goes dead whenever the charger is switched
+off — reintroducing the same blindness described above.
+
+Key-on is a slight superset of engine-running (it includes accessory position and
+key-on-engine-off). That is acceptable for an interlock, and the hard ~4h timeout
+above bounds the consequence of parking with ignition live.
+
+**Consequence:** this feature cannot exist before Phase 4, and it is genuinely
+network-dependent — which makes the "fails toward permitting AC" rule above
+load-bearing rather than precautionary.
 
 #### Node power
 `van-vehicle` runs from **switched ignition, not permanent 12V.** Its only jobs
