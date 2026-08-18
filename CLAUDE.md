@@ -315,6 +315,15 @@ ac_on = force_on
         OR surplus_req
 ```
 
+**Future (Phase 4, optional, default OFF):** a `drive_inhibit` suppressor gates
+everything except `force_on` — see §9 Phase 4 "Drive-time AC inhibit". It is
+noted here so this equation is not read as final:
+
+```
+ac_on = force_on
+        OR ( (fridge_req OR manual_req OR surplus_req) AND NOT drive_inhibit )
+```
+
 ### `force_on` (fail-safe override)
 True if any of: node just booted; BLE `connected` false; fridge temperature
 sensor stale > 5 min; arbiter watchdog expired.
@@ -765,6 +774,64 @@ already detected). Costs a couple of hours of solar on driving days; gains ~92%
 efficiency versus the measured 67%. **`UNVERIFIED` and decisive: the P310's DC
 input power ceiling. If that port caps at ~500W, this is worse than the current
 setup and the idea dies.** Check the spec before spending further thought.
+
+#### Drive-time AC inhibit — `FUTURE, optional, default OFF`
+
+Cut the P310's `ac` output (its own inverter) while the engine is running.
+Requested as an option for specific uses, **not** as default behaviour, so it is
+a `switch` entity that ships disabled.
+
+**Why.** In rough order of how well each justification holds up:
+1. **Specific loads that should not run in motion** — the actual request. Whatever
+   is plugged in, this is a single hard interlock rather than a habit.
+2. **Safety: `manual_req` left armed.** Leaving the inverter on after cooking and
+   driving off is already flagged in the cabin display section as the failure a
+   display can catch. This is the automated version — and it should **clear**
+   `manual_req`, not merely suppress it, or the 45 min timer keeps running and AC
+   returns the moment you park.
+3. **Energy — the weakest case, state it honestly.** Saving is 35W of idle ×
+   drive hours (~70Wh on a 2h drive); the compressor work is *deferred, not
+   avoided*, exactly as in sleep mode. And it accrues while the alternator is
+   charging at ~800W, i.e. when energy is cheapest. Do not sell this feature on
+   the energy number.
+
+**It is sleep mode with a different trigger.** Suppress compressor cycles, coast
+on the food's thermal mass, keep the 10 °C hard override, reuse the §6 adaptive
+coast prediction to display *"fridge coasting, ~3h remaining"*. No new control
+machinery — only a new reason to enter the same state.
+
+**Arbiter change.** The inhibit is a *suppressor*, never a request, and
+`force_on` must still win:
+
+```
+ac_on = force_on
+        OR ( (fridge_req OR manual_req OR surplus_req)
+             AND NOT drive_inhibit )
+```
+
+**Hazards — this rule points the opposite way to §5.2, so it needs its own
+fail-safe direction stated explicitly:**
+- **Fails toward PERMITTING AC.** Unknown or missing engine state = no inhibit.
+  A `van-vehicle` that is unreachable, asleep or dead must never be able to hold
+  the fridge off — that is the two-days-of-spoiled-food failure §5.2 exists to
+  prevent, arriving through a side door.
+- **Hard timeout, non-negotiable.** Maximum inhibit ~4h, after which AC is
+  permitted regardless of what the engine signal claims. A stuck-true signal must
+  expire on its own.
+- **The 10 °C hard override still applies**, exactly as in sleep mode.
+- **`§5.1 tension`.** Fridge control is required to live entirely on `van-core`
+  and never read the network, but engine state lives on `van-vehicle`. This is
+  only acceptable because the inhibit is additive and fails open: `van-core`'s
+  fridge logic is unchanged and fully functional with no network at all.
+  **Never restructure this so that `van-core` must ask permission to run the
+  fridge.**
+
+`VERIFY — decides whether the network is involved at all:` **does ESP-FBot expose
+AC-input and DC/solar-input power separately, or only aggregate `input_power`?**
+If separately, `van-core` can detect alternator charging locally over BLE and the
+inhibit needs no network and no `van-vehicle` at all — much the better design.
+If only aggregate, 750W of solar is indistinguishable from the alternator and the
+signal must come from `van-vehicle`'s voltage sensing.
 
 #### Node power
 `van-vehicle` runs from **switched ignition, not permanent 12V.** Its only jobs
