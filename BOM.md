@@ -47,34 +47,35 @@ Phase 1; D1's "item 20" was ambiguous as a result.)
 | 23 | ADS1115 16-bit ADC module | 1 | 4 | ESP32 internal ADC is too nonlinear for the sender |
 | 24 | Divider resistor for sender | 1 | — | **Value pending §8.7 measurement.** 220Ω if 0–190Ω sender. Sender run **confirmed <1m — no shielding needed** |
 | 25 | Logic-level MOSFET (AO3400 / 2N7000) | 1 | 1 | Gates sender excitation — continuous DC corrodes a submerged wiper |
-| 26 | DIN contactor, 12V DC coil, 20A/230V + enclosure | 1 | 25 | **Not an SSR** (fails closed) and not a mains-powered smart relay — see D1 |
-| 27 | **Contactor coil driver** — AO3400 + 1N4007 + 100Ω + 10kΩ | 1 | 1 | **Was missing.** A 12V contactor coil pulls 200–400mA — far past a GPIO. See D1d for why the 10k gate pulldown is a safety part, not a nicety |
-| 28 | DS18B20 waterproof probe, 1m | 1 | 3 | **Cabin temperature** — the `T_cabin` term in the water-temp estimator (CLAUDE.md §9 Phase 2). Local to `van-water`, so the estimator needs no network |
-| 29 | Buck 12V→5V 3A + fuse holder + fuses | 1 | 7 | |
-| 30 | ABS enclosure IP65 + glands | 1 | 7 | |
-| 31 | Automotive relay 30A + socket (future pump) | 1 | 4 | Phase 2b. **12V DC contacts — never repurpose one for the 230V heater** |
-| | **Subtotal** | | **~52** | Contactor is half of it |
+| 26 | **Shelly Plus 1PM (Gen2)** | 1 | 25 | Heater switching + power metering, flashed with ESPHome. **Gen2 specifically** — see D1. Its own node; not wired to `van-water` |
+| 27 | Buck 12V→5V 3A + fuse holder + fuses | 1 | 7 | |
+| 28 | ABS enclosure IP65 + glands | 1 | 7 | |
+| 29 | Automotive relay 30A + socket (future pump) | 1 | 4 | Phase 2b. **12V DC contacts — never repurpose one for the 230V heater** |
+| | **Subtotal** | | **~48** | |
+
+Cabin temperature is **not** listed here — it lives on `van-core` (item 2's
+ambient probe). See D1d for what that implies for the estimator.
 
 ## Shared wiring stock
 
 | # | Item | ~€ | Notes |
 |---|---|---|---|
-| 32 | Silicone-insulated stranded wire 0.5mm² (signal) | 10 | Silicone stays flexible cold; PVC cracks |
-| 33 | Silicone stranded 1.0mm² (12V feeds) | 10 | |
-| 34 | **Mains-rated cable 2.5mm²** | 8 | Heater feed, 4.3–8.7A. See D1c |
-| 35 | JST-XH connector kit + crimper | 12 | Board-level connections |
-| 36 | Wago 221 lever connectors, assorted | 8 | 12V branch distribution |
-| 37 | Bootlace ferrule kit + ratchet crimper | 20 | One-off tool. Non-negotiable for stranded wire into screw terminals |
-| 38 | Adhesive-lined heatshrink assortment | 8 | Adhesive-lined, not plain — moisture ingress |
-| 39 | Cable labels / label printer tape | 5 | |
+| 30 | Silicone-insulated stranded wire 0.5mm² (signal) | 10 | Silicone stays flexible cold; PVC cracks |
+| 31 | Silicone stranded 1.0mm² (12V feeds) | 10 | |
+| 32 | **Mains-rated cable 2.5mm²** | 8 | Heater feed, 4.3–8.7A. See D1c |
+| 33 | JST-XH connector kit + crimper | 12 | Board-level connections |
+| 34 | Wago 221 lever connectors, assorted | 8 | 12V branch distribution |
+| 35 | Bootlace ferrule kit + ratchet crimper | 20 | One-off tool. Non-negotiable for stranded wire into screw terminals |
+| 36 | Adhesive-lined heatshrink assortment | 8 | Adhesive-lined, not plain — moisture ingress |
+| 37 | Cable labels / label printer tape | 5 | |
 | | **Subtotal** | **~81** | Much of it reusable stock |
 
 ## Measurement tools
 
 | # | Item | ~€ | Justifies |
 |---|---|---|---|
-| 40 | DC clamp meter, 200A+ | 30 | Confirms the 1200W alternator figure (§9 Phase 4). Also invaluable for every future debug |
-| 41 | Cheap plug-in energy meter | 12 | Independent cross-check of P310 readings |
+| 38 | DC clamp meter, 200A+ | 30 | Confirms the 1200W alternator figure (§9 Phase 4). Also invaluable for every future debug |
+| 39 | Cheap plug-in energy meter | 12 | Independent cross-check of P310 readings |
 
 ---
 
@@ -83,10 +84,10 @@ Phase 1; D1's "item 20" was ambiguous as a result.)
 | | ~€ |
 |---|---|
 | Phase 1 | 93 |
-| Phase 2 | 52 |
+| Phase 2 | 48 |
 | Wiring stock | 81 |
 | Tools | 42 |
-| **All-in** | **~268** |
+| **All-in** | **~264** |
 | **Phase 1 only, using existing stock** | **~93** |
 
 Against a saving in the region of 0.5 kWh/day plus the sleep-mode benefit, Phase 1
@@ -154,25 +155,52 @@ setpoint is an adjustable `number`. Retrofits to the same terminal block.
 SPI (display), SDMMC (card), I2C (RTC), 1-Wire, three buttons. The S3 has the
 pins; the header may not break them all out.
 
-### D1 — Mains switching for the water heater (item 26) — `REVISED`
+### D1 — Mains switching for the water heater (item 26) — `REVISED TWICE`
 
 `CONFIRMED`: heater is **230V, 1–2kW**.
 
-**Earlier recommendation (Shelly Plus 1PM) is withdrawn.** Reason: the heater's
-supply is downstream of the inverter that the arbiter cycles. A mains-powered
-smart relay loses power on every inverter cycle, reboots, and takes 10–20s to
-rejoin the SoftAP — so commanding it requires "request inverter → wait for AC →
-wait for boot → command", and any mid-heat cycle leaves its state ambiguous.
+**History, recorded so the reasoning stays auditable:** Shelly Plus 1PM → DIN
+contactor → **back to Shelly Plus 1PM, flashed with ESPHome.**
 
-**Chosen: DIN-rail contactor with a 12V DC coil**, driven directly from
-`van-water`. ~€20–30.
-- Coil runs from the always-on 12V bus → control is instant and independent of
-  inverter state.
-- **Mechanical contactors fail open.** An SSR fails *closed*, which for a 1–2kW
-  heating element is dangerous. Do not use an SSR here.
-- Metering is not lost in practice: the P310's `output_power` delta confirms
-  whether the element drew current.
-- Mount in a proper enclosed box. 2.5mm² mains-rated cable (4.3–8.7A).
+**Why the contactor revision was wrong.** It objected that a mains-powered smart
+relay sits downstream of the inverter the arbiter cycles, so commanding it means
+"request inverter → wait for AC → wait for boot → command". That sequence is
+real, but **the heater cannot heat without AC anyway** — there is no state the
+relay could usefully hold while the inverter is off. The cost is ~10s of boot on
+a ~20-minute heating cycle. The contactor's claimed advantage (instant control
+independent of inverter state) buys nothing, and it was paid for with a coil
+driver, a GPIO, a DIN enclosure and a DIY 230V termination.
+
+**The hazard that *is* real** — and which the earlier revision did not name — is
+the power-on relay state. Set to `restore_last`, every inverter cycle for the
+*fridge* boots the Shelly straight into 1500W of unwanted heating, silently, and
+the first symptom is a flat battery. Stock firmware puts that safety property in
+a config field that a factory reset or firmware update can quietly revert.
+
+**Chosen: Shelly Plus 1PM (Gen2, ESP32) flashed with ESPHome.** ~€25.
+- `restore_mode: ALWAYS_OFF` on the switch → relay opens on every boot, and that
+  property lives **in YAML, in git**, surviving resets and reflashes. This is
+  what implements "heater fails OFF" (CLAUDE.md §5.1) — the one control path
+  running *opposite* to the fridge's fail-toward-powered convention.
+- Native ESPHome node, so no cloud and no HTTP glue (§5.5).
+- **Power metering comes free** and is genuinely load-bearing: it is the
+  `P_heater` term in the water-temp estimator, and a dead element shows up as
+  "commanded on, drawing 0W" instead of silently never heating.
+- Rated 16A/3.5kW — comfortable on a 1–2kW element.
+- **Certified mains enclosure.** For 230V in a damp vehicle this is safer than a
+  hand-wired contactor box, not merely more convenient.
+- Wiring is L/N in, L/N out. No coil driver, no GPIO, no carrier-board change.
+
+`VERIFY before ordering:` **buy the Gen2 "Plus 1PM" specifically.** ESPHome
+flashing is well-trodden on Gen2 (ESP32); Gen3/Gen4 are newer and less proven.
+Flashing needs a one-off serial connection to the internal header.
+
+**Fallback if you would rather not flash it:** stock firmware exposes a local
+HTTP API with no cloud, and `van-core` can drive it via `http_request`. Then set
+power-on state to `off` **explicitly**, and treat that setting as a documented
+pre-trip check — it is the whole safety case.
+
+**Still rejected: the SSR.** It fails *closed* under a 1–2kW heating element.
 
 ### D1b — Heater energy budget
 
@@ -204,37 +232,35 @@ Minimum measures regardless:
 Making an RCD functional requires bonding N–E in the van, which has its own
 consequences and should be decided separately.
 
-### D1d — Driving the contactor coil (item 27) — the "easy integration" answer
+### D1d — Where the heater logic and the water-temp estimator live
 
-The contactor is not harder to integrate than a smart relay; it is *three
-passives* off one GPIO. A 12V coil draws 200–400mA, so it cannot hang off a pin
-directly:
+Two consequences of D1, plus the decision to put cabin temperature on
+`van-core`, land the same way: **`van-water` is not involved in the heater at
+all.**
 
-```
-GPIO ──100Ω──┬── AO3400 gate        coil+ ── +12V
-             │                      coil− ── AO3400 drain
-            10kΩ                    1N4007 across the coil,
-             │                      cathode to +12V
-            GND                     AO3400 source ── GND
-```
+| Concern | Node |
+|---|---|
+| Heater relay + power metering | Shelly (own ESPHome node on the 230V line) |
+| Cabin temperature (`T_cabin`) | `van-core` — the ambient DS18B20 of item 2 |
+| Permit rules (SOC / charging, D1b) | `van-core` — it already holds the BLE link |
+| Water-temp estimator | `van-core` — commands the heater, has `T_cabin`, reads `P_heater` |
+| Tank level sender | `van-water` |
 
-- **The 10kΩ gate pulldown is a safety part.** It holds the contactor open while
-  the ESP32 is in reset, boot, or flashing — the window where GPIOs float. This
-  is what physically implements the "heater fails OFF" rule (CLAUDE.md §5.1),
-  which runs *opposite* to the fridge's fail-toward-powered convention. Do not
-  omit it.
-- **The 1N4007 is mandatory, not optional.** A contactor coil is strongly
-  inductive; without a flyback path the turn-off spike kills the MOSFET.
-- Same AO3400 part as item 25, so it is one line on the order either way.
+So `van-water` reduces to SuperMini + ADS1115 + sender excitation. Its heater
+GPIO, the coil driver and the separate cabin probe are all deleted.
+
+The estimator having all three inputs on one node is worth more than it looks:
+no cross-node staleness to reason about, and it runs on the node that owns the
+display anyway.
 
 **Rejected alternatives, for the record:**
 
 | Option | Why not |
 |---|---|
-| Shelly / mains-powered smart relay | Powered downstream of the inverter the arbiter cycles — reboots every cycle, 10–20s to rejoin SoftAP. See D1 |
 | SSR | Fails **closed** under a 1–2kW element |
 | Blue SRD-05VDC relay module | Datasheet says 10A/250V, but the screw terminals and PCB traces are not good for 8.7A continuous, and the "optocoupler" usually shares ground so the isolation is illusory |
 | Automotive relay (item 31) | Contacts rated for 12V DC, not 230V AC — AC arc behaviour is entirely different |
+| DIN contactor + 12V coil | Workable, but see D1 — it solves a sequencing problem that does not exist, at the cost of a coil driver, a GPIO and a DIY 230V box |
 
 ### D2 — Self-power hazard for `van-core` — `REVISED: UPS dropped`
 

@@ -135,7 +135,7 @@ under 2W total.
     reference thermometer, settle for a few hours, record the offset to the wall
     sensor. That single number is what makes the food-safety ceiling meaningful.
 - ADS1115 (water level ADC — the ESP32 internal ADC is too nonlinear/noisy).
-- 16A relay module + optocoupler (water heater).
+- Shelly Plus 1PM (Gen2) for the water heater, flashed with ESPHome — see BOM D1.
 - Momentary push button with integrated RGB LED (manual AC request).
 - **Waveshare ESP32-S3-LCD-1.47** as the `van-core` board, ~€13 — `DECIDED`, see
   BOM D0. ESP32-S3R8, 8MB PSRAM, 16MB flash, 172×320 on **plain SPI ST7789**
@@ -218,11 +218,13 @@ No router. `van-core` runs SoftAP; other nodes join it as WiFi clients with
 
 | Node | Location | Responsibilities |
 |---|---|---|
-| `van-core` | beside fridge / P310 | BLE→P310, fridge DS18B20, manual AC button + LED, AC arbiter, SoftAP, web UI |
-| `van-water` | beside heater / tank | heater relay, level sender (ADS1115), future pump control |
+| `van-core` | beside fridge / P310 | BLE→P310, fridge + cabin DS18B20, manual AC button + LED, AC arbiter, heater permit rules, water-temp estimator, SoftAP, web UI |
+| `van-heater` | on the 230V heater feed | Shelly Plus 1PM (ESPHome): relay + power metering. **Only powered while the inverter is on** — expected, see BOM D1 |
+| `van-water` | beside tank | level sender (ADS1115), future pump control |
 | `van-vehicle` | engine bay / dash | ignition + D+ sense, alternator charge limiting (future) |
 
-Static addressing: `192.168.4.1` (core AP), `.10` water, `.11` vehicle.
+Static addressing: `192.168.4.1` (core AP), `.10` water, `.11` vehicle,
+`.12` heater.
 Raise `max_connection` on the SoftAP to 8 (default 4).
 
 ### Inter-node protocol
@@ -546,8 +548,16 @@ no crimp tool for field repairs.
 - Cable entries through glands, vents for the buck converter.
 
 ### Phase 2 — services
-- `van-water`: heater relay (dumb GPIO + optocoupler, **not** a smart plug),
-  level sender via ADS1115.
+- **Heater: a Shelly Plus 1PM flashed with ESPHome**, as its own node on the
+  230V line. `REVISED` — an earlier version of this section said "dumb GPIO +
+  optocoupler, **not** a smart plug", on the grounds that a mains-powered relay
+  reboots whenever the arbiter cycles the inverter. That objection does not
+  survive contact with the fact that **the heater cannot heat without AC
+  anyway**, so the relay has no useful state to hold while the inverter is off.
+  See BOM D1. `restore_mode: ALWAYS_OFF` puts the fail-OFF property in git, and
+  the onboard metering is the `P_heater` term the estimator needs.
+- `van-water`: level sender via ADS1115. **No heater involvement** — it reduces
+  to the tank sender alone.
 - Sender conditioning: excite through a MOSFET/GPIO only during a reading (DC
   through a submerged sender corrodes the wiper), median filter ~30 samples,
   `throttle_average: 60s` (sloshing while driving makes raw readings useless),
@@ -555,12 +565,14 @@ no crimp tool for field repairs.
   nominal curve — these senders are rarely linear near the ends.
 - **Future: estimated water temperature on the display.** The heater tank is a
   sealed, isolated 230V unit — no draw-off during heating, so no unmodeled
-  disturbance. Lumped thermal-capacitance model on `van-water`:
-  `dT/dt = (P_heater − UA·(T_water − T_cabin)) / (m·c)`, driven by heater
-  relay on/off state and cabin temperature. Runs on 230V AC (via the arbiter's
-  `surplus_req` path), so no voltage-sag correction needed — nameplate power
-  is accurate. Calibrate `UA` once: heat to a known temp, let it coast, log
-  decay against cabin temp. No physical water temp sensor required.
+  disturbance. Lumped thermal-capacitance model:
+  `dT/dt = (P_heater − UA·(T_water − T_cabin)) / (m·c)`.
+  **Runs on `van-core`**, which holds all three inputs already: it commands the
+  heater, it carries the cabin/ambient DS18B20, and it reads `P_heater` from the
+  Shelly's metering (better than nameplate — it also catches a dead element as
+  "commanded on, drawing 0W"). No cross-node staleness to reason about, and it
+  is the node with the display. Calibrate `UA` once: heat to a known temp, let
+  it coast, log decay against cabin temp. No physical water temp sensor needed.
 
 ### Phase 3 — lighting
 - Route A/B/C per §7.
