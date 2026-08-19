@@ -1,0 +1,52 @@
+# Shared by every node. Nodes stay thin (CLAUDE.md section 11).
+#
+# Requires the including node to define these substitutions:
+#   node_name, friendly_name
+#
+# Deliberately absent: `api:`. There is no Home Assistant in the van and there
+# never will be (CLAUDE.md section 12), so the native API is dead weight and one
+# more thing to reconnect. The web server is the UI.
+
+logger:
+  # INFO, not DEBUG: this node runs BLE, SoftAP, a web server and a display in
+  # one cooperative loop, and logging is not free (CLAUDE.md section 11 escape
+  # hatch). Raise it temporarily when chasing a BLE dropout.
+  level: INFO
+  baud_rate: 115200
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+web_server:
+  port: 80
+  version: 3
+  # MANDATORY: without this the UI pulls its JS/CSS from esphome.io at page
+  # load, which is exactly the internet dependency section 5.5 forbids. With
+  # `local: true` the assets are compiled into the firmware.
+  local: true
+  # No auth: the SoftAP password is the perimeter. There is nothing else on it.
+
+# Reboot loop protection. If a bad OTA makes the node crash on boot, it comes
+# back as a bare AP that can be flashed again, rather than a brick under a bed.
+safe_mode:
+
+button:
+  - platform: restart
+    name: "${friendly_name} restart"
+    entity_category: diagnostic
+
+sensor:
+  - platform: uptime
+    name: "${friendly_name} uptime"
+    entity_category: diagnostic
+    update_interval: 60s
+  - platform: internal_temperature
+    name: "${friendly_name} board temperature"
+    entity_category: diagnostic
+    update_interval: 60s
+
+text_sensor:
+  - platform: version
+    name: "${friendly_name} esphome version"
+    entity_category: diagnostic

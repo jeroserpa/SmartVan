@@ -1,0 +1,304 @@
+# van-core-soak - the 24h test that must pass BEFORE anything is wired in.
+#
+# CLAUDE.md section 2 flags the real risk of this board: BLE client + SoftAP +
+# web server + display + SD on one ESP32-S3, all in ESPHome's single cooperative
+# loop, can starve the BLE task. If that happens, the fridge control system
+# loses sight of the power station - which is the one failure this project
+# cannot tolerate.
+#
+# So this config runs every load-bearing subsystem at once and NOTHING ELSE.
+# No arbiter, no relay, no writes to the P310. It answers three questions:
+#
+#   1. Does the BLE link hold for 24h with SoftAP + web + display + SD active?
+#      (watch `P310 disconnect count` and `Longest BLE gap`)
+#   2. Do sd_mmc_card and the ESP-FBot component build under one framework?
+#      -- ANSWERED at config time: n-serrette/esphome_sd_card ships an esp-idf
+#         example, so esp-idf is the framework for both. Compiling this file is
+#         the proof. (CLAUDE.md section 9 listed this as UNVERIFIED.)
+#   3. Is there enough RAM once VFS/LWIP savings are disabled and fatfs/spiffs
+#      are pulled in? (watch `Free heap` and `Free PSRAM`)
+#
+# It also does something useful while it runs: with the inverter left
+# permanently on, the CSV it writes IS the 24h duty-cycle dataset that section
+# 8.4 calls the single most important unknown in the project.
+#
+#   Pass criteria, decided before the test rather than after:
+#     - zero BLE disconnects, or reconnects inside 60s
+#     - no reboots (uptime is monotonic across the whole log)
+#     - free heap stable, not trending down
+#     - the CSV has ~2880 lines with no gaps
+#
+# Anything worse and the display is the first thing to move off this node.
+
+substitutions:
+  node_name: van-core-soak
+  friendly_name: Van core soak
+  p310_mac: "E8:06:90:C7:AD:F6"
+
+esphome:
+  name: ${node_name}
+  friendly_name: ${friendly_name}
+  min_version: 2025.7.0
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  framework:
+    type: esp-idf
+    advanced:
+      # Required by sd_mmc_card: it needs the real VFS, and fatfs must be linked
+      # in explicitly. This is the memory cost the soak is measuring.
+      include_builtin_idf_components: ["fatfs", "spiffs"]
+      disable_vfs_support_termios: false
+      disable_vfs_support_select: false
+      disable_vfs_support_dir: false
+    sdkconfig_options:
+      CONFIG_FATFS_LFN_STACK: "y"
+  flash_size: 16MB
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+packages:
+  base: !include ../common/base.yaml
+
+external_components:
+  - source: github://ylianst/esp-fbot
+    refresh: 1d
+  - source: github://n-serrette/esphome_sd_card
+    components: [sd_mmc_card, sd_file_server]
+    refresh: 1d
+
+wifi:
+  ap:
+    ssid: !secret wifi_ssid
+    password: !secret wifi_password
+
+captive_portal:
+
+# -----------------------------------------------------------------------------
+# Load 1: BLE to the P310
+# -----------------------------------------------------------------------------
+ble_client:
+  - mac_address: ${p310_mac}
+    id: p310_ble
+
+fbot:
+  id: p310
+  polling_interval: 5s
+  settings_polling_interval: 60s
+  poll_timeout: 15s
+  max_poll_failures: 3
+
+# -----------------------------------------------------------------------------
+# Load 2: microSD, 1-bit mode.
+# 1-bit not 4-bit: a CSV line every 30s needs no bandwidth at all, and fewer
+# lines in flight means less DMA contention with the radio. Pins from the espp
+# board header for this board.
+# -----------------------------------------------------------------------------
+sd_mmc_card:
+  id: sd_card
+  mode_1bit: true
+  clk_pin: GPIO14
+  cmd_pin: GPIO15
+  data0_pin: GPIO16
+  # Never format on failure. A card that will not mount is a card to look at,
+  # not to erase - it may be holding the only copy of a coast test.
+  format_if_mount_failed: false
+
+sd_file_server:
+  id: file_server
+  url_prefix: "file"
+  root_path: "/"
+  enable_deletion: true
+  enable_download: true
+  enable_upload: false
+  # Log retrieval over the SoftAP from a phone. No card removal, no laptop.
+
+# -----------------------------------------------------------------------------
+# Load 3: display, refreshed at the same 1s the real node uses
+# -----------------------------------------------------------------------------
+spi:
+  clk_pin: GPIO40
+  mosi_pin: GPIO45
+
+font:
+  - file: "gfonts://Roboto"
+    id: font_med
+    size: 20
+  - file: "gfonts://Roboto"
+    id: font_small
+    size: 14
+
+display:
+  - platform: st7789v
+    id: van_display
+    model: Custom
+    width: 172
+    height: 320
+    offset_width: 34
+    offset_height: 0
+    rotation: 90
+    cs_pin: GPIO42
+    dc_pin: GPIO41
+    reset_pin: GPIO39
+    update_interval: 1s
+    lambda: |-
+      it.printf(4, 0, id(font_med), "SOAK  %s",
+                id(p310_connected).state ? "BLE up" : "BLE DOWN");
+      if (id(output_watts).has_state())
+        it.printf(4, 26, id(font_med), "out %.0fW  in %.0fW",
+                  id(output_watts).state, id(input_watts).state);
+      it.printf(4, 52, id(font_small), "drops: %u   longest gap: %us",
+                (unsigned) id(ble_drops), (unsigned) id(ble_longest_gap_s));
+      it.printf(4, 70, id(font_small), "lines: %u   heap: %u",
+                (unsigned) id(log_lines), (unsigned) esp_get_free_heap_size());
+
+# Backlight left ON for the whole soak, deliberately: it is the worst case for
+# both power and PSRAM/DMA contention, and the point is to fail here, not later.
+output:
+  - platform: ledc
+    pin: GPIO48
+    id: out_backlight
+    frequency: 20000Hz
+
+light:
+  - platform: monochromatic
+    output: out_backlight
+    name: "Backlight"
+    restore_mode: ALWAYS_ON
+
+# -----------------------------------------------------------------------------
+# Instrumentation
+# -----------------------------------------------------------------------------
+globals:
+  - id: ble_drops
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: ble_down_since
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: ble_longest_gap_s
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: log_lines
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+
+binary_sensor:
+  - platform: fbot
+    fbot_id: p310
+    connected:
+      name: "P310 connected"
+      id: p310_connected
+      on_press:
+        - lambda: |-
+            // Reconnected: close out the gap we were timing.
+            if (id(ble_down_since) != 0) {
+              uint32_t gap = (millis() - id(ble_down_since)) / 1000;
+              if (gap > id(ble_longest_gap_s)) id(ble_longest_gap_s) = gap;
+              id(ble_down_since) = 0;
+            }
+      on_release:
+        - lambda: |-
+            id(ble_drops)++;
+            id(ble_down_since) = millis();
+    ac_active:
+      name: "P310 AC output active"
+      id: p310_ac_active
+
+sensor:
+  - platform: fbot
+    fbot_id: p310
+    battery_level:
+      name: "Battery"
+      id: battery_percent
+    input_power:
+      name: "Input power"
+      id: input_watts
+    output_power:
+      name: "Output power"
+      id: output_watts
+    system_power:
+      name: "System power"
+      id: system_watts
+
+  - platform: template
+    name: "BLE disconnect count"
+    id: s_ble_drops
+    accuracy_decimals: 0
+    update_interval: 60s
+    lambda: return id(ble_drops);
+
+  - platform: template
+    name: "Longest BLE gap"
+    unit_of_measurement: "s"
+    accuracy_decimals: 0
+    update_interval: 60s
+    lambda: return id(ble_longest_gap_s);
+
+  - platform: template
+    name: "Free heap"
+    unit_of_measurement: "B"
+    accuracy_decimals: 0
+    update_interval: 60s
+    lambda: return esp_get_free_heap_size();
+
+  - platform: template
+    name: "Free PSRAM"
+    unit_of_measurement: "B"
+    accuracy_decimals: 0
+    update_interval: 60s
+    lambda: return heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+
+  - platform: template
+    name: "SD lines written"
+    id: s_log_lines
+    accuracy_decimals: 0
+    update_interval: 60s
+    lambda: return id(log_lines);
+
+# -----------------------------------------------------------------------------
+# The log itself. One line every 30s.
+#
+# No RTC on this build, so the timestamp is seconds since boot. That is exactly
+# what the soak needs (it makes a reboot obvious as a discontinuity) and exactly
+# what the real logger must NOT use - correlating a coast test with time of day
+# needs the DS3231 (BOM item 15).
+# -----------------------------------------------------------------------------
+interval:
+  - interval: 30s
+    then:
+      - lambda: |-
+          // Every write is wrapped so a missing or full card is a non-event.
+          // Node autonomy: an SD failure must never stall anything upstream.
+          if (!id(battery_percent).has_state()) return;
+          char line[160];
+          int n = snprintf(line, sizeof(line),
+                           "%u,%.0f,%.0f,%.0f,%.0f,%d,%u\n",
+                           (unsigned) (millis() / 1000),
+                           id(battery_percent).state,
+                           id(input_watts).has_state() ? id(input_watts).state : -1.0f,
+                           id(output_watts).has_state() ? id(output_watts).state : -1.0f,
+                           id(system_watts).has_state() ? id(system_watts).state : -1.0f,
+                           id(p310_connected).state ? 1 : 0,
+                           (unsigned) id(ble_drops));
+          if (n <= 0) return;
+          std::string s(line);
+          id(sd_card)->append_file("/soak.csv", (const uint8_t *) s.c_str(), s.size());
+          id(log_lines)++;
+
+# Header, written once so the CSV is self-describing when it lands on a laptop
+# three weeks later.
+button:
+  - platform: template
+    name: "Write CSV header"
+    on_press:
+      - lambda: |-
+          std::string h = "uptime_s,soc_pct,input_w,output_w,system_w,ble_up,ble_drops\n";
+          id(sd_card)->append_file("/soak.csv", (const uint8_t *) h.c_str(), h.size());

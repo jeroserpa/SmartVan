@@ -1,0 +1,766 @@
+# van-core - the node the whole project exists for.
+#
+# Holds the BLE link to the P310, the fridge probe, the AC arbiter, the manual
+# cooking button and the SoftAP everything else joins. Fridge control is
+# entirely local to this node and never reads the network (CLAUDE.md section 5.1).
+#
+# Board: Waveshare ESP32-S3-LCD-1.47 (ESP32-S3R8, 8MB PSRAM, 16MB flash).
+# Pinout below is taken from the espp board-support header for this board
+# (esp-cpp/espp, components/ws-s3-lcd-1-47) - `VERIFY` against the Waveshare
+# schematic before soldering the carrier board.
+#
+# BEFORE THIS GOES IN THE VAN: run nodes/van-core-soak.yaml for 24h.
+# BEFORE EVERY TRIP: pull the BLE antenna, unplug the probe, confirm AC ends ON.
+
+substitutions:
+  node_name: van-core
+  friendly_name: Van core
+  # POWER-0183, found by tools/fbot_probe.py scan on 2026-08-18.
+  p310_mac: "E8:06:90:C7:AD:F6"
+
+  # --- pins: display (onboard, plain SPI ST7789) ---
+  pin_lcd_sclk: GPIO40
+  pin_lcd_mosi: GPIO45
+  pin_lcd_cs: GPIO42
+  pin_lcd_dc: GPIO41
+  pin_lcd_rst: GPIO39
+  pin_lcd_bl: GPIO48
+
+  # --- pins: external wiring, all on 3.5mm pluggable screw terminals ---
+  # Connectors are keyed by pin count so they cannot be mis-plugged at 11pm in
+  # a car park: 2-pin = 12V in, 3-pin = 1-Wire, 4-pin = button+LED.
+  pin_onewire: GPIO4
+  pin_btn_manual: GPIO5   # kitchen, illuminated momentary
+  pin_btn_page: GPIO6     # bezel: wake / cycle pages
+  pin_btn_sleep: GPIO7    # bezel: long press toggles sleep mode
+  pin_led_r: GPIO9
+  pin_led_g: GPIO10
+  pin_led_b: GPIO11
+  pin_buzzer: GPIO8
+  # GPIO0 (BOOT) is NOT used as a runtime button: it is a strapping pin, and
+  # holding it across a reset silently drops the board into download mode.
+
+esphome:
+  name: ${node_name}
+  friendly_name: ${friendly_name}
+  comment: "AC arbiter, P310 BLE link, fridge control"
+  # Pin the toolchain. A routine ESPHome update must not invalidate a working
+  # config two days before a trip (CLAUDE.md section 11).
+  min_version: 2025.7.0
+  on_boot:
+    # Priority 800 is before almost everything else. The arbiter's own setup()
+    # already commands AC ON; this is the belt to that braces.
+    - priority: 800
+      then:
+        - logger.log: "van-core boot: AC held ON until the arbiter says otherwise"
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  framework:
+    # esp-idf, matching the ESP-FBot examples. `UNVERIFIED`: the sd_mmc_card
+    # component's docs show arduino. Both must build under one framework on this
+    # node - that is what the soak config exists to settle.
+    type: esp-idf
+  flash_size: 16MB
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+packages:
+  base: !include ../common/base.yaml
+
+external_components:
+  # The whole reason this project is ESPHome rather than custom firmware: the
+  # P310 BLE protocol, already solved. Apache-2.0.
+  - source: github://ylianst/esp-fbot
+    refresh: 1d
+  # The arbiter. Pure state machine, host-tested in test/.
+  - source:
+      type: local
+      path: ../components
+
+# -----------------------------------------------------------------------------
+# Network. SoftAP only - no router exists in the van, and no station mode is
+# configured on purpose so this node cannot sit there scanning for a network
+# that is not there.
+# -----------------------------------------------------------------------------
+wifi:
+  ap:
+    ssid: !secret wifi_ssid
+    password: !secret wifi_password
+  # `TODO/VERIFY`: CLAUDE.md section 4 wants max_connection raised to 8. ESPHome
+  # exposes no YAML key for the SoftAP max_connection; it is set in the wifi
+  # component. With phone + water + heater + vehicle the default is already met.
+  # Settle this before adding the fourth client, not after.
+
+captive_portal:
+
+# -----------------------------------------------------------------------------
+# P310 over BLE
+# -----------------------------------------------------------------------------
+ble_client:
+  - mac_address: ${p310_mac}
+    id: p310_ble
+
+fbot:
+  id: p310
+  polling_interval: 5s           # matches the arbiter tick; no point going faster
+  settings_polling_interval: 60s # thresholds change rarely
+  poll_timeout: 15s
+  max_poll_failures: 3
+
+binary_sensor:
+  - platform: fbot
+    fbot_id: p310
+    connected:
+      name: "P310 connected"
+      id: p310_connected
+    ac_active:
+      name: "P310 AC output active"
+      id: p310_ac_active
+    dc_active:
+      name: "P310 DC output active"
+      id: p310_dc_active
+
+  # --- manual AC request (the cooking button) ---
+  - platform: gpio
+    name: "Manual AC button"
+    id: btn_manual
+    pin:
+      number: ${pin_btn_manual}
+      mode:
+        input: true
+        pullup: true
+      inverted: true
+    filters:
+      # 50ms in software rejects both contact bounce and induced transients from
+      # a long run past a 3300W inverter: a spike would have to persist 50ms to
+      # register. A phantom press arms the inverter for 45 min and goes unnoticed
+      # for days, so this is not decoration.
+      - delayed_on: 50ms
+      - delayed_off: 50ms
+    on_click:
+      - min_length: 50ms
+        max_length: 900ms
+        then:
+          - lambda: id(arbiter)->manual_press();
+      - min_length: 1s
+        max_length: 10s
+        then:
+          - lambda: id(arbiter)->manual_cancel();
+
+  # --- bezel buttons ---
+  - platform: gpio
+    name: "Page button"
+    id: btn_page
+    internal: true
+    pin:
+      number: ${pin_btn_page}
+      mode:
+        input: true
+        pullup: true
+      inverted: true
+    filters:
+      - delayed_on: 50ms
+    on_press:
+      then:
+        - lambda: |-
+            // First press wakes; subsequent presses cycle. The screen is dark
+            // most of the time, so page-cycling a blank display is never useful.
+            if (id(display_awake)) {
+              id(van_display).show_next_page();
+            }
+            id(display_awake) = true;
+            id(display_wake_ms) = millis();
+
+  - platform: gpio
+    name: "Sleep button"
+    id: btn_sleep
+    internal: true
+    pin:
+      number: ${pin_btn_sleep}
+      mode:
+        input: true
+        pullup: true
+      inverted: true
+    filters:
+      - delayed_on: 50ms
+    on_click:
+      - min_length: 1s
+        max_length: 10s
+        then:
+          - switch.toggle: sw_sleep_mode
+
+  # --- arbiter state, exposed for the web UI and for logging ---
+  - platform: template
+    name: "AC on"
+    id: bs_ac_on
+    lambda: return id(arbiter)->ac_on();
+  - platform: template
+    name: "Force on (fail-safe)"
+    lambda: return id(arbiter)->force_on();
+  - platform: template
+    name: "Fridge request"
+    lambda: return id(arbiter)->fridge_req();
+  - platform: template
+    name: "Manual request"
+    lambda: return id(arbiter)->manual_req();
+  - platform: template
+    name: "Surplus request"
+    lambda: return id(arbiter)->surplus_req();
+
+sensor:
+  - platform: fbot
+    fbot_id: p310
+    battery_level:
+      name: "Battery"
+      id: battery_percent
+    input_power:
+      name: "Input power"
+      id: input_watts
+    output_power:
+      name: "Output power"
+      id: output_watts
+    system_power:
+      name: "System power"
+      id: system_watts
+    ac_input_power:
+      name: "AC input power"
+      id: ac_input_watts
+    dc_input_power:
+      name: "Solar input power"
+      id: dc_input_watts
+    remaining_time:
+      name: "Remaining minutes"
+      id: remaining_minutes
+    ac_out_voltage:
+      name: "AC output voltage"
+
+  # --- fridge probe, raw. Unfiltered, for logging and for the coast test. ---
+  - platform: dallas_temp
+    one_wire_id: bus_1w
+    # TODO: fill in from the 1-Wire bus scan the component logs on first boot.
+    # Both probes sit on one bus, so both addresses are mandatory - and once
+    # they are written down, swapping a probe cannot silently swap the roles.
+    address: 0x0000000000000028  # PLACEHOLDER - fridge wall probe
+    name: "Fridge temperature (raw)"
+    id: fridge_temp_raw
+    update_interval: 10s
+    accuracy_decimals: 2
+
+  # --- fridge probe, control. This is what the arbiter reads. ---
+  - platform: template
+    name: "Fridge temperature"
+    id: fridge_temp
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 2
+    update_interval: 10s
+    lambda: |-
+      // Pass the raw probe through; the smoothing is in the filters below so
+      // that a NAN from the timeout filter propagates as a NAN.
+      return id(fridge_temp_raw).state;
+    filters:
+      # ~3 min time constant at a 10s update. This replaces the water bottle the
+      # earlier revision put the probe in: door-opening excursions are damped in
+      # software, and real fridge dynamics are far slower than this.
+      - exponential_moving_average:
+          alpha: 0.05
+          send_every: 1
+      # Convention (section 11): every sensor feeding a control decision carries
+      # a timeout. Publishing NAN is how the arbiter learns the probe is gone -
+      # and 5 min later it forces AC on.
+      - timeout:
+          timeout: 60s
+          value: !lambda return NAN;
+
+  # --- cabin ambient, same 1-Wire bus. Correlates directly with duty cycle. ---
+  - platform: dallas_temp
+    one_wire_id: bus_1w
+    address: 0x0000000000000029  # PLACEHOLDER - cabin ambient probe
+    name: "Cabin temperature"
+    id: cabin_temp
+    update_interval: 30s
+    accuracy_decimals: 1
+
+  - platform: template
+    name: "Manual AC remaining"
+    id: manual_remaining
+    unit_of_measurement: "min"
+    accuracy_decimals: 0
+    update_interval: 5s
+    lambda: return id(arbiter)->manual_remaining_s() / 60.0f;
+
+text_sensor:
+  - platform: template
+    name: "AC reason"
+    id: ac_reason
+    update_interval: 5s
+    lambda: return {id(arbiter)->reason()};
+
+one_wire:
+  - platform: gpio
+    pin: ${pin_onewire}
+    id: bus_1w
+    # 3-wire mode with a 4.7k pull-up at this end. Not parasitic: it saves one
+    # 30 AWG strand through the door gasket, which is no gain, and is less
+    # reliable.
+
+switch:
+  - platform: fbot
+    fbot_id: p310
+    ac:
+      name: "P310 AC inverter"
+      id: ac_switch
+      # SINGLE WRITER (section 5.3): only ac_arbiter writes this. It stays
+      # exposed in the web UI for manual override during commissioning; the
+      # arbiter re-asserts its decision once a minute, so a manual change is a
+      # temporary one by design.
+    dc:
+      name: "P310 DC output"
+      id: dc_switch
+      # NEVER shed this: the 12V habitation bus, and therefore every ESP node
+      # and all the lighting, hangs off it (measurements.md 2026-08-18).
+    usb:
+      name: "P310 USB output"
+      id: usb_switch
+    ac_silent:
+      name: "P310 silent charging"
+      id: ac_silent_switch
+
+  - platform: template
+    name: "Sleep mode"
+    id: sw_sleep_mode
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: id(arbiter)->set_sleep_mode(true);
+      - lambda: |-
+          id(display_awake) = false;  // blank the screen; that is half the point
+    on_turn_off:
+      - lambda: id(arbiter)->set_sleep_mode(false);
+
+  - platform: template
+    name: "Drive inhibit (test)"
+    id: sw_drive_inhibit
+    optimistic: true
+    # Phase 4 feature, shipped OFF and restored OFF. Until van-vehicle exists
+    # there is no engine signal, so this switch is the manual stand-in and is
+    # for bench testing only. It is bounded by the arbiter's own 4h hard
+    # timeout, so leaving it on cannot strand the fridge indefinitely.
+    restore_mode: ALWAYS_OFF
+    on_turn_on:
+      - lambda: id(arbiter)->set_drive_inhibit(true);
+    on_turn_off:
+      - lambda: id(arbiter)->set_drive_inhibit(false);
+
+select:
+  - platform: fbot
+    fbot_id: p310
+    ac_charge_limit:
+      name: "AC charge limit"
+      id: ac_charge_limit
+
+# -----------------------------------------------------------------------------
+# The arbiter. One component, one writer, one decision.
+# -----------------------------------------------------------------------------
+ac_arbiter:
+  id: arbiter
+  update_interval: 5s
+  fridge_temperature: fridge_temp
+  output_power: output_watts
+  input_power: input_watts
+  battery_level: battery_percent
+  ble_connected: p310_connected
+  ac_switch: ac_switch
+  # Must comfortably exceed the slowest feeding sensor (30s cabin / 10s fridge /
+  # 5s BLE poll). Anything older than this counts as missing, and missing never
+  # argues for OFF.
+  sensor_max_age: 45s
+
+# -----------------------------------------------------------------------------
+# Tunables. Every threshold is a number entity so field tuning never needs a
+# laptop and a reflash (section 11). restore_value keeps them across reboots.
+# -----------------------------------------------------------------------------
+number:
+  - platform: fbot
+    fbot_id: p310
+    threshold_charge:
+      name: "Charge max"
+      min_value: 10
+      max_value: 100
+      step: 1
+    threshold_discharge:
+      name: "Discharge min"
+      min_value: 0
+      max_value: 50
+      step: 1
+
+  - platform: template
+    name: "Fridge on above"
+    id: num_temp_on
+    unit_of_measurement: "°C"
+    min_value: 4.0
+    max_value: 12.0
+    step: 0.5
+    initial_value: 7.0
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value:
+      - lambda: id(arbiter)->config().temp_on_c = x;
+
+  - platform: template
+    name: "Fridge off below"
+    id: num_temp_off
+    unit_of_measurement: "°C"
+    min_value: 0.0
+    max_value: 8.0
+    step: 0.5
+    initial_value: 4.0
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value:
+      - lambda: id(arbiter)->config().temp_off_c = x;
+
+  - platform: template
+    name: "Fridge hard override"
+    id: num_temp_hard
+    unit_of_measurement: "°C"
+    min_value: 6.0
+    max_value: 15.0
+    step: 0.5
+    initial_value: 10.0
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value:
+      - lambda: id(arbiter)->config().temp_hard_c = x;
+
+  - platform: template
+    name: "Sleep ceiling"
+    id: num_sleep_ceiling
+    unit_of_measurement: "°C"
+    # Capped at 8: above the ideal band for meat and dairy already. The
+    # automation must not make that choice silently - the configured ceiling is
+    # on the display.
+    min_value: 4.0
+    max_value: 8.0
+    step: 0.5
+    initial_value: 6.0
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value:
+      - lambda: id(arbiter)->config().sleep_ceiling_c = x;
+
+  - platform: template
+    name: "Sleep coast target"
+    id: num_sleep_target
+    unit_of_measurement: "°C"
+    min_value: 0.0
+    max_value: 5.0
+    step: 0.5
+    initial_value: 1.0
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value:
+      - lambda: id(arbiter)->config().sleep_target_c = x;
+
+  - platform: template
+    name: "Compressor idle threshold"
+    id: num_compressor_idle_w
+    unit_of_measurement: "W"
+    min_value: 5
+    max_value: 50
+    step: 1
+    initial_value: 15
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value:
+      - lambda: id(arbiter)->config().compressor_idle_w = x;
+
+  - platform: template
+    name: "Compressor idle debounce"
+    id: num_compressor_idle_s
+    unit_of_measurement: "s"
+    # The tail between compressor stop and inverter shutdown is pure idle waste,
+    # incurred every cycle: at 12 cycles/day a 5 min tail costs 35 Wh/day, ~7% of
+    # the entire project saving. Push this down once the 24h log exists.
+    min_value: 15
+    max_value: 300
+    step: 5
+    initial_value: 90
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value:
+      - lambda: id(arbiter)->config().compressor_idle_ms = (uint32_t)(x * 1000);
+
+  - platform: template
+    name: "Minimum inverter on time"
+    id: num_min_on_min
+    unit_of_measurement: "min"
+    min_value: 1
+    max_value: 60
+    step: 1
+    initial_value: 10
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value:
+      - lambda: id(arbiter)->config().min_on_ms = (uint32_t)(x * 60000);
+
+  - platform: template
+    name: "Minimum inverter off time"
+    id: num_min_off_min
+    unit_of_measurement: "min"
+    min_value: 1
+    max_value: 60
+    step: 1
+    initial_value: 5
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value:
+      - lambda: id(arbiter)->config().min_off_ms = (uint32_t)(x * 60000);
+
+  - platform: template
+    name: "Manual AC duration"
+    id: num_manual_min
+    unit_of_measurement: "min"
+    min_value: 5
+    max_value: 120
+    step: 5
+    initial_value: 45
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value:
+      - lambda: id(arbiter)->config().manual_initial_ms = (uint32_t)(x * 60000);
+
+  - platform: template
+    name: "Manual AC release power"
+    id: num_manual_release_w
+    unit_of_measurement: "W"
+    # Sits well above the fridge compressor (35W) and far below an induction
+    # plate or kettle, so a running fridge cannot hold the timer open.
+    min_value: 50
+    max_value: 500
+    step: 10
+    initial_value: 150
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value:
+      - lambda: id(arbiter)->config().manual_release_w = x;
+
+  - platform: template
+    name: "Surplus margin"
+    id: num_surplus_w
+    unit_of_measurement: "W"
+    min_value: 50
+    max_value: 1000
+    step: 50
+    initial_value: 200
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value:
+      - lambda: id(arbiter)->config().surplus_margin_w = x;
+
+  - platform: template
+    name: "Surplus minimum SOC"
+    id: num_surplus_soc
+    unit_of_measurement: "%"
+    min_value: 50
+    max_value: 100
+    step: 5
+    initial_value: 85
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value:
+      - lambda: id(arbiter)->config().surplus_soc_pct = x;
+
+# -----------------------------------------------------------------------------
+# Feedback: button LED and buzzer
+# -----------------------------------------------------------------------------
+output:
+  - platform: ledc
+    pin: ${pin_led_r}
+    id: out_led_r
+    frequency: 1000Hz
+  - platform: ledc
+    pin: ${pin_led_g}
+    id: out_led_g
+    frequency: 1000Hz
+  - platform: ledc
+    pin: ${pin_led_b}
+    id: out_led_b
+    frequency: 1000Hz
+  - platform: ledc
+    pin: ${pin_buzzer}
+    id: out_buzzer
+    frequency: 2700Hz
+  - platform: ledc
+    pin: ${pin_lcd_bl}
+    id: out_backlight
+    frequency: 20000Hz
+
+globals:
+  - id: display_awake
+    type: bool
+    restore_value: false
+    initial_value: "true"
+  - id: display_wake_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: buzzer_last_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+
+interval:
+  # Button LED. Green = manual active, amber = fridge-driven, off = inverter
+  # down. Dim: this is a metre from where someone sleeps.
+  - interval: 1s
+    then:
+      - lambda: |-
+          float r = 0, g = 0, b = 0;
+          if (id(arbiter)->manual_req()) {
+            g = 0.25f;                       // green: you asked for this
+          } else if (id(arbiter)->ac_on()) {
+            r = 0.20f; g = 0.06f;            // amber: the fridge asked for it
+          }
+          id(out_led_r)->set_level(r);
+          id(out_led_g)->set_level(g);
+          id(out_led_b)->set_level(b);
+
+  # Buzzer: a short chirp while the manual timer is inside its warning window,
+  # at most once every 30s. Suppressed in sleep mode - waking someone to tell
+  # them the inverter is about to turn itself off is absurd.
+  - interval: 5s
+    then:
+      - lambda: |-
+          if (!id(arbiter)->manual_warning()) return;
+          if (id(sw_sleep_mode).state) return;
+          const uint32_t now = millis();
+          if (now - id(buzzer_last_ms) < 30000) return;
+          id(buzzer_last_ms) = now;
+          id(out_buzzer)->set_level(0.5f);
+      - delay: 120ms
+      - lambda: id(out_buzzer)->set_level(0.0f);
+
+  # Display blanking. 60s of no input, or sleep mode, and the backlight goes to
+  # zero: no night-light, no wasted backlight, no glow through a printed bezel.
+  - interval: 1s
+    then:
+      - lambda: |-
+          if (id(sw_sleep_mode).state)
+            id(display_awake) = false;
+          if (id(display_awake) && (millis() - id(display_wake_ms)) > 60000)
+            id(display_awake) = false;
+          id(out_backlight)->set_level(id(display_awake) ? 0.8f : 0.0f);
+
+# -----------------------------------------------------------------------------
+# Display. Four pages, cycled by the bezel button. Simple fonts, no animation,
+# 1s refresh: the BLE task must not be starved (CLAUDE.md section 2 risk note).
+# -----------------------------------------------------------------------------
+spi:
+  clk_pin: ${pin_lcd_sclk}
+  mosi_pin: ${pin_lcd_mosi}
+
+font:
+  # Compiled in from Google Fonts at build time. Needs internet ON THE BUILD
+  # MACHINE only - compile at home, then join the SoftAP to upload.
+  - file: "gfonts://Roboto"
+    id: font_big
+    size: 40
+  - file: "gfonts://Roboto"
+    id: font_med
+    size: 20
+  - file: "gfonts://Roboto"
+    id: font_small
+    size: 14
+
+display:
+  - platform: st7789v
+    id: van_display
+    model: Custom
+    width: 172
+    height: 320
+    offset_width: 34
+    offset_height: 0
+    # `VERIFY on first flash`: offsets and rotation for this panel come from the
+    # espp board header, not from a datasheet in hand. A 34px offset in the
+    # wrong axis shows as a coloured band down one edge.
+    rotation: 90
+    cs_pin: ${pin_lcd_cs}
+    dc_pin: ${pin_lcd_dc}
+    reset_pin: ${pin_lcd_rst}
+    update_interval: 1s
+    pages:
+      # --- page 1: the battery ---
+      - id: page_power
+        lambda: |-
+          it.printf(4, 0, id(font_small), "BATTERY");
+          if (id(battery_percent).has_state())
+            it.printf(4, 18, id(font_big), "%.0f%%", id(battery_percent).state);
+          if (id(input_watts).has_state() && id(output_watts).has_state())
+            it.printf(4, 70, id(font_med), "in %.0fW   out %.0fW",
+                      id(input_watts).state, id(output_watts).state);
+          if (id(remaining_minutes).has_state())
+            it.printf(4, 96, id(font_med), "%.1f h remaining",
+                      id(remaining_minutes).state / 60.0f);
+          if (!id(p310_connected).state)
+            it.printf(4, 130, id(font_med), "BLE DOWN - AC FORCED ON");
+
+      # --- page 2: the fridge and why the inverter is doing what it is doing ---
+      - id: page_fridge
+        lambda: |-
+          it.printf(4, 0, id(font_small), "FRIDGE");
+          if (id(fridge_temp).has_state())
+            it.printf(4, 18, id(font_big), "%.1f C", id(fridge_temp).state);
+          else
+            it.printf(4, 18, id(font_big), "-- C");
+          it.printf(4, 70, id(font_med), "AC %s (%s)",
+                    id(arbiter)->ac_on() ? "ON" : "off", id(arbiter)->reason());
+          if (id(arbiter)->manual_req())
+            it.printf(4, 96, id(font_med), "manual %u min left",
+                      (unsigned) (id(arbiter)->manual_remaining_s() / 60));
+          // Surface the configured ceiling: an 8 C overnight ceiling is a food
+          // decision and the automation must never make it silently.
+          if (id(sw_sleep_mode).state)
+            it.printf(4, 122, id(font_med), "SLEEP, ceiling %.1f C",
+                      id(num_sleep_ceiling).state);
+
+      # --- page 3: water (van-water, Phase 2) ---
+      - id: page_water
+        lambda: |-
+          it.printf(4, 0, id(font_small), "WATER");
+          it.printf(4, 18, id(font_med), "van-water not yet installed");
+
+      # --- page 4: diagnostics ---
+      - id: page_diag
+        lambda: |-
+          it.printf(4, 0, id(font_small), "DIAGNOSTICS");
+          it.printf(4, 20, id(font_small), "BLE: %s",
+                    id(p310_connected).state ? "up" : "DOWN");
+          it.printf(4, 38, id(font_small), "probe: %s",
+                    id(fridge_temp).has_state() ? "ok" : "STALE");
+          if (id(cabin_temp).has_state())
+            it.printf(4, 56, id(font_small), "cabin: %.1f C", id(cabin_temp).state);
+          it.printf(4, 74, id(font_small), "flags: F%d M%d S%d X%d",
+                    id(arbiter)->fridge_req(), id(arbiter)->manual_req(),
+                    id(arbiter)->surplus_req(), id(arbiter)->force_on());
+          // SoftAP address is fixed by ESPHome; mDNS is unreliable on SoftAP so
+          // this is the address to type, not a hostname.
+          it.printf(4, 92, id(font_small), "AP: 192.168.4.1");
