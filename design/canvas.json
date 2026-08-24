@@ -1,0 +1,84 @@
+{
+  "artboards": [
+    {
+      "file": "Main.dc.html",
+      "title": "Now",
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    {
+      "file": "Energy.dc.html",
+      "title": "Energy",
+      "x": 470,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    {
+      "file": "Fridge.dc.html",
+      "title": "Fridge",
+      "x": 940,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    {
+      "file": "Setup.dc.html",
+      "title": "Setup (scrolls)",
+      "x": 1410,
+      "y": 0,
+      "w": 390,
+      "h": 1600
+    },
+    {
+      "file": "States.dc.html",
+      "title": "Hero states",
+      "x": 0,
+      "y": 960,
+      "w": 1290,
+      "h": 560
+    }
+  ],
+  "annotations": [
+    {
+      "id": "brief",
+      "x": -420,
+      "y": 0,
+      "w": 360,
+      "text": "van-core web panel, 390pt phone portrait.\n\nInstrument-dark: warm near-black, amber reserved for the inverter, green for harvest, blue for the alternator, red only for genuine alarms. Space Grotesk + IBM Plex Mono.\n\nRule the layout follows: the panel answers 'is the inverter on, and why' before anything else."
+    },
+    {
+      "id": "graph-note",
+      "x": -420,
+      "y": 300,
+      "w": 360,
+      "text": "The energy graph is generated from a simulated 24h, not invented shapes - net line = in minus out, SOC integrates net, the duty figures match the ribbons, and the generator refuses to emit a series that would clip outside the axis it labels.\n\nCooking spikes dwarf the fridge on a linear axis, which is honest. That is why the inverter/compressor ribbons sit under the axis: duty cycle is the project's open question (CLAUDE.md 8.4) and it lives there, not in the areas."
+    },
+    {
+      "id": "data-note",
+      "x": 1860,
+      "y": 0,
+      "w": 340,
+      "text": "Nothing here stores history yet. ESPHome web_server v3 charts are live-only, and the microSD logger from Phase 1 is not written.\n\nEverything else on these screens maps to entities that already exist in nodes/van-core.yaml - the 14 number tunables, the arbiter flags, the fbot sensors."
+    },
+    {
+      "id": "states-note",
+      "x": -420,
+      "y": 960,
+      "w": 360,
+      "text": "Fail-safe states are the reason this panel exists at all.\n\n01 and 02 are 'fails toward powered' - the inverter is on and the panel says why in red, so a forced-on state can never be mistaken for normal operation.\n\n04 and 05 are the same coast machinery with two different triggers. 06 never touches the DC rail."
+    },
+    {
+      "id": "flow-note",
+      "x": -420,
+      "y": 620,
+      "w": 360,
+      "text": "Power flow answers 'where is every watt going' without arithmetic: solar and engine in on the left, AC and DC out on the right, battery in the middle. Symbols carry the identity - sun, vehicle, sine, DC bars - so the values read at a glance.\n\nLink thickness scales with power and a dead path goes thin and dashed, so a silently failed alternator charger reads instantly - exactly the failure the Phase 4 cabin display exists to catch.\n\nThe red outer arc is the bottom 20%: reserve, not capacity."
+    }
+  ],
+  "launch": {
+    "view": "canvas"
+  }
+}

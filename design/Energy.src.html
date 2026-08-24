@@ -1,0 +1,194 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+  <style>
+    body { margin: 0; font-family: "Space Grotesk", ui-sans-serif, system-ui, sans-serif; }
+    a { color: oklch(0.78 0.145 72); text-decoration: none; }
+    a:hover { color: oklch(0.86 0.12 72); }
+    .mono { font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace; }
+  </style>
+</helmet>
+
+<div style="width: 390px; height: 844px; background: oklch(0.155 0.006 70); color: oklch(0.94 0.008 80); display: flex; flex-direction: column; overflow: hidden;">
+
+  <div style="height: 44px; flex-shrink: 0;"></div>
+
+  <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 12px; padding: 0 24px; min-height: 0;">
+
+    <div style="display: flex; align-items: center; justify-content: space-between; height: 32px; flex-shrink: 0;">
+      <span style="font-size: 20px; font-weight: 700; letter-spacing: -0.01em;">Energy</span>
+      <span class="mono" style="font-size: 11px; color: oklch(0.50 0.008 80);">Sun 24 Aug</span>
+    </div>
+
+    <!-- range -->
+    <div style="flex-shrink: 0; display: flex; gap: 6px;">
+      <span class="mono" style="font-size: 11px; padding: 6px 14px; border-radius: 99px; background: oklch(0.28 0.008 70); color: oklch(0.94 0.008 80);">6 h</span>
+      <span class="mono" style="font-size: 11px; padding: 6px 14px; border-radius: 99px; background: oklch(0.88 0.008 80); color: oklch(0.20 0.008 70); font-weight: 600;">24 h</span>
+      <span class="mono" style="font-size: 11px; padding: 6px 14px; border-radius: 99px; background: oklch(0.28 0.008 70); color: oklch(0.94 0.008 80);">7 d</span>
+      <div style="flex-grow: 1;"></div>
+      <span class="mono" style="font-size: 11px; padding: 6px 12px; border-radius: 99px; border: 1px solid oklch(0.30 0.008 70); color: oklch(0.66 0.008 80);">CSV</span>
+    </div>
+
+    <!-- power -->
+    <div style="flex-shrink: 0; background: oklch(0.205 0.007 70); border: 1px solid oklch(0.30 0.008 70); border-radius: 16px; padding: 14px 14px 12px;">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; padding: 0 2px;">
+        <span style="font-size: 10px; letter-spacing: 0.18em; color: oklch(0.66 0.008 80);">POWER</span>
+        <span class="mono" style="font-size: 10px; color: oklch(0.50 0.008 80);">watts · in above, out below</span>
+      </div>
+
+      <div style="margin-top: 10px; display: flex; gap: 7px;">
+        <div style="position: relative; width: 52px; height: 180px; flex-shrink: 0;">
+          <span class="mono" style="position: absolute; right: 0; top: 17.0px; font-size: 9px; color: oklch(0.50 0.008 80);">1000</span>
+          <span class="mono" style="position: absolute; right: 0; top: 67.0px; font-size: 9px; color: oklch(0.66 0.008 80);">0</span>
+          <span class="mono" style="position: absolute; right: 0; top: 117.0px; font-size: 9px; color: oklch(0.50 0.008 80);">−1000</span>
+          <span class="mono" style="position: absolute; right: 0; top: 167.0px; font-size: 9px; color: oklch(0.50 0.008 80);">−2000</span>
+        </div>
+        <div style="flex-grow: 1; min-width: 0; height: 180px;">
+          <svg viewBox="0 0 720 300" preserveAspectRatio="none" width="100%" height="180" xmlns="http://www.w3.org/2000/svg">
+            <rect x="0" y="0" width="180" height="300" fill="oklch(0.94 0.008 80 / 0.035)"></rect>
+            <rect x="690" y="0" width="30" height="300" fill="oklch(0.94 0.008 80 / 0.035)"></rect>
+            <path d="M90 0V300M180 0V300M270 0V300M360 0V300M450 0V300M540 0V300M630 0V300" stroke="oklch(0.28 0.008 70)" stroke-width="1" vector-effect="non-scaling-stroke"></path>
+            <path d="@@SOLAR_AREA@@" fill="oklch(0.78 0.145 155 / 0.45)"></path>
+            <path d="@@ACIN_AREA@@" fill="oklch(0.72 0.13 245 / 0.5)"></path>
+            <path d="@@OUT_AREA@@" fill="oklch(0.74 0.055 50 / 0.55)"></path>
+            <path d="@@NET_LINE@@" fill="none" stroke="oklch(0.94 0.008 80)" stroke-width="1" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>
+            <path d="M0 @@ZERO_Y@@H720" stroke="oklch(0.60 0.008 70)" stroke-width="1" vector-effect="non-scaling-stroke"></path>
+          </svg>
+        </div>
+      </div>
+
+      <!-- ribbons: this is where the fridge story is legible, not in the areas above -->
+      <div style="display: flex; align-items: center; gap: 7px; margin-top: 5px;">
+        <span class="mono" style="font-size: 9px; color: oklch(0.66 0.008 80); width: 52px; flex-shrink: 0; text-align: right;">inverter</span>
+        <svg viewBox="0 0 720 10" preserveAspectRatio="none" width="100%" height="9" style="flex-grow: 1; min-width: 0;" xmlns="http://www.w3.org/2000/svg">
+          <rect x="0" y="0" width="720" height="10" rx="1" fill="oklch(0.26 0.008 70)"></rect>
+          @@AC_BLOCKS@@
+        </svg>
+      </div>
+      <div style="display: flex; align-items: center; gap: 7px; margin-top: 5px;">
+        <span class="mono" style="font-size: 9px; color: oklch(0.66 0.008 80); width: 52px; flex-shrink: 0; text-align: right;">compressor</span>
+        <svg viewBox="0 0 720 10" preserveAspectRatio="none" width="100%" height="9" style="flex-grow: 1; min-width: 0;" xmlns="http://www.w3.org/2000/svg">
+          <rect x="0" y="0" width="720" height="10" rx="1" fill="oklch(0.26 0.008 70)"></rect>
+          @@COMP_BLOCKS@@
+        </svg>
+      </div>
+
+      <div style="display: flex; gap: 7px; margin-top: 4px;">
+        <div style="width: 52px; flex-shrink: 0;"></div>
+        <div style="flex-grow: 1; min-width: 0; display: flex; justify-content: space-between;">
+            <span class="mono" style="font-size: 9px; color: oklch(0.50 0.008 80);">00</span>
+            <span class="mono" style="font-size: 9px; color: oklch(0.50 0.008 80);">06</span>
+            <span class="mono" style="font-size: 9px; color: oklch(0.50 0.008 80);">12</span>
+            <span class="mono" style="font-size: 9px; color: oklch(0.50 0.008 80);">18</span>
+            <span class="mono" style="font-size: 9px; color: oklch(0.50 0.008 80);">24</span>
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 14px; margin-top: 10px; padding: 0 2px;">
+        <div style="display: flex; align-items: center; gap: 5px;">
+          <span style="width: 8px; height: 8px; border-radius: 2px; background: oklch(0.78 0.145 155);"></span>
+          <span class="mono" style="font-size: 10px; color: oklch(0.66 0.008 80);">solar</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 5px;">
+          <span style="width: 8px; height: 8px; border-radius: 2px; background: oklch(0.72 0.13 245);"></span>
+          <span class="mono" style="font-size: 10px; color: oklch(0.66 0.008 80);">alternator</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 5px;">
+          <span style="width: 8px; height: 8px; border-radius: 2px; background: oklch(0.74 0.055 50);"></span>
+          <span class="mono" style="font-size: 10px; color: oklch(0.66 0.008 80);">load</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 5px;">
+          <span style="width: 8px; height: 2px; background: oklch(0.94 0.008 80);"></span>
+          <span class="mono" style="font-size: 10px; color: oklch(0.66 0.008 80);">net</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- state of charge -->
+    <div style="flex-shrink: 0; background: oklch(0.205 0.007 70); border: 1px solid oklch(0.30 0.008 70); border-radius: 16px; padding: 12px 14px;">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; padding: 0 2px;">
+        <span style="font-size: 10px; letter-spacing: 0.18em; color: oklch(0.66 0.008 80);">STATE OF CHARGE</span>
+        <span class="mono" style="font-size: 11px; color: oklch(0.66 0.008 80);">low @@S_SOCMIN@@% · now @@S_SOCEND@@%</span>
+      </div>
+      <div style="margin-top: 8px; margin-left: 59px; height: 52px;">
+        <svg viewBox="0 0 720 300" preserveAspectRatio="none" width="100%" height="52" xmlns="http://www.w3.org/2000/svg">
+          <path d="M180 0V300M360 0V300M540 0V300" stroke="oklch(0.28 0.008 70)" stroke-width="1" vector-effect="non-scaling-stroke"></path>
+          <path d="M0 240H720" stroke="oklch(0.68 0.19 27 / 0.5)" stroke-width="1" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"></path>
+          <path d="@@SOC_LINE@@" fill="none" stroke="oklch(0.78 0.145 155)" stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>
+        </svg>
+      </div>
+    </div>
+
+    <!-- totals -->
+    <div style="flex-shrink: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;">
+      <div style="background: oklch(0.205 0.007 70); border: 1px solid oklch(0.30 0.008 70); border-radius: 12px; padding: 10px 12px;">
+        <span class="mono" style="font-size: 18px; font-weight: 600; color: oklch(0.78 0.145 155);">@@S_HARVESTKWH@@</span>
+        <div style="font-size: 10px; color: oklch(0.60 0.008 80); margin-top: 2px;">kWh in</div>
+      </div>
+      <div style="background: oklch(0.205 0.007 70); border: 1px solid oklch(0.30 0.008 70); border-radius: 12px; padding: 10px 12px;">
+        <span class="mono" style="font-size: 18px; font-weight: 600;">@@S_USEDKWH@@</span>
+        <div style="font-size: 10px; color: oklch(0.60 0.008 80); margin-top: 2px;">kWh out</div>
+      </div>
+      <div style="background: oklch(0.205 0.007 70); border: 1px solid oklch(0.30 0.008 70); border-radius: 12px; padding: 10px 12px;">
+        <span class="mono" style="font-size: 18px; font-weight: 600;">@@S_CYCLES@@</span>
+        <div style="font-size: 10px; color: oklch(0.60 0.008 80); margin-top: 2px;">fridge cycles</div>
+      </div>
+    </div>
+
+    <!-- the number the project exists for -->
+    <div style="flex-shrink: 0; background: oklch(0.205 0.007 70); border: 1px solid oklch(0.42 0.07 72); border-radius: 16px; padding: 13px 16px;">
+      <div style="display: flex; align-items: baseline; justify-content: space-between;">
+        <span style="font-size: 10px; letter-spacing: 0.18em; color: oklch(0.66 0.008 80);">IDLE AVOIDED</span>
+        <span class="mono" style="font-size: 10px; color: oklch(0.50 0.008 80);">vs inverter on 24/7</span>
+      </div>
+      <div style="display: flex; align-items: baseline; gap: 8px; margin-top: 4px;">
+        <span class="mono" style="font-size: 30px; font-weight: 600; line-height: 1.05; color: oklch(0.82 0.15 72);">@@S_SAVEDWH@@</span>
+        <span style="font-size: 13px; color: oklch(0.66 0.008 80);">Wh today</span>
+      </div>
+      <div style="display: flex; gap: 16px; margin-top: 8px;">
+        <span class="mono" style="font-size: 10px; color: oklch(0.60 0.008 80);">inverter @@S_DUTYAC@@%</span>
+        <span class="mono" style="font-size: 10px; color: oklch(0.60 0.008 80);">compressor @@S_DUTYCOMP@@%</span>
+        <span class="mono" style="font-size: 10px; color: oklch(0.60 0.008 80);">overhead @@S_OVERHEADPTS@@ pts</span>
+      </div>
+    </div>
+
+    <div style="flex-grow: 1;"></div>
+  </div>
+
+  <div style="flex-shrink: 0; height: 68px; border-top: 1px solid oklch(0.26 0.008 70); background: oklch(0.18 0.006 70); display: flex; align-items: center; justify-content: space-around; padding-bottom: 6px;">
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: oklch(0.55 0.008 80); width: 72px;">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><path d="M2 10.5 10 3l8 7.5"></path><path d="M4.5 9.5V17h11V9.5"></path></svg>
+      <span style="font-size: 10px; letter-spacing: 0.04em;">Now</span>
+    </div>
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: oklch(0.82 0.15 72); width: 72px;">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><path d="M2 15l4-6 4 3 4-7 4 4"></path><path d="M2 17.5h16"></path></svg>
+      <span style="font-size: 10px; letter-spacing: 0.04em;">Energy</span>
+    </div>
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: oklch(0.55 0.008 80); width: 72px;">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><path d="M8 11.5V3.5a2 2 0 1 1 4 0v8"></path><circle cx="10" cy="14" r="3.2"></circle></svg>
+      <span style="font-size: 10px; letter-spacing: 0.04em;">Fridge</span>
+    </div>
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: oklch(0.55 0.008 80); width: 72px;">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><path d="M3 6h14M3 14h14"></path><circle cx="7.5" cy="6" r="2.2"></circle><circle cx="13" cy="14" r="2.2"></circle></svg>
+      <span style="font-size: 10px; letter-spacing: 0.04em;">Setup</span>
+    </div>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

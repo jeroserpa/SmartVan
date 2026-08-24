@@ -1,0 +1,160 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+  <style>
+    body { margin: 0; font-family: "Space Grotesk", ui-sans-serif, system-ui, sans-serif; }
+    a { color: oklch(0.78 0.145 72); text-decoration: none; }
+    a:hover { color: oklch(0.86 0.12 72); }
+    .mono { font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace; }
+  </style>
+</helmet>
+
+<div style="width: 1290px; background: oklch(0.155 0.006 70); color: oklch(0.94 0.008 80); padding: 40px; box-sizing: border-box; display: flex; flex-direction: column; gap: 28px;">
+
+  <div style="display: flex; flex-direction: column; gap: 6px;">
+    <span style="font-size: 24px; font-weight: 700; letter-spacing: -0.01em;">Hero states</span>
+    <span style="font-size: 13px; color: oklch(0.66 0.008 80); max-width: 620px;">The top card on Now, in every state the arbiter can produce. A fail-safe that is on for a reason you cannot read is indistinguishable from a bug, so the reason is never smaller than the state.</span>
+  </div>
+
+  <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px;">
+
+    <!-- 1. BLE lost -->
+    <div style="display: flex; flex-direction: column; gap: 10px;">
+      <span class="mono" style="font-size: 11px; color: oklch(0.55 0.008 80);">01 · BLE link lost</span>
+      <div style="background: oklch(0.205 0.007 70); border: 1px solid oklch(0.45 0.12 27); border-radius: 16px; padding: 14px 16px 13px; position: relative; overflow: hidden; flex-grow: 1;">
+        <div style="position: absolute; top: 0; left: 0; right: 0; height: 2px; background: oklch(0.68 0.19 27);"></div>
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <span style="font-size: 10px; letter-spacing: 0.18em; color: oklch(0.66 0.008 80);">AC INVERTER</span>
+          <span class="mono" style="font-size: 11px; padding: 3px 8px; border-radius: 99px; background: oklch(0.30 0.06 27); color: oklch(0.84 0.14 27);">reason: ble lost</span>
+        </div>
+        <div style="display: flex; align-items: baseline; gap: 12px; margin-top: 4px;">
+          <span style="font-size: 40px; font-weight: 700; line-height: 1; letter-spacing: -0.02em; color: oklch(0.80 0.16 27);">FORCED ON</span>
+        </div>
+        <div style="margin-top: 12px;">
+          <span class="mono" style="font-size: 11px; color: oklch(0.72 0.008 80);">no P310 for 42 s · the fridge keeps running, the panel cannot tell you what it costs</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. probe stale -->
+    <div style="display: flex; flex-direction: column; gap: 10px;">
+      <span class="mono" style="font-size: 11px; color: oklch(0.55 0.008 80);">02 · Probe stale</span>
+      <div style="background: oklch(0.205 0.007 70); border: 1px solid oklch(0.45 0.12 27); border-radius: 16px; padding: 14px 16px 13px; position: relative; overflow: hidden; flex-grow: 1;">
+        <div style="position: absolute; top: 0; left: 0; right: 0; height: 2px; background: oklch(0.68 0.19 27);"></div>
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <span style="font-size: 10px; letter-spacing: 0.18em; color: oklch(0.66 0.008 80);">AC INVERTER</span>
+          <span class="mono" style="font-size: 11px; padding: 3px 8px; border-radius: 99px; background: oklch(0.30 0.06 27); color: oklch(0.84 0.14 27);">reason: probe stale</span>
+        </div>
+        <div style="display: flex; align-items: baseline; gap: 12px; margin-top: 4px;">
+          <span style="font-size: 40px; font-weight: 700; line-height: 1; letter-spacing: -0.02em; color: oklch(0.80 0.16 27);">FORCED ON</span>
+        </div>
+        <div style="margin-top: 12px;">
+          <span class="mono" style="font-size: 11px; color: oklch(0.72 0.008 80);">1-Wire silent for 6 min · check the gasket crossing before the trip</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. manual -->
+    <div style="display: flex; flex-direction: column; gap: 10px;">
+      <span class="mono" style="font-size: 11px; color: oklch(0.55 0.008 80);">03 · Manual armed</span>
+      <div style="background: oklch(0.205 0.007 70); border: 1px solid oklch(0.42 0.09 72); border-radius: 16px; padding: 14px 16px 13px; position: relative; overflow: hidden; flex-grow: 1;">
+        <div style="position: absolute; top: 0; left: 0; right: 0; height: 2px; background: oklch(0.78 0.145 72);"></div>
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <span style="font-size: 10px; letter-spacing: 0.18em; color: oklch(0.66 0.008 80);">AC INVERTER</span>
+          <span class="mono" style="font-size: 11px; padding: 3px 8px; border-radius: 99px; background: oklch(0.30 0.05 72); color: oklch(0.86 0.12 72);">reason: manual</span>
+        </div>
+        <div style="display: flex; align-items: baseline; gap: 12px; margin-top: 4px;">
+          <span style="font-size: 46px; font-weight: 700; line-height: 1; letter-spacing: -0.02em; color: oklch(0.82 0.15 72);">ON</span>
+          <span class="mono" style="font-size: 15px; color: oklch(0.86 0.12 72);">38:12 left</span>
+        </div>
+        <div style="margin-top: 12px; display: flex; flex-direction: column; gap: 5px;">
+          <div style="height: 3px; border-radius: 99px; background: oklch(0.28 0.008 70); overflow: hidden;">
+            <div style="width: 85%; height: 100%; background: oklch(0.78 0.145 72);"></div>
+          </div>
+          <span class="mono" style="font-size: 10px; color: oklch(0.55 0.008 80);">1614 W · releases early if load drops under 150 W</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 4. sleep -->
+    <div style="display: flex; flex-direction: column; gap: 10px;">
+      <span class="mono" style="font-size: 11px; color: oklch(0.55 0.008 80);">04 · Sleep mode, coasting</span>
+      <div style="background: oklch(0.185 0.006 70); border: 1px solid oklch(0.30 0.008 70); border-radius: 16px; padding: 14px 16px 13px; position: relative; overflow: hidden; flex-grow: 1;">
+        <div style="position: absolute; top: 0; left: 0; right: 0; height: 2px; background: oklch(0.55 0.06 245);"></div>
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <span style="font-size: 10px; letter-spacing: 0.18em; color: oklch(0.66 0.008 80);">AC INVERTER</span>
+          <span class="mono" style="font-size: 11px; padding: 3px 8px; border-radius: 99px; background: oklch(0.26 0.04 245); color: oklch(0.80 0.10 245);">sleep · ceiling 6.0 °C</span>
+        </div>
+        <div style="display: flex; align-items: baseline; gap: 12px; margin-top: 4px;">
+          <span style="font-size: 46px; font-weight: 700; line-height: 1; letter-spacing: -0.02em; color: oklch(0.62 0.008 80);">OFF</span>
+          <span class="mono" style="font-size: 13px; color: oklch(0.80 0.10 245);">silent until ≈ 04:10</span>
+        </div>
+        <div style="margin-top: 12px; display: flex; flex-direction: column; gap: 5px;">
+          <div style="height: 3px; border-radius: 99px; background: oklch(0.28 0.008 70); overflow: hidden;">
+            <div style="width: 62%; height: 100%; background: oklch(0.55 0.09 245);"></div>
+          </div>
+          <span class="mono" style="font-size: 10px; color: oklch(0.55 0.008 80);">2.9 °C, rising 1.1 °C/h · 10 °C override still armed</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 5. drive inhibit -->
+    <div style="display: flex; flex-direction: column; gap: 10px;">
+      <span class="mono" style="font-size: 11px; color: oklch(0.55 0.008 80);">05 · Drive inhibit (Phase 4)</span>
+      <div style="background: oklch(0.185 0.006 70); border: 1px solid oklch(0.30 0.008 70); border-radius: 16px; padding: 14px 16px 13px; position: relative; overflow: hidden; flex-grow: 1;">
+        <div style="position: absolute; top: 0; left: 0; right: 0; height: 2px; background: oklch(0.55 0.06 245);"></div>
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <span style="font-size: 10px; letter-spacing: 0.18em; color: oklch(0.66 0.008 80);">AC INVERTER</span>
+          <span class="mono" style="font-size: 11px; padding: 3px 8px; border-radius: 99px; background: oklch(0.26 0.04 245); color: oklch(0.80 0.10 245);">inhibited · engine on</span>
+        </div>
+        <div style="display: flex; align-items: baseline; gap: 12px; margin-top: 4px;">
+          <span style="font-size: 46px; font-weight: 700; line-height: 1; letter-spacing: -0.02em; color: oklch(0.62 0.008 80);">OFF</span>
+          <span class="mono" style="font-size: 13px; color: oklch(0.80 0.10 245);">coasting ~3 h</span>
+        </div>
+        <div style="margin-top: 12px; display: flex; flex-direction: column; gap: 5px;">
+          <div style="height: 3px; border-radius: 99px; background: oklch(0.28 0.008 70); overflow: hidden;">
+            <div style="width: 71%; height: 100%; background: oklch(0.55 0.09 245);"></div>
+          </div>
+          <span class="mono" style="font-size: 10px; color: oklch(0.55 0.008 80);">releases in 2 h 51 · van-vehicle silent 30 s = inhibit drops</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 6. load shed -->
+    <div style="display: flex; flex-direction: column; gap: 10px;">
+      <span class="mono" style="font-size: 11px; color: oklch(0.55 0.008 80);">06 · Low SOC, staged shed</span>
+      <div style="background: oklch(0.205 0.007 70); border: 1px solid oklch(0.45 0.12 27); border-radius: 16px; padding: 14px 16px 13px; position: relative; overflow: hidden; flex-grow: 1;">
+        <div style="position: absolute; top: 0; left: 0; right: 0; height: 2px; background: oklch(0.68 0.19 27);"></div>
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <span style="font-size: 10px; letter-spacing: 0.18em; color: oklch(0.66 0.008 80);">BATTERY</span>
+          <span class="mono" style="font-size: 11px; padding: 3px 8px; border-radius: 99px; background: oklch(0.30 0.06 27); color: oklch(0.84 0.14 27);">shedding</span>
+        </div>
+        <div style="display: flex; align-items: baseline; gap: 12px; margin-top: 4px;">
+          <span class="mono" style="font-size: 40px; font-weight: 600; line-height: 1; color: oklch(0.80 0.16 27);">18%</span>
+          <span class="mono" style="font-size: 13px; color: oklch(0.72 0.008 80);">≈ 9 h left</span>
+        </div>
+        <div style="margin-top: 12px;">
+          <span class="mono" style="font-size: 11px; color: oklch(0.72 0.008 80);">heater and surplus locked out, USB off, fridge deadband widened · DC rail untouched</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview":{"width":1290,"height":560}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

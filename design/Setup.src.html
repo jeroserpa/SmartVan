@@ -1,0 +1,311 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+  <style>
+    body { margin: 0; font-family: "Space Grotesk", ui-sans-serif, system-ui, sans-serif; }
+    a { color: oklch(0.78 0.145 72); text-decoration: none; }
+    a:hover { color: oklch(0.86 0.12 72); }
+    .mono { font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace; }
+  </style>
+</helmet>
+
+<div style="width: 390px; background: oklch(0.155 0.006 70); color: oklch(0.94 0.008 80); display: flex; flex-direction: column;">
+
+  <div style="height: 44px; flex-shrink: 0;"></div>
+
+  <div style="display: flex; flex-direction: column; gap: 16px; padding: 0 24px 24px;">
+
+    <div style="display: flex; align-items: center; justify-content: space-between; height: 32px;">
+      <span style="font-size: 20px; font-weight: 700; letter-spacing: -0.01em;">Setup</span>
+      <span class="mono" style="font-size: 11px; color: oklch(0.50 0.008 80);">2025.7.0 · up 6 d</span>
+    </div>
+
+    <!-- fridge thresholds -->
+    <div style="display: flex; flex-direction: column; gap: 8px;">
+      <span style="font-size: 10px; letter-spacing: 0.18em; color: oklch(0.66 0.008 80); padding-left: 2px;">FRIDGE THRESHOLDS</span>
+      <div style="background: oklch(0.205 0.007 70); border: 1px solid oklch(0.30 0.008 70); border-radius: 14px; padding: 4px 14px;">
+
+        <div style="display: flex; align-items: center; gap: 12px; padding: 10px 0;">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-size: 13px;">On above</div>
+            <div style="font-size: 10px; color: oklch(0.55 0.008 80); margin-top: 1px;">arms the compressor</div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 2px; background: oklch(0.25 0.008 70); border-radius: 10px; padding: 2px;">
+            <span style="width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; color: oklch(0.72 0.008 80);">−</span>
+            <span class="mono" style="min-width: 62px; text-align: center; font-size: 14px; font-weight: 500;">7.0 °C</span>
+            <span style="width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; color: oklch(0.72 0.008 80);">+</span>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid oklch(0.25 0.008 70);">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-size: 13px;">Off below</div>
+            <div style="font-size: 10px; color: oklch(0.55 0.008 80); margin-top: 1px;">with the compressor idle</div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 2px; background: oklch(0.25 0.008 70); border-radius: 10px; padding: 2px;">
+            <span style="width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; color: oklch(0.72 0.008 80);">−</span>
+            <span class="mono" style="min-width: 62px; text-align: center; font-size: 14px; font-weight: 500;">4.0 °C</span>
+            <span style="width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; color: oklch(0.72 0.008 80);">+</span>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid oklch(0.25 0.008 70);">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-size: 13px;">Hard override</div>
+            <div style="font-size: 10px; color: oklch(0.68 0.19 27); margin-top: 1px;">beats sleep and drive inhibit</div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 2px; background: oklch(0.25 0.008 70); border-radius: 10px; padding: 2px;">
+            <span style="width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; color: oklch(0.72 0.008 80);">−</span>
+            <span class="mono" style="min-width: 62px; text-align: center; font-size: 14px; font-weight: 500;">10.0 °C</span>
+            <span style="width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; color: oklch(0.72 0.008 80);">+</span>
+          </div>
+        </div>
+      </div>
+      <!-- the deadband, drawn, because three numbers in a list do not show a band -->
+      <div style="background: oklch(0.185 0.006 70); border-radius: 12px; padding: 12px 14px 10px;">
+        <div style="position: relative; height: 6px; border-radius: 3px; background: oklch(0.26 0.008 70); overflow: hidden;">
+          <div style="position: absolute; left: 33.3%; width: 25%; top: 0; bottom: 0; background: oklch(0.45 0.05 72);"></div>
+          <div style="position: absolute; left: 83.3%; right: 0; top: 0; bottom: 0; background: oklch(0.45 0.10 27);"></div>
+        </div>
+        <div style="display: flex; justify-content: space-between; margin-top: 6px;">
+          <span class="mono" style="font-size: 9px; color: oklch(0.55 0.008 80);">0 — 12 °C · deadband 3.0 K</span>
+          <span class="mono" style="font-size: 9px; color: oklch(0.55 0.008 80);">wider = fewer, longer cycles</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- cycle timing -->
+    <div style="display: flex; flex-direction: column; gap: 8px;">
+      <span style="font-size: 10px; letter-spacing: 0.18em; color: oklch(0.66 0.008 80); padding-left: 2px;">CYCLE TIMING</span>
+      <div style="background: oklch(0.205 0.007 70); border: 1px solid oklch(0.30 0.008 70); border-radius: 14px; padding: 4px 14px;">
+
+        <div style="display: flex; align-items: center; gap: 12px; padding: 10px 0;">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-size: 13px;">Compressor idle below</div>
+            <div style="font-size: 10px; color: oklch(0.55 0.008 80); margin-top: 1px;">how "satisfied" is detected</div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 2px; background: oklch(0.25 0.008 70); border-radius: 10px; padding: 2px;">
+            <span style="width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; color: oklch(0.72 0.008 80);">−</span>
+            <span class="mono" style="min-width: 62px; text-align: center; font-size: 14px; font-weight: 500;">15 W</span>
+            <span style="width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; color: oklch(0.72 0.008 80);">+</span>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid oklch(0.25 0.008 70);">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-size: 13px;">Shutdown debounce</div>
+            <div style="font-size: 10px; color: oklch(0.78 0.145 72); margin-top: 1px;">≈ 10 Wh/day per extra minute</div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 2px; background: oklch(0.25 0.008 70); border-radius: 10px; padding: 2px;">
+            <span style="width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; color: oklch(0.72 0.008 80);">−</span>
+            <span class="mono" style="min-width: 62px; text-align: center; font-size: 14px; font-weight: 500;">90 s</span>
+            <span style="width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; color: oklch(0.72 0.008 80);">+</span>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid oklch(0.25 0.008 70);">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-size: 13px;">Minimum on</div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 2px; background: oklch(0.25 0.008 70); border-radius: 10px; padding: 2px;">
+            <span style="width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; color: oklch(0.72 0.008 80);">−</span>
+            <span class="mono" style="min-width: 62px; text-align: center; font-size: 14px; font-weight: 500;">10 min</span>
+            <span style="width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; color: oklch(0.72 0.008 80);">+</span>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid oklch(0.25 0.008 70);">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-size: 13px;">Minimum off</div>
+            <div style="font-size: 10px; color: oklch(0.55 0.008 80); margin-top: 1px;">anti short-cycle</div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 2px; background: oklch(0.25 0.008 70); border-radius: 10px; padding: 2px;">
+            <span style="width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; color: oklch(0.72 0.008 80);">−</span>
+            <span class="mono" style="min-width: 62px; text-align: center; font-size: 14px; font-weight: 500;">5 min</span>
+            <span style="width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; color: oklch(0.72 0.008 80);">+</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- manual -->
+    <div style="display: flex; flex-direction: column; gap: 8px;">
+      <span style="font-size: 10px; letter-spacing: 0.18em; color: oklch(0.66 0.008 80); padding-left: 2px;">MANUAL AC</span>
+      <div style="background: oklch(0.205 0.007 70); border: 1px solid oklch(0.30 0.008 70); border-radius: 14px; padding: 4px 14px;">
+
+        <div style="display: flex; align-items: center; gap: 12px; padding: 10px 0;">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-size: 13px;">Duration</div>
+            <div style="font-size: 10px; color: oklch(0.55 0.008 80); margin-top: 1px;">short press again to add 30 min</div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 2px; background: oklch(0.25 0.008 70); border-radius: 10px; padding: 2px;">
+            <span style="width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; color: oklch(0.72 0.008 80);">−</span>
+            <span class="mono" style="min-width: 62px; text-align: center; font-size: 14px; font-weight: 500;">45 min</span>
+            <span style="width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; color: oklch(0.72 0.008 80);">+</span>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid oklch(0.25 0.008 70);">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-size: 13px;">Auto-release below</div>
+            <div style="font-size: 10px; color: oklch(0.55 0.008 80); margin-top: 1px;">over the fridge, under a hob</div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 2px; background: oklch(0.25 0.008 70); border-radius: 10px; padding: 2px;">
+            <span style="width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; color: oklch(0.72 0.008 80);">−</span>
+            <span class="mono" style="min-width: 62px; text-align: center; font-size: 14px; font-weight: 500;">150 W</span>
+            <span style="width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; color: oklch(0.72 0.008 80);">+</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- sleep -->
+    <div style="display: flex; flex-direction: column; gap: 8px;">
+      <span style="font-size: 10px; letter-spacing: 0.18em; color: oklch(0.66 0.008 80); padding-left: 2px;">SLEEP MODE</span>
+      <div style="background: oklch(0.205 0.007 70); border: 1px solid oklch(0.30 0.008 70); border-radius: 14px; padding: 4px 14px;">
+
+        <div style="display: flex; align-items: center; gap: 12px; padding: 10px 0;">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-size: 13px;">Overnight ceiling</div>
+            <div style="font-size: 10px; color: oklch(0.68 0.19 27); margin-top: 1px;">above 6 °C is a food decision</div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 2px; background: oklch(0.25 0.008 70); border-radius: 10px; padding: 2px;">
+            <span style="width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; color: oklch(0.72 0.008 80);">−</span>
+            <span class="mono" style="min-width: 62px; text-align: center; font-size: 14px; font-weight: 500;">6.0 °C</span>
+            <span style="width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; color: oklch(0.72 0.008 80);">+</span>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid oklch(0.25 0.008 70);">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-size: 13px;">Pre-cool target</div>
+            <div style="font-size: 10px; color: oklch(0.55 0.008 80); margin-top: 1px;">produce at the front</div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 2px; background: oklch(0.25 0.008 70); border-radius: 10px; padding: 2px;">
+            <span style="width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; color: oklch(0.72 0.008 80);">−</span>
+            <span class="mono" style="min-width: 62px; text-align: center; font-size: 14px; font-weight: 500;">1.0 °C</span>
+            <span style="width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; color: oklch(0.72 0.008 80);">+</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- surplus -->
+    <div style="display: flex; flex-direction: column; gap: 8px;">
+      <span style="font-size: 10px; letter-spacing: 0.18em; color: oklch(0.66 0.008 80); padding-left: 2px;">SURPLUS</span>
+      <div style="background: oklch(0.205 0.007 70); border: 1px solid oklch(0.30 0.008 70); border-radius: 14px; padding: 4px 14px;">
+
+        <div style="display: flex; align-items: center; gap: 12px; padding: 10px 0;">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-size: 13px;">Margin</div>
+            <div style="font-size: 10px; color: oklch(0.55 0.008 80); margin-top: 1px;">solar the MPPT would dump</div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 2px; background: oklch(0.25 0.008 70); border-radius: 10px; padding: 2px;">
+            <span style="width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; color: oklch(0.72 0.008 80);">−</span>
+            <span class="mono" style="min-width: 62px; text-align: center; font-size: 14px; font-weight: 500;">200 W</span>
+            <span style="width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; color: oklch(0.72 0.008 80);">+</span>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid oklch(0.25 0.008 70);">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-size: 13px;">Minimum SOC</div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 2px; background: oklch(0.25 0.008 70); border-radius: 10px; padding: 2px;">
+            <span style="width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; color: oklch(0.72 0.008 80);">−</span>
+            <span class="mono" style="min-width: 62px; text-align: center; font-size: 14px; font-weight: 500;">85 %</span>
+            <span style="width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; color: oklch(0.72 0.008 80);">+</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- outputs -->
+    <div style="display: flex; flex-direction: column; gap: 8px;">
+      <span style="font-size: 10px; letter-spacing: 0.18em; color: oklch(0.66 0.008 80); padding-left: 2px;">P310 OUTPUTS</span>
+      <div style="background: oklch(0.205 0.007 70); border: 1px solid oklch(0.30 0.008 70); border-radius: 14px; padding: 4px 14px;">
+
+        <div style="display: flex; align-items: center; gap: 12px; padding: 12px 0;">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-size: 13px;">AC inverter</div>
+            <div style="font-size: 10px; color: oklch(0.55 0.008 80); margin-top: 1px;">the arbiter re-asserts within 60 s</div>
+          </div>
+          <div style="width: 48px; height: 28px; border-radius: 99px; background: oklch(0.78 0.145 72); display: flex; align-items: center; justify-content: flex-end; padding: 0 3px;">
+            <span style="width: 22px; height: 22px; border-radius: 99px; background: oklch(0.20 0.02 72);"></span>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid oklch(0.25 0.008 70);">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-size: 13px;">DC output</div>
+            <div style="font-size: 10px; color: oklch(0.68 0.19 27); margin-top: 1px;">feeds both ESP nodes — never shed this</div>
+          </div>
+          <div style="width: 48px; height: 28px; border-radius: 99px; background: oklch(0.34 0.03 27); border: 1px solid oklch(0.50 0.10 27); display: flex; align-items: center; justify-content: flex-end; padding: 0 3px;">
+            <span style="width: 22px; height: 22px; border-radius: 99px; background: oklch(0.72 0.008 80);"></span>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid oklch(0.25 0.008 70);">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-size: 13px;">USB output</div>
+          </div>
+          <div style="width: 48px; height: 28px; border-radius: 99px; background: oklch(0.28 0.008 70); display: flex; align-items: center; justify-content: flex-start; padding: 0 3px;">
+            <span style="width: 22px; height: 22px; border-radius: 99px; background: oklch(0.50 0.008 80);"></span>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid oklch(0.25 0.008 70);">
+          <div style="flex-grow: 1; min-width: 0;">
+            <div style="font-size: 13px;">Drive inhibit</div>
+            <div style="font-size: 10px; color: oklch(0.55 0.008 80); margin-top: 1px;">bench stand-in until van-vehicle exists · 4 h cap</div>
+          </div>
+          <div style="width: 48px; height: 28px; border-radius: 99px; background: oklch(0.28 0.008 70); display: flex; align-items: center; justify-content: flex-start; padding: 0 3px;">
+            <span style="width: 22px; height: 22px; border-radius: 99px; background: oklch(0.50 0.008 80);"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: flex; gap: 10px; margin-top: 2px;">
+      <button style="flex-grow: 1; height: 46px; border-radius: 12px; border: 1px solid oklch(0.30 0.008 70); background: oklch(0.205 0.007 70); color: oklch(0.94 0.008 80); font-family: inherit; font-size: 13px;">Download CSV log</button>
+      <button style="flex-grow: 1; height: 46px; border-radius: 12px; border: 1px solid oklch(0.40 0.08 27); background: oklch(0.22 0.02 27); color: oklch(0.80 0.14 27); font-family: inherit; font-size: 13px;">Restart node</button>
+    </div>
+  </div>
+
+  <div style="flex-shrink: 0; height: 68px; border-top: 1px solid oklch(0.26 0.008 70); background: oklch(0.18 0.006 70); display: flex; align-items: center; justify-content: space-around; padding-bottom: 6px;">
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: oklch(0.55 0.008 80); width: 72px;">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><path d="M2 10.5 10 3l8 7.5"></path><path d="M4.5 9.5V17h11V9.5"></path></svg>
+      <span style="font-size: 10px; letter-spacing: 0.04em;">Now</span>
+    </div>
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: oklch(0.55 0.008 80); width: 72px;">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><path d="M2 15l4-6 4 3 4-7 4 4"></path><path d="M2 17.5h16"></path></svg>
+      <span style="font-size: 10px; letter-spacing: 0.04em;">Energy</span>
+    </div>
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: oklch(0.55 0.008 80); width: 72px;">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><path d="M8 11.5V3.5a2 2 0 1 1 4 0v8"></path><circle cx="10" cy="14" r="3.2"></circle></svg>
+      <span style="font-size: 10px; letter-spacing: 0.04em;">Fridge</span>
+    </div>
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: oklch(0.82 0.15 72); width: 72px;">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><path d="M3 6h14M3 14h14"></path><circle cx="7.5" cy="6" r="2.2"></circle><circle cx="13" cy="14" r="2.2"></circle></svg>
+      <span style="font-size: 10px; letter-spacing: 0.04em;">Setup</span>
+    </div>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview":{"width":390,"height":1600}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>
