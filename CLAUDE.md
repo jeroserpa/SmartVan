@@ -93,6 +93,16 @@ under 2W total.
   one for the **fresh** tank, one for the **grey** tank. Both fit on the single
   ADS1115 already budgeted, so the second tank costs one resistor: see §9
   Phase 2 and BOM D5.
+  **Construction: almost certainly a reed-switch ladder** — a sealed stem
+  holding a chain of reed switches with resistors between them, and a doughnut
+  float carrying a ring magnet that slides over it. `STRONGLY SUSPECTED
+  2026-08-25`, from three observations that only this design explains together:
+  nothing conductive is exposed to the water, the float has no wires, and the
+  spec is still quoted in ohms. Not capacitive (needs no float) and not
+  magnetostrictive (4–20 mA or digital output, and 20× the price).
+  **Two consequences run through the whole water design: there is no wetted
+  contact to corrode, and the output is quantised into one step per reed, not
+  continuous.** Confirm with the bench test in §8.7 before building anything.
   Resistance ranges **unverified, and must be measured separately** — nominally
   identical senders are not necessarily identical parts. See §8.7.
 
@@ -710,13 +720,34 @@ Ordered by how much they'd change the design.
    lever in this project is downstream of it.** If measured duty cycle exceeds
    ~45% in mild weather, poor condenser airflow is the first suspect, not the
    fridge.
-7. **Water sender resistance range — measure both senders, separately.** At
-   empty and full. Almost certainly either **0–190Ω (European/VDO)** or
-   **240–33Ω (US/GM)**. Determines the divider resistor (220Ω for the 0–190Ω
-   type). Two senders out of the same bag can still be different parts, and a
-   240–33Ω sender read with a curve fitted to a 0–190Ω one reads *backwards* —
-   which the §9 cross-check would report as a tank swap. Record both curves in
-   `docs/measurements.md` against the tank each is fitted to.
+7. **Sender step map — bench both senders, in air, before either is fitted.**
+   Supersedes "measure at empty and full": if these are reed ladders (§2) there
+   is no continuous curve to measure, only a set of plateaus, and endpoints
+   alone would hide how many there are.
+
+   **Procedure — five minutes, a multimeter, no water.** Hold the stem
+   vertical, slide the float slowly from bottom to top by hand, and record
+   every resistance the meter settles on plus roughly where on the stem the
+   float was when it changed. Repeat downward.
+
+   It answers four questions at once:
+   - **Construction.** Discrete plateaus that snap between values confirm the
+     reed ladder. A smooth continuous sweep means it is a wiper sender after
+     all — in which case the corrosion argument retired in §9 Phase 2 comes
+     back and the excitation gating is protection again, not just housekeeping.
+   - **Step count**, which *is* the resolution of the whole channel. Nothing
+     downstream can improve on it.
+   - **Direction and range.** Either **0–190Ω (European/VDO)** or **240–33Ω
+     (US/GM)** — the second falls with level. A 240–33Ω sender read with a
+     0–190Ω map reads *backwards*, which the §9 cross-check would report as a
+     tank swap.
+   - **Hysteresis.** Up and down sweeps rarely switch at the same point. If the
+     gap is a large fraction of a step, the level display needs the deadband or
+     it will flicker between two values on a parked van.
+
+   Two senders out of the same bag can still be different parts. Bench them
+   **separately**, and record both maps in `docs/measurements.md` against the
+   tank each is fitted to.
 8. **Grey tank: capacity, geometry and location.** Litres, and whether it is
    internal or underslung — see §9 Phase 2. Decides the cable run, whether
    freezing is in scope, and how nonlinear the sender curve is near the ends.
@@ -862,13 +893,12 @@ no crimp tool for field repairs.
   relax it, and never heat during sleep mode.**
 - `van-water`: **two** level senders — **fresh and grey** — on one ADS1115.
   **No heater involvement** — it reduces to the two tank senders alone.
-- Sender conditioning, identical on both channels: excite through a
-  MOSFET/GPIO only during a reading (DC through a submerged sender corrodes the
-  wiper), median filter ~30 samples, `throttle_average: 60s` (sloshing while
-  driving makes raw readings useless), calibrate with `calibrate_linear` against
-  **actual litres poured**, not the nominal curve — these senders are rarely
-  linear near the ends. For grey, "poured" means measured litres down the sink
-  with the dump valve shut; the procedure is the same.
+- Sender conditioning, identical on both channels: excite from a GPIO only
+  during a reading, median filter ~30 samples, and a 60s window (sloshing while
+  driving makes raw readings useless) reduced by **median, not mean** — see the
+  quantisation note below. Calibrate against **actual litres poured**, not the
+  nominal curve. For grey, "poured" means measured litres down the sink with
+  the dump valve shut; the procedure is the same.
 
 ### Grey water tank — `ADDED 2026-08-25`
 
@@ -900,8 +930,36 @@ channels, which is why fixing it at the sender beats compensating in the ADC.
 
 At 3.3V excitation through a 220Ω divider, a 0–190Ω sender spans 0–1.53V. PGA
 `±2.048V` → 62.5 µV/LSB, i.e. ~0.004% of tank per count. **The sender is the
-error term, not the ADC** — which is why the calibration is poured litres and
-not arithmetic.
+error term, not the ADC.**
+
+**And with a reed ladder (§2) that error is quantisation, not analogue
+inaccuracy.** One step per reed switch — typically 6 to 12 over the stem — is
+the resolution of the entire channel, and no amount of ADC bits or averaging
+improves it. Three things follow, and they are not what an analogue sender
+would want:
+
+- **The 16-bit ADC is now overkill for resolution — keep it for
+  discrimination.** Its job changes from resolving a smooth curve to confirming
+  that each reading lands *exactly* on a known plateau. A value between
+  plateaus is then unambiguous evidence of a fault rather than a plausible
+  intermediate level, which is worth more here than fine resolution ever was.
+- **A reading above the top plateau means "between reeds", not "empty".** Where
+  the magnet sits in a gap the ladder can go open circuit, and the ADC then
+  sees the full excitation rail — indistinguishable from a disconnected sender
+  and easily mistaken for a tank endpoint. Reject out-of-band readings
+  explicitly; never clamp them into range.
+- **Median, not mean, across the throttle window.** Sloshing moves the float
+  between adjacent plateaus, and the mean of two plateaus is a voltage the
+  sender can never produce. The median of a quantised signal is always a real
+  plateau; the mean is an artefact. This matters more than it sounds — a
+  fictitious value defeats the plateau check above.
+
+**Calibration is therefore a step map, not `calibrate_linear`.** Bench each
+sender in air first (§8.7) to get its plateaus, then pour measured litres to
+find the volume at which each transition happens. Interpolating between
+plateaus would assert a precision the sender does not have: between two
+transitions the level genuinely is unknown, and the display should show the
+step's range rather than invent a midpoint.
 
 **Excitation is switched by a GPIO per sender — no MOSFET.** `REVISED
 2026-08-25.` This section previously specified one logic-level MOSFET gating
@@ -922,19 +980,29 @@ capability, and at 3.3V there is no level shift to do.
   ~0V through the divider and 0V across the sender. An input-mode pin lets the
   ADC node float and the reading becomes noise.
 
-**What the gating is actually for**, since it survives the MOSFET going away:
-continuous DC through a wetted wiper in an electrolyte erodes it. A ~0.5s
-excitation burst per 60s reading is **<1% duty**, so the charge through the
-sender drops by two orders of magnitude. Grey water is the *better* electrolyte
-(dissolved soap, salts, organics), so this is more load-bearing on grey than on
-the tank it was specified for.
+**Why the gating survives anyway — but on a much weaker argument.** `REVISED
+2026-08-25.` Its original justification was that continuous DC through a wetted
+wiper in an electrolyte erodes it, and that grey water being the better
+electrolyte made the gating more load-bearing on that channel. **A reed ladder
+(§2) has no wetted contact at all — the resistor chain is sealed dry inside the
+stem — so that argument is retired in full, not softened.**
 
-**`VERIFY` — the kit's analogue gauges must come off the senders.** A gauge is
-a coil in series with the sender across 12V, i.e. exactly the continuous DC
-this gating exists to avoid, and it will hold the sender energised whatever the
-ESP32 does. Keeping the gauges is a legitimate choice — they work with the node
-dead — but then the gating is decorative and should not be claimed as
-protection.
+What is left is housekeeping: 15 mA at 3.3V is 50 mW per sender, 100 mW for
+both, or ~2.4 Wh/day held on continuously. Against the §5.4 two-watt control
+budget that is 5% spent on nothing, and gating it away costs one pin state.
+Keep it, but **do not describe it as protecting the sender.**
+
+If the §8.7 bench test shows a continuous sweep rather than plateaus, the
+senders are wiper types after all and the corrosion argument comes straight
+back — at which point the gating is protection again and the analogue gauges
+below stop being optional.
+
+**The kit's analogue gauges are now a free choice.** A gauge holds its sender
+energised from 12V continuously, which under the old wiper assumption defeated
+the gating entirely. With a sealed ladder it costs only the standing current in
+a circuit that is not on the control budget. Keep them if a level readout that
+works with the node dead is worth the wiring — that is a real benefit, and it
+no longer trades against sender life.
 
 #### What actually differs from the fresh tank
 
@@ -944,12 +1012,21 @@ protection.
    display leads with the **binding constraint**:
    `usable = min(fresh remaining, grey headroom)`, in litres, with which tank
    is binding named next to it. The two raw levels stay available underneath.
-2. **Fouling is the one genuinely new failure mode.** Soap scum, grease and
-   food solids coat a resistive float; it sticks, typically reading full or
-   parked mid-scale. This is *the* known failure of grey level sensing in RVs,
-   and it is a when, not an if. The response is **detection, not avoidance** —
-   see the cross-check below. Mount the sender away from the drain inlet so it
-   is not sitting under the splash.
+2. **Fouling is the one genuinely new failure mode — and with a reed ladder
+   it is mechanical, not electrical.** `REVISED 2026-08-25.` There is no track
+   to erode (§2); what fouls is the sliding fit. Soap scum and grease build up
+   on the stem and in the float bore, hair and fibres wrap the stem, and the
+   float binds — reading whatever level it stuck at, typically full or parked
+   mid-scale. This is *the* known failure of grey level sensing in RVs whatever
+   the sensing principle, and it is a when, not an if.
+   **Better news than a wiper sender, though:** a bound float usually frees
+   with a flush and a wipe, where an eroded resistance track is permanent. So
+   the recovery is maintenance rather than a replacement part — worth knowing
+   before the capacitive-strip retrofit (BOM D5) gets bought on the first stuck
+   reading.
+   The response is still **detection, not avoidance** — see the cross-check
+   below. Mount the sender away from the drain inlet so it is not sitting under
+   the splash, and where the float can actually be reached to clean it.
 3. **A stuck sender must not be able to take the water away.** See the pump
    interlock below.
 4. **Location decides the rest.** Underslung: longer run, wet and salty

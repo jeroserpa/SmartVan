@@ -46,9 +46,9 @@ Phase 1; D1's "item 20" was ambiguous as a result.)
 | 22 | **ESP32-C3 SuperMini** — already owned | 1 | 0 | Replaces the WROOM-32 devkit. D0 rules the SuperMinis out for `van-core` but clears them "as sensor nodes" — no BLE here, and the load is I²C + three GPIOs. **`VERIFY` RSSI at the installed position first:** the C3 SuperMini's PCB antenna is poorly matched (same radio weakness D0 cites for the C6) and this node holds a SoftAP link across a metal-bodied van. Fall back to a WROOM-32 devkit (€7) if margin is thin |
 | 23 | ADS1115 16-bit ADC module | 1 | 4 | ESP32 internal ADC is too nonlinear for the sender. **One chip serves both tanks** — A0 fresh, A1 grey, A2/A3 the two excitation rails (ratiometric, and it cancels the driving pin's drop). Single-ended is `CONFIRMED` valid: both senders have their own returns, neither grounds through its tank flange. See D5 |
 | 24 | Divider resistor for sender | **2** | — | One per tank. **Value pending §8.7 measurement, taken on each sender separately.** 220Ω if 0–190Ω. Fresh run **confirmed <1m — no shielding needed**; the grey run is `UNVERIFIED` until the tank location is (§8.8) |
-| 24b | **Resistive level sender — grey tank** | 1 | 0 | **Already owned** — the second of the two senders in §2. See D5 |
+| 24b | **Reed-ladder level sender — grey tank** | 1 | 0 | **Already owned** — the second of the two senders in CLAUDE.md §2. Sealed stem, magnet float, no wetted contacts. Bench its step map in air before fitting (§8.7). See D5 |
 | 24c | 2-core cable + IP67 inline connector, grey sender run | 1 | 4 | Only if the grey tank is underslung (§8.8). Internal tank: offcuts of item 30 |
-| 25 | ~~Logic-level MOSFET (AO3400 / 2N7000)~~ | — | 0 | **Deleted 2026-08-25 — not needed.** Excitation is 15 mA worst case (3.3V, 220Ω divider, sender at 0Ω), which an ESP32-C3 pin sources directly. One pin per sender, excited in sequence, idle pin driven **low** not high-Z. The pin's drop under load cancels in the ratiometric A2/A3 reading. See CLAUDE.md §9 Phase 2 |
+| 25 | ~~Logic-level MOSFET (AO3400 / 2N7000)~~ | — | 0 | **Deleted 2026-08-25 — not needed.** Excitation is 15 mA worst case (3.3V, 220Ω divider, sender at 0Ω), which an ESP32-C3 pin sources directly. One pin per sender, excited in sequence, idle pin driven **low** not high-Z. The pin's drop under load cancels in the ratiometric A2/A3 reading. The gating itself now survives only as housekeeping — a sealed reed ladder has no wetted contact to corrode. See CLAUDE.md §9 Phase 2 |
 | 26 | **Athom ESPHome-preflashed smart plug, 16A EU** | 1 | 15 | **Chosen — see D1e.** Heater switching + power metering. Ships with ESPHome: no flashing, no cloud, no router. Uses the existing wall socket and heater plug; nothing in the 230V install is modified. `VERIFY` 16A rating and that metering is exposed. Fallback: hardwired Shelly Plus 1PM (~€25) |
 | 27 | Buck 12V→5V 3A + fuse holder + fuses | 1 | 7 | |
 | 28 | ABS enclosure IP65 + glands | 1 | 7 | |
@@ -441,13 +441,19 @@ twice and the calibration done twice.
 `min(fresh remaining, grey headroom)`, and a van with only the fresh tank
 instrumented reports the wrong half of it roughly half the time.
 
-**What it costs — the honest entry.** A resistive float in grey water fouls:
-soap, grease, food solids. Expect a stuck reading eventually. That is accepted
-rather than engineered around, because the mitigation (an external capacitive
-strip, ~€15, never touches the water) is a **retrofit that needs no design
-change** — it is a different voltage source into the same channel. Buy it if
-and when the cross-check in CLAUDE.md §9 Phase 2 says the float has stuck, not
-before.
+**What it costs — the honest entry.** A float in grey water fouls: soap,
+grease, food solids, hair on the stem. Expect a stuck reading eventually.
+`REVISED 2026-08-25` — the senders are sealed reed ladders, so the failure is
+the float **binding on the stem**, not a resistance track eroding. That is
+better than it sounds: a bound float usually frees with a flush and a wipe,
+where an eroded track is permanent. So the first stuck reading calls for
+maintenance, not a purchase.
+
+If it sticks repeatedly, the mitigation is an external capacitive strip (~€15,
+never touches the water) — a **retrofit that needs no design change**, being a
+different voltage source into the same channel. Buy it when the cross-check in
+CLAUDE.md §9 Phase 2 says the float is sticking often enough to be noise rather
+than signal, not on the first occurrence.
 
 **Rejected alternatives, for the record:**
 
@@ -456,7 +462,7 @@ before.
 | Grey tank left uninstrumented | The binding constraint is invisible half the time. And it wastes a sender already owned |
 | Second ADS1115 for the grey channel | The first has four channels and uses two |
 | Second node beside the grey tank | Another SoftAP client (§4 `max_connection`), another buck, another enclosure — to read one resistor |
-| **Capacitive strip on grey from the start** | ~€15 and a fouling problem that has not happened yet. It is the sanctioned upgrade path, not the starting point |
+| **Capacitive strip on grey from the start** | ~€15 and a fouling problem that has not happened yet — and with a sealed reed ladder the likely failure frees with a wipe. It is the sanctioned upgrade path, not the starting point |
 | Ultrasonic from the top | Soap foam and scum on the transducer give false echoes — swaps a slow, detectable failure for a fast, plausible-looking one |
 | Hard pump lockout on grey full | See CLAUDE.md §9 Phase 2 — a fouled sender must never be able to take the water away |
 

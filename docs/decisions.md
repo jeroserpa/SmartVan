@@ -302,12 +302,22 @@ the enclosure, the gland, and the poured-litres calibration ritual. The grey
 tank adds one divider resistor and one cable run. Deferring it saves nothing
 and guarantees the enclosure is opened twice. Both senders are already owned.
 
-**Why the reading is treated as suspect.** A resistive float in grey water
-fouls — soap, grease, food solids — and the characteristic failure is a stuck
-reading, not a missing one. `FreshValue`-style staleness detection (D-02) does
-not catch it: the ADC keeps returning a perfectly fresh, perfectly wrong
+**Why the reading is treated as suspect.** A float in grey water fouls — soap,
+grease, food solids, hair on the stem — and the characteristic failure is a
+stuck reading, not a missing one. `FreshValue`-style staleness detection (D-02)
+does not catch it: the ADC keeps returning a perfectly fresh, perfectly wrong
 number. So freshness is not sufficient here and a second, independent argument
 is needed.
+
+`AMENDED 2026-08-25` — the senders turn out to be **sealed reed ladders**, not
+wiper types (CLAUDE.md §2), which changes the mechanism without weakening the
+argument. Nothing conductive touches the water, so there is no track to erode;
+what sticks is the float binding on its stem. The failure still presents as a
+fresh, plausible, wrong number, so the cross-check is needed exactly as
+written. Two smaller consequences do follow: the recovery is a flush and a wipe
+rather than a replacement part, and the output is **quantised** — one step per
+reed — so a reading between plateaus is itself evidence of a fault, giving the
+plausibility check a second and much faster input than the mass balance.
 
 **The cross-check is that argument.** Between dumps, grey should rise by
 roughly what fresh falls. Divergence separates the three failures that all look
