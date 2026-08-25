@@ -85,7 +85,10 @@ static void test_failsafe() {
     CHECK(s.core.outputs().reason == AcReason::BOOT);
   }
 
-  CASE("BLE loss forces AC on");
+  // Named for what it actually asserts. The request goes true; the inverter
+  // does NOT come on, because the write has no link to travel over. See
+  // CLAUDE.md 5.2 - this is recovery-on-reconnect, not a fail-safe.
+  CASE("BLE loss holds the request on so the reconnect restores AC");
   {
     Sim s;
     s.settle();
@@ -95,6 +98,52 @@ static void test_failsafe() {
     CHECK(o.ac_on);
     CHECK(o.force_on);
     CHECK(o.reason == AcReason::BLE_LOST);
+  }
+
+  // The distinction this whole group exists to police: BLE_LOST is a recovery
+  // behaviour, LINK_STALE is the fail-safe. Only the second one still has a
+  // link to carry the ON command it asks for.
+  CASE("a wedged-but-connected link forces AC on before the stack notices");
+  {
+    Sim s;
+    s.settle();
+    CHECK(!s.core.outputs().ac_on);
+    // The stack still claims a connection; the station has simply stopped
+    // sending. The local probe keeps reporting, so nothing else trips.
+    s.in.power_valid = false;
+    s.in.soc_valid = false;
+    s.in.input_power_valid = false;
+    CHECK(!s.run(30 * SEC).ac_on);  // not yet - link_stale_ms is 60s
+    const ArbiterOutputs &o = s.run(40 * SEC);
+    CHECK(o.ac_on);
+    CHECK(o.force_on);
+    CHECK(o.reason == AcReason::LINK_STALE);
+  }
+
+  CASE("station data flowing keeps the link fresh even with a dead probe");
+  {
+    Sim s;
+    s.settle();
+    // Probe gone, station fine: this must be TEMP_STALE, never LINK_STALE.
+    s.in.temp_valid = false;
+    const ArbiterOutputs &o = s.run(6 * MIN);
+    CHECK(o.ac_on);
+    CHECK(o.reason == AcReason::TEMP_STALE);
+  }
+
+  CASE("link staleness clears once the station talks again");
+  {
+    Sim s;
+    s.settle();
+    s.in.power_valid = false;
+    s.in.soc_valid = false;
+    s.in.input_power_valid = false;
+    CHECK(s.run(2 * MIN).reason == AcReason::LINK_STALE);
+    s.in.power_valid = true;
+    s.in.soc_valid = true;
+    s.in.input_power_valid = true;
+    const ArbiterOutputs &o = s.run(10 * SEC);
+    CHECK(!o.force_on);
   }
 
   CASE("stale fridge probe forces AC on after the stale timeout, not before");

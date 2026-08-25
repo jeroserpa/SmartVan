@@ -60,6 +60,14 @@ struct ArbiterConfig {
   uint32_t temp_stale_ms = 5u * 60u * 1000u; // stale probe => force on
   uint32_t watchdog_ms = 30u * 1000u;        // tick starvation => force on
 
+  // Station data stalled while the link still claims to be up. This is the
+  // *pre-emptive* fail-safe and the only one that can actually save the fridge:
+  // by the time ble_connected drops there is no link left to carry an ON
+  // command, so the request must go out while the link is merely degrading.
+  // Sized just above sensor_max_age (45s) so it trails the sensors going
+  // invalid rather than racing them.
+  uint32_t link_stale_ms = 60u * 1000u;
+
   // --- drive inhibit (Phase 4, default off; suppressor, never a request) ---
   uint32_t inhibit_max_ms = 4u * 60u * 60u * 1000u; // stuck-true must expire
 
@@ -105,6 +113,7 @@ enum class AcReason : uint8_t {
   PARKED, // off, and deliberately not coming back on
   BOOT,
   BLE_LOST,
+  LINK_STALE, // connected, but the station stopped talking
   TEMP_STALE,
   WATCHDOG,
   FRIDGE_HARD, // temp above the hard override
@@ -178,6 +187,7 @@ class ArbiterCore {
   // fridge
   uint32_t fridge_since_ms_ = 0;    // last fridge_req transition
   uint32_t temp_fresh_ms_ = 0;      // last time temp_valid was true
+  uint32_t link_fresh_ms_ = 0;      // last time the station sent anything
   uint32_t compressor_busy_ms_ = 0; // last time output_power was above idle
 
   // manual

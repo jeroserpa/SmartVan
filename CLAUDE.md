@@ -301,11 +301,51 @@ swap stays cheap.
    the network. Fridge control lives entirely on `van-core` and never reads the
    network. `van-water` that loses core for 5 min holds the heater OFF and keeps
    reporting tank level locally.
-2. **Fail toward powered — for loads.** Any fault — BLE dropped, DS18B20 stale,
-   reboot, watchdog — must resolve to *inverter ON*. Use `on_boot` priority and
-   `filters: - timeout:` on every sensor feeding a control decision. A bug that
-   silently kills the fridge for two days while nobody is in the van is the one
-   failure mode that actually costs money.
+2. **Fail toward powered — for loads, and only as far as the link allows.**
+   Any fault — BLE dropped, DS18B20 stale, reboot, watchdog — must resolve to
+   *inverter ON*. Use `on_boot` priority and `filters: - timeout:` on every
+   sensor feeding a control decision. A bug that silently kills the fridge for
+   two days while nobody is in the van is the one failure mode that actually
+   costs money.
+
+   **`CORRECTED 2026-08-25` — this rule was overstated, and the correction
+   matters more than the rule.** A fail-safe direction is only real if reaching
+   it needs **no successful communication**. The inverter state is latched in
+   the P310; `van-core` does not hold it up, it *commands* it. So:
+
+   | Link state when the fault hits | What actually happens |
+   |---|---|
+   | AC already ON | Station latches ON. Fail-safe achieved **by inaction** — free, and genuinely safe |
+   | AC OFF, link still alive | An ON command gets through. **This is the only case the fail-safe can act in** |
+   | AC OFF, link gone | The write goes nowhere. **The fridge stays off, and no amount of firmware changes that** |
+
+   The third row is the honest residual risk. In a duty-cycling design the
+   inverter is off most of the time, so the exposed window is most of the time
+   — not an edge case. Two consequences run through the whole design:
+
+   - **Act on link *degradation*, not on link loss.** By the time
+     `ble_connected` goes false there is nothing left to send the command over.
+     The arbiter therefore forces ON when station data stops arriving while the
+     stack still claims a connection (`LINK_STALE`, `link_stale: 60s`), which
+     is the last moment an ON command can still work. `BLE_LOST` is
+     *recovery-on-reconnect*, not a fail-safe, and is labelled as such in the
+     code and the tests.
+   - **Never enter a state you cannot leave.** OFF is a lease that a healthy
+     link renews. That is why the reconnect edge re-writes the switch
+     immediately instead of waiting for the next re-assert.
+
+   **What remains unmitigated, stated rather than papered over:** a permanent
+   BLE failure or a dead node, arriving during an OFF block, leaves the fridge
+   off until a human intervenes. The tools left are alerting (buzzer, LED,
+   display) and the P310's own physical AC button — see §11. A node that is
+   merely *crashed* is fine: the watchdog reboots it and boot force-on covers
+   the gap. A node with no power is not, though it correlates with the 12V bus
+   being down, which nobody fails to notice.
+
+   **This is a structural argument for the 12V compressor fridge** already on
+   the table in `docs/ANALYSIS-2026-08-20.md` §4.3/§5. On the DC bus there is
+   no inverter to cycle and no remote command in the safety path, so this
+   entire failure class stops existing rather than being managed.
    **Exception 1 — the alternator charging path fails toward DISCONNECTED.** A
    stuck-closed 100A path drains the starter battery and strands the van. See
    §9 Phase 4.
@@ -363,8 +403,18 @@ ac_on = parked ? false
 ```
 
 ### `force_on` (fail-safe override)
-True if any of: node just booted; BLE `connected` false; fridge temperature
-sensor stale > 5 min; arbiter watchdog expired.
+True if any of: node just booted; BLE `connected` false; **station data stale
+> 60s while the link still claims to be connected**; fridge temperature sensor
+stale > 5 min; arbiter watchdog expired.
+
+**Read §5.2 for what these can and cannot do.** They are not equivalent. The
+BLE-lost branch cannot power anything — with the link down the write goes
+nowhere — so it is recovery-on-reconnect: it holds the request true so AC
+returns the instant the link does. The **station-stale branch is the one real
+fail-safe**, because it fires while there is still a link to carry the command.
+A wedged-but-open link was previously invisible here: the local probe kept the
+thermostat running happily and it went on commanding a switch nobody was
+listening to.
 
 ### `fridge_req` — `REWRITTEN 2026-08-20`, see `docs/ANALYSIS-2026-08-20.md` §4
 
@@ -1487,6 +1537,16 @@ custom firmware justified.
   measured get marked `UNVERIFIED` in the config comments too.
 - Test the fail-safe path deliberately before each trip: pull the BLE antenna,
   unplug the probe, and confirm the inverter ends up ON.
+  **Test it from AC OFF, not AC ON** — starting from ON proves nothing, because
+  the station latches and the inverter would stay on with the node unplugged
+  entirely. Wait for a fridge OFF block, then break the link. What that
+  actually tests is the reconnect, which is the recoverable half of §5.2.
+- **Know the manual override.** If `van-core` wedges while AC is off, the
+  fridge stays off and the phone app cannot take over — `van-core` is holding
+  the P310's single BLE connection. The recovery is the **station's own
+  physical AC button**, which always works. It is the last resort in the one
+  failure §5.2 cannot engineer away, so it belongs in the pre-trip check, not
+  in a panic at midnight.
 - **And confirm parked mode is OFF before loading food.** It is the one state
   in which the previous check is expected to fail: parked, all three faults
   resolve to AC OFF by design (§6 "Parked mode"). Blue blink on the kitchen

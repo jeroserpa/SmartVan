@@ -550,6 +550,12 @@ ac_arbiter:
   # 5s BLE poll). Anything older than this counts as missing, and missing never
   # argues for OFF.
   sensor_max_age: 45s
+  # Station silence while the BLE stack still claims a connection. Trails
+  # sensor_max_age so it fires after the station-sourced sensors go invalid,
+  # not while they are merely late. This is the *only* fail-safe that can still
+  # reach the P310 - once ble_connected drops there is no link left to carry an
+  # ON command, so BLE_LOST is recovery-on-reconnect and this is the real thing.
+  link_stale: 60s
 
 # -----------------------------------------------------------------------------
 # Tunables. Every threshold is a number entity so field tuning never needs a

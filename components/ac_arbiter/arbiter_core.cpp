@@ -8,6 +8,7 @@ const char *ac_reason_str(AcReason r) {
     case AcReason::PARKED: return "parked";
     case AcReason::BOOT: return "boot";
     case AcReason::BLE_LOST: return "ble lost";
+    case AcReason::LINK_STALE: return "link stale";
     case AcReason::TEMP_STALE: return "probe stale";
     case AcReason::WATCHDOG: return "watchdog";
     case AcReason::FRIDGE_HARD: return "fridge (hard)";
@@ -28,6 +29,7 @@ void ArbiterCore::begin(uint32_t now_ms) {
   // Pretend the probe was fresh and the compressor busy at t=0. Both bias
   // toward ON, which is the correct direction while nothing is known yet.
   temp_fresh_ms_ = now_ms;
+  link_fresh_ms_ = now_ms;
   compressor_busy_ms_ = now_ms;
   manual_busy_ms_ = now_ms;
   surplus_since_ms_ = now_ms;
@@ -80,6 +82,7 @@ const ArbiterOutputs &ArbiterCore::tick(uint32_t now_ms, const ArbiterInputs &in
     manual_busy_ms_ = now_ms;
     surplus_since_ms_ = now_ms;
     temp_fresh_ms_ = now_ms;
+  link_fresh_ms_ = now_ms;
     return out_;
   }
   out_.parked = false;
@@ -87,6 +90,11 @@ const ArbiterOutputs &ArbiterCore::tick(uint32_t now_ms, const ArbiterInputs &in
 
   if (in.temp_valid)
     temp_fresh_ms_ = now_ms;
+  // Any station-sourced value arriving is proof the BLE link is carrying data.
+  // The temperature probe is local and deliberately excluded - a live DS18B20
+  // says nothing about whether the P310 is still listening.
+  if (in.power_valid || in.soc_valid || in.input_power_valid)
+    link_fresh_ms_ = now_ms;
   // An unreadable power sensor must never be mistaken for "compressor idle" -
   // that would release the inverter early. Unknown counts as busy.
   if (!in.power_valid || in.output_power_w >= cfg_.compressor_idle_w)
@@ -99,9 +107,18 @@ const ArbiterOutputs &ArbiterCore::tick(uint32_t now_ms, const ArbiterInputs &in
   if (!elapsed(now_ms, boot_ms_, cfg_.boot_force_ms)) {
     out_.reason = AcReason::BOOT;
   } else if (!in.ble_connected) {
-    // No BLE means we cannot see output_power and cannot command the switch
-    // anyway; holding the request true means the fridge survives the reconnect.
+    // Honest about what this can and cannot do: with the link down the switch
+    // write goes nowhere, so this does NOT keep the fridge running. It holds
+    // the request true so the reconnect restores AC immediately, and it is a
+    // recovery behaviour, not a fail-safe. The fail-safe that can still act is
+    // LINK_STALE below, which fires while there is a link left to carry it.
     out_.reason = AcReason::BLE_LOST;
+  } else if (elapsed(now_ms, link_fresh_ms_, cfg_.link_stale_ms)) {
+    // Connected by the stack's reckoning, but no station data has arrived.
+    // A wedged-but-open link used to be invisible here: the local probe kept
+    // the thermostat running and it went on commanding a switch nobody was
+    // listening to. Commanding ON now is the last moment that can still work.
+    out_.reason = AcReason::LINK_STALE;
   } else if (elapsed(now_ms, temp_fresh_ms_, cfg_.temp_stale_ms)) {
     out_.reason = AcReason::TEMP_STALE;
   } else if (watchdog_tripped) {
@@ -351,6 +368,7 @@ void ArbiterCore::park_exit(uint32_t now_ms) {
   // let the arbiter take over once the probes have had their say.
   boot_ms_ = now_ms;
   temp_fresh_ms_ = now_ms;
+  link_fresh_ms_ = now_ms;
   compressor_busy_ms_ = now_ms;
   manual_busy_ms_ = now_ms;
   fridge_since_ms_ = now_ms - cfg_.min_off_ms;

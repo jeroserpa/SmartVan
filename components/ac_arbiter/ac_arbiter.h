@@ -62,6 +62,7 @@ class AcArbiter : public PollingComponent {
   void set_ble_connected(binary_sensor::BinarySensor *s);
   void set_ac_switch(switch_::Switch *s) { ac_switch_ = s; }
   void set_sensor_max_age(uint32_t ms) { sensor_max_age_ms_ = ms; }
+  void set_link_stale(uint32_t ms) { core_.config().link_stale_ms = ms; }
 
   // --- runtime inputs from YAML ---
   void set_sleep_mode(bool on) { sleep_mode_ = on; }
@@ -115,6 +116,7 @@ class AcArbiter : public PollingComponent {
 
   bool last_written_{false};
   bool written_once_{false};
+  bool ble_was_connected_{false};
   uint32_t last_write_ms_{0};
 };
 

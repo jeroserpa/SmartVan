@@ -352,3 +352,66 @@ own reason, which is why it is written down rather than inherited.
 noise rather than signal. The fix is an external capacitive strip on the grey
 tank — a different voltage source into the same ADC channel, so no design
 change, only a recalibration. Buy it then, not now (BOM D5).
+
+---
+
+## 2026-08-25 — D-12: "fail toward powered" is only real while the link is alive
+
+**The observation that forced this.** A fail-safe that defaults AC on when the
+connection is lost cannot act: with the link down there is nothing to send the
+command over. The rule in §5.2 was written as though `van-core` holds the
+inverter up, when in fact the state is latched in the P310 and `van-core` only
+*commands* it.
+
+**The general form, which is worth more than the fix.** A fail-safe direction
+is real only if reaching it requires **no successful communication**. Failing
+to the state the system is already in is free; failing to the opposite state is
+a wish. That single test explains why the two directions in this project are
+not symmetric:
+
+| Path | Direction | Real? |
+|---|---|---|
+| Fridge, AC currently ON | fail to ON | **Yes** — the station latches; inaction is the fail-safe |
+| Fridge, AC currently OFF | fail to ON | **No** — needs a working link, which is exactly what failed |
+| Parked mode | fail to OFF | **Yes** — already off, and re-asserting needs no reply |
+| Pump interlock (§9 Phase 2b) | fail to permitting | **Yes** — local relay, NC contacts |
+
+Parked mode's inverted fail-safe (D-09) was never in doubt for this reason,
+though the reason was not written down at the time.
+
+**Decision.** Keep the direction, correct the claim, and add the one mechanism
+that can still act.
+
+- `BLE_LOST` is renamed in intent, not in name: it is **recovery-on-reconnect**,
+  holding the request true so AC returns the moment the link does. The test
+  asserting it is renamed to say so — it was called "BLE loss forces AC on"
+  while asserting the *request*, which is precisely the conflation that let the
+  overstatement survive review.
+- **`LINK_STALE` is the actual fail-safe.** Station-sourced sensors going quiet
+  while `ble_connected` still reads true means a wedged-but-open link, and that
+  is the last moment an ON command can still get through. Previously invisible:
+  the local DS18B20 kept the thermostat running, and it went on commanding a
+  switch nobody was listening to.
+- **The reconnect edge re-writes the switch.** A write attempted with the link
+  down still updated `last_written_`, so on reconnect the arbiter believed AC
+  was already as requested and the re-assert would not go out for up to 60s.
+  A minute of fridge-off immediately after recovery, in the exact scenario the
+  fail-safe exists for.
+
+**Why `link_stale` trails `sensor_max_age` rather than leading it.** 60s against
+45s. Leading it would trip on ordinary late data and force the inverter on
+permanently — the same failure mode D-02 records for `sensor_max_age` itself.
+
+**What is left unmitigated, and must stay written down.** A permanent BLE
+failure or an unpowered node, arriving during an OFF block, leaves the fridge
+off until a human intervenes. Alerting and the P310's physical AC button are
+the only remaining tools, and the button matters more than it looks: a wedged
+`van-core` holds the station's single BLE connection, so the phone app cannot
+take over either. Added to the §11 pre-trip check, along with the note that the
+fail-safe test must start from AC **off** — starting from on proves nothing,
+since the station would hold the inverter up with the node unplugged entirely.
+
+**Reopen if:** the fridge moves to 12V DC (ANALYSIS §4.3/§5). There is no
+inverter to cycle and no remote command in the safety path, so this whole
+failure class stops existing rather than being managed — which is a point in
+that option's favour that the energy comparison alone does not capture.
