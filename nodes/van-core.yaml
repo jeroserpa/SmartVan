@@ -53,6 +53,21 @@ esphome:
     - priority: 800
       then:
         - logger.log: "van-core boot: AC held ON until the arbiter says otherwise"
+    # Priority -100: last of all, after ac_arbiter's own setup() has already
+    # commanded AC ON. Restoring parked mode is the one thing allowed to undo
+    # that, and it must be explicit rather than a side effect of switch restore
+    # semantics - a van meant to stay parked for three weeks must not un-park
+    # itself because a brownout rebooted the node.
+    - priority: -100
+      then:
+        - if:
+            condition:
+              lambda: return id(parked_saved);
+            then:
+              - lambda: id(arbiter)->set_parked(true);
+              - logger.log:
+                  level: WARN
+                  format: "van-core boot: PARKED restored - AC held OFF, fail-safe disarmed"
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -188,10 +203,18 @@ binary_sensor:
     filters:
       - delayed_on: 50ms
     on_click:
+      # 1-4s: sleep mode. 5s+: parked mode. Two very different commitments, so
+      # they get two clearly different gestures on the same button rather than
+      # a menu - and the long one is the one you cannot trigger by accident
+      # while reaching past it in the dark.
       - min_length: 1s
-        max_length: 10s
+        max_length: 4s
         then:
           - switch.toggle: sw_sleep_mode
+      - min_length: 5s
+        max_length: 20s
+        then:
+          - switch.toggle: sw_parked
 
   # --- arbiter state, exposed for the web UI and for logging ---
   - platform: template
@@ -210,6 +233,10 @@ binary_sensor:
   - platform: template
     name: "Surplus request"
     lambda: return id(arbiter)->surplus_req();
+  - platform: template
+    name: "Parked"
+    id: bs_parked
+    lambda: return id(arbiter)->parked();
 
 sensor:
   - platform: fbot
@@ -287,6 +314,17 @@ sensor:
     accuracy_decimals: 1
 
   - platform: template
+    name: "Parked for"
+    id: parked_days
+    unit_of_measurement: "d"
+    accuracy_decimals: 1
+    update_interval: 60s
+    # Counts time in the mode, not time since the switch was thrown: it resets
+    # on reboot. Good enough for the only question it is ever asked, which is
+    # "how long has it been sitting there".
+    lambda: return id(arbiter)->parked_for_s() / 86400.0f;
+
+  - platform: template
     name: "Manual AC remaining"
     id: manual_remaining
     unit_of_measurement: "min"
@@ -343,6 +381,76 @@ switch:
     on_turn_off:
       - lambda: id(arbiter)->set_sleep_mode(false);
 
+  # ---------------------------------------------------------------------------
+  # Parked mode. The van at home, fridge emptied and propped open, nothing to
+  # protect, and weeks of standing still.
+  #
+  # This is the ONLY place in the firmware where the section 5.2 fail-safe
+  # direction is inverted: while parked, BLE loss / dead probe / starved loop
+  # all resolve to AC OFF, not ON. The justification and the whole risk
+  # argument live in CLAUDE.md section 6 "Parked mode" - read it before
+  # touching anything here.
+  #
+  # `optimistic` is deliberately absent: the switch reports the arbiter's own
+  # state through `lambda`, so a refused arming request shows as the switch
+  # springing back OFF rather than as a UI that disagrees with the firmware.
+  # ---------------------------------------------------------------------------
+  - platform: template
+    name: "Parked mode"
+    id: sw_parked
+    icon: "mdi:home-lock"
+    # DISABLED, not RESTORE_*: the switch reports the arbiter through `lambda`,
+    # and a restore would run turn_off_action at boot - clearing parked_saved
+    # before on_boot ever reads it, so a parked van would silently un-park on
+    # every brownout. Persistence lives in the global, not here.
+    restore_mode: DISABLED
+    lambda: return id(arbiter)->parked();
+    turn_on_action:
+      - lambda: id(arbiter)->park_request(false);
+      - if:
+          condition:
+            lambda: return id(arbiter)->parked();
+          then:
+            - lambda: id(parked_saved) = true;
+            # Shed what can be shed. NEVER dc_switch: the 12V habitation bus,
+            # and therefore this node and every light, hangs off it - killing
+            # it is unrecoverable without walking to the P310 and pressing a
+            # button (measurements.md 2026-08-18).
+            - switch.turn_off: usb_switch
+            # Calendar ageing, not cycle ageing, is what a stored LiFePO4 pack
+            # dies of. Cap the solar charge here; on exit it goes back to 100.
+            - number.set:
+                id: p310_charge_max
+                value: !lambda return id(num_parked_charge_max).state;
+            - lambda: id(display_awake) = false;
+            - logger.log:
+                level: WARN
+                format: "PARKED: AC off, fail-safe disarmed, charge capped at %.0f%%"
+                args: [id(num_parked_charge_max).state]
+          else:
+            # Refused. Say why in the log and chirp twice: the screen is
+            # probably already blank and the user is about to walk away
+            # believing the van is parked.
+            - logger.log:
+                level: WARN
+                format: "Parked mode REFUSED: cabinet %.1f C vs cabin %.1f C - empty the fridge, or use Park (force)"
+                args: [id(fridge_temp).state, id(cabin_temp).state]
+            - lambda: id(out_buzzer)->set_level(0.5f);
+            - delay: 120ms
+            - lambda: id(out_buzzer)->set_level(0.0f);
+            - delay: 120ms
+            - lambda: id(out_buzzer)->set_level(0.5f);
+            - delay: 120ms
+            - lambda: id(out_buzzer)->set_level(0.0f);
+    turn_off_action:
+      - lambda: id(arbiter)->park_exit();
+      - lambda: id(parked_saved) = false;
+      - switch.turn_on: usb_switch
+      - number.set:
+          id: p310_charge_max
+          value: 100
+      - logger.log: "Parked mode cleared - normal arbitration and fail-safe resume"
+
   - platform: template
     name: "Drive inhibit (test)"
     id: sw_drive_inhibit
@@ -357,12 +465,72 @@ switch:
     on_turn_off:
       - lambda: id(arbiter)->set_drive_inhibit(false);
 
+# -----------------------------------------------------------------------------
+# Buttons. These exist so the web UI can reach the same request flags the
+# kitchen button reaches - and nothing more. The page is a view; the arbiter
+# stays the single writer of ac_switch (CLAUDE.md section 5.3).
+# -----------------------------------------------------------------------------
+button:
+  - platform: template
+    name: "Manual AC start"
+    id: btn_manual_start
+    on_press:
+      - lambda: id(arbiter)->manual_press();
+
+  - platform: template
+    name: "Manual AC extend"
+    id: btn_manual_extend
+    # Same call as start: a short press while the timer is running extends it,
+    # exactly as the physical button does. Two entities, one behaviour, because
+    # "Start" and "+30 min" are different intentions to a person holding a pan.
+    on_press:
+      - lambda: id(arbiter)->manual_press();
+
+  - platform: template
+    name: "Park (force)"
+    id: btn_park_force
+    entity_category: config
+    # The interlock refuses whenever it cannot prove the fridge is empty -
+    # including when a probe is unplugged. This is the escape hatch for when it
+    # is wrong, kept as a separate deliberate entity rather than a flag on the
+    # switch, so that forcing it is always a decision and never a default.
+    on_press:
+      - lambda: id(arbiter)->park_request(true);
+      - switch.turn_on: sw_parked
+
+  - platform: template
+    name: "Manual AC cancel"
+    id: btn_manual_cancel
+    on_press:
+      - lambda: id(arbiter)->manual_cancel();
+
 select:
   - platform: fbot
     fbot_id: p310
     ac_charge_limit:
       name: "AC charge limit"
       id: ac_charge_limit
+
+# -----------------------------------------------------------------------------
+# The custom web UI - the page that replaces BrightEMS. Source in ui/, packed
+# into flash by tools/pack_ui.py, served off the web server already running.
+#
+#   http://192.168.4.1/ui   this page
+#   http://192.168.4.1/     stock ESPHome UI, kept as the fallback that shows
+#                           every entity when this page is wrong about one
+# -----------------------------------------------------------------------------
+van_ui:
+  path: /ui
+  # `at_root: true` swaps them. Not the default until the soak settles who owns
+  # "/" on an AP-only node: captive_portal wants it too.
+  #
+  # captive_landing: answer the phone's own connectivity probe with a landing
+  # page instead of the 204 it wants. The phone concludes "no internet", keeps
+  # mobile data as its default route (so the rest of the phone still works at
+  # the van) and offers a one-tap notification into this UI. Set false to hand
+  # those URLs back to the captive_portal component above. See
+  # docs/decisions.md 2026-08-24.
+  captive_landing: true
 
 # -----------------------------------------------------------------------------
 # The arbiter. One component, one writer, one decision.
@@ -372,6 +540,8 @@ ac_arbiter:
   update_interval: 5s
   fridge_temperature: fridge_temp
   output_power: output_watts
+  # Parked mode's arming interlock, and nothing else, reads this.
+  cabin_temperature: cabin_temp
   input_power: input_watts
   battery_level: battery_percent
   ble_connected: p310_connected
@@ -390,6 +560,7 @@ number:
     fbot_id: p310
     threshold_charge:
       name: "Charge max"
+      id: p310_charge_max
       min_value: 10
       max_value: 100
       step: 1
@@ -562,6 +733,36 @@ number:
       - lambda: id(arbiter)->config().manual_release_w = x;
 
   - platform: template
+    name: "Parked charge max"
+    id: num_parked_charge_max
+    unit_of_measurement: "%"
+    min_value: 50
+    max_value: 100
+    step: 5
+    # 80% is the compromise between calendar ageing and reserve. Solar-only
+    # here, with no shore power, so this cap is the only longevity lever there
+    # is - and dropping it to 60 also drops the buffer against a fortnight of
+    # December. Lower it deliberately for long winter storage, not by default.
+    initial_value: 80
+    optimistic: true
+    restore_value: true
+    entity_category: config
+
+  - platform: template
+    name: "Parked arm delta"
+    id: num_parked_arm_delta
+    unit_of_measurement: "°C"
+    min_value: 1.0
+    max_value: 10.0
+    step: 0.5
+    initial_value: 3.0
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value:
+      - lambda: id(arbiter)->config().parked_arm_delta_c = x;
+
+  - platform: template
     name: "Surplus margin"
     id: num_surplus_w
     unit_of_measurement: "W"
@@ -623,6 +824,14 @@ globals:
     type: uint32_t
     restore_value: false
     initial_value: "0"
+  # Parked mode across reboots. A switch restore_mode would do this too, but it
+  # would fire on_turn_on at boot and run the arming interlock against probes
+  # that have not reported yet - which refuses, and so quietly un-parks a van
+  # that is meant to stay parked. Restored explicitly in on_boot instead.
+  - id: parked_saved
+    type: bool
+    restore_value: true
+    initial_value: "false"
   - id: buzzer_last_ms
     type: uint32_t
     restore_value: false
@@ -635,7 +844,13 @@ interval:
     then:
       - lambda: |-
           float r = 0, g = 0, b = 0;
-          if (id(arbiter)->manual_req()) {
+          if (id(arbiter)->parked()) {
+            // A dim blue blink, ~1s in 4. In a dark van with a blank screen
+            // this is the only sign that the fridge is deliberately dead - and
+            // the one thing that might stop someone loading food into a parked
+            // van the morning of a trip.
+            b = ((millis() / 1000u) % 4u == 0u) ? 0.15f : 0.0f;
+          } else if (id(arbiter)->manual_req()) {
             g = 0.25f;                       // green: you asked for this
           } else if (id(arbiter)->ac_on()) {
             r = 0.20f; g = 0.06f;            // amber: the fridge asked for it
@@ -652,6 +867,7 @@ interval:
       - lambda: |-
           if (!id(arbiter)->manual_warning()) return;
           if (id(sw_sleep_mode).state) return;
+          if (id(arbiter)->parked()) return;
           const uint32_t now = millis();
           if (now - id(buzzer_last_ms) < 30000) return;
           id(buzzer_last_ms) = now;
@@ -741,6 +957,13 @@ display:
           if (id(sw_sleep_mode).state)
             it.printf(4, 122, id(font_med), "SLEEP, ceiling %.1f C",
                       id(num_sleep_ceiling).state);
+          // Parked is stated in the largest terms this page allows. It is the
+          // screen someone glances at while loading the van, and "the fridge is
+          // off on purpose and will stay off" has to be what they read, not
+          // something they infer from an idle inverter.
+          if (id(arbiter)->parked())
+            it.printf(4, 122, id(font_med), "PARKED %.1f d - FRIDGE OFF",
+                      id(arbiter)->parked_for_s() / 86400.0f);
 
       # --- page 3: water (van-water, Phase 2) ---
       - id: page_water
@@ -758,9 +981,10 @@ display:
                     id(fridge_temp).has_state() ? "ok" : "STALE");
           if (id(cabin_temp).has_state())
             it.printf(4, 56, id(font_small), "cabin: %.1f C", id(cabin_temp).state);
-          it.printf(4, 74, id(font_small), "flags: F%d M%d S%d X%d",
+          it.printf(4, 74, id(font_small), "flags: F%d M%d S%d X%d P%d",
                     id(arbiter)->fridge_req(), id(arbiter)->manual_req(),
-                    id(arbiter)->surplus_req(), id(arbiter)->force_on());
+                    id(arbiter)->surplus_req(), id(arbiter)->force_on(),
+                    id(arbiter)->parked());
           // SoftAP address is fixed by ESPHome; mDNS is unreliable on SoftAP so
           // this is the address to type, not a hostname.
           it.printf(4, 92, id(font_small), "AP: 192.168.4.1");

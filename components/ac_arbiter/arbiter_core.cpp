@@ -5,6 +5,7 @@ namespace van {
 const char *ac_reason_str(AcReason r) {
   switch (r) {
     case AcReason::OFF: return "off";
+    case AcReason::PARKED: return "parked";
     case AcReason::BOOT: return "boot";
     case AcReason::BLE_LOST: return "ble lost";
     case AcReason::TEMP_STALE: return "probe stale";
@@ -42,6 +43,47 @@ const ArbiterOutputs &ArbiterCore::tick(uint32_t now_ms, const ArbiterInputs &in
   // assumed absent.
   const bool watchdog_tripped = elapsed(now_ms, last_tick_ms_, cfg_.watchdog_ms);
   last_tick_ms_ = now_ms;
+
+  last_in_ = in;
+
+  // --- parked mode. The one place in this firmware where the section 5.2
+  // fail-safe direction is deliberately inverted. ---
+  //
+  // "Fail toward powered" protects food. Parked at home the fridge is empty
+  // and there is no food; what a forced-on inverter protects then is nothing,
+  // at a measured ~48W of station overhead, which flattens a 3.9kWh pack in
+  // about three days and then leaves it flat - the one outcome that actually
+  // damages hardware. So while parked, OFF is the safe state, and BLE loss, a
+  // dead probe and a starved loop must all resolve to OFF, not ON.
+  //
+  // Everything that makes this safe is at the entry gate (park_request's
+  // interlock), not here. By this point the decision has been made.
+  if (parked_) {
+    out_.force_on = false;
+    out_.fridge_req = false;
+    out_.fridge_hard = false;
+    out_.manual_req = false;
+    out_.surplus_req = false;
+    out_.inhibit_active = false;
+    out_.manual_warning = false;
+    out_.manual_remaining_s = 0;
+    out_.ac_on = false;
+    out_.parked = true;
+    out_.reason = AcReason::PARKED;
+    out_.parked_for_s = static_cast<uint32_t>(now_ms - parked_since_ms_) / 1000u;
+
+    // Keep every timer rolling forward so that whatever hour of whatever week
+    // the mode is left, the arbiter resumes with clean state instead of an
+    // anti-short-cycle lockout or a stale-probe trip it inherited from storage.
+    fridge_since_ms_ = now_ms - cfg_.min_off_ms;
+    compressor_busy_ms_ = now_ms;
+    manual_busy_ms_ = now_ms;
+    surplus_since_ms_ = now_ms;
+    temp_fresh_ms_ = now_ms;
+    return out_;
+  }
+  out_.parked = false;
+  out_.parked_for_s = 0;
 
   if (in.temp_valid)
     temp_fresh_ms_ = now_ms;
@@ -226,6 +268,12 @@ void ArbiterCore::update_surplus_(uint32_t now_ms, const ArbiterInputs &in) {
 }
 
 void ArbiterCore::manual_press(uint32_t now_ms) {
+  // Pressing the cooking button in a parked van means someone is back in it
+  // and wants 230V. That is a deliberate press of a dedicated button, so treat
+  // it as the exit gesture rather than ignoring it and looking broken.
+  if (parked_)
+    park_exit(now_ms);
+
   if (!out_.manual_req) {
     out_.manual_req = true;
     manual_start_ms_ = now_ms;
@@ -244,6 +292,68 @@ void ArbiterCore::manual_cancel(uint32_t now_ms) {
   out_.manual_req = false;
   out_.manual_remaining_s = 0;
   out_.manual_warning = false;
+}
+
+// --- parked mode -----------------------------------------------------------
+
+bool ArbiterCore::park_request(uint32_t now_ms, bool force) {
+  out_.park_refused = false;
+  if (parked_)
+    return true;
+
+  if (!force) {
+    // Both probes must be readable. "I cannot tell whether there is food in
+    // there" is a refusal, not a shrug: this gate is the only thing standing
+    // between a mis-press and two days of spoiled food.
+    if (!last_in_.temp_valid || !last_in_.cabin_valid) {
+      out_.park_refused = true;
+      return false;
+    }
+    // A cabinet well below cabin ambient is a fridge that is working, which
+    // means it is loaded and cooling, which means this is not a parked van.
+    if (last_in_.cabin_temp_c - last_in_.fridge_temp_c > cfg_.parked_arm_delta_c) {
+      out_.park_refused = true;
+      return false;
+    }
+  }
+
+  parked_ = true;
+  parked_since_ms_ = now_ms;
+  // Publish immediately rather than waiting for the next tick: the caller is a
+  // button handler, and the UI reads outputs() the instant it returns.
+  out_.parked = true;
+  return true;
+}
+
+void ArbiterCore::set_parked(uint32_t now_ms, bool on) {
+  if (on) {
+    if (!parked_) {
+      parked_ = true;
+      parked_since_ms_ = now_ms;
+    }
+    out_.parked = true;
+    out_.park_refused = false;
+  } else {
+    park_exit(now_ms);
+  }
+}
+
+void ArbiterCore::park_exit(uint32_t now_ms) {
+  if (!parked_)
+    return;
+  parked_ = false;
+  out_.parked = false;
+  out_.parked_for_s = 0;
+  out_.park_refused = false;
+  // Re-arm the boot force-on window. Coming out of parked mode is exactly the
+  // moment food gets loaded, and the normal thermostat would sit idle at cabin
+  // temperature waiting for a threshold it is already past. Power it now and
+  // let the arbiter take over once the probes have had their say.
+  boot_ms_ = now_ms;
+  temp_fresh_ms_ = now_ms;
+  compressor_busy_ms_ = now_ms;
+  manual_busy_ms_ = now_ms;
+  fridge_since_ms_ = now_ms - cfg_.min_off_ms;
 }
 
 }  // namespace van

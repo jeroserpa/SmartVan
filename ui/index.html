@@ -1,0 +1,755 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>van-core</title>
+<!--
+  van-core UI - the page that replaces BrightEMS.
+
+  Design constraints, all from CLAUDE.md:
+   * No internet, ever. One self-contained file: no CDN, no webfont, no import.
+   * It is read at night, one-handed, possibly cold and half asleep. Dark, big
+     numbers, large touch targets, no animation.
+   * It talks to ESPHome's own web_server API and nothing else:
+       GET  /events                      server-sent events, all entity state
+       POST /switch/<oid>/turn_on|turn_off
+       POST /number/<oid>/set?value=X
+       POST /select/<oid>/set?option=X
+       POST /button/<oid>/press
+   * It is a VIEW. No control logic lives here. The arbiter is the single
+     writer of ac_switch (CLAUDE.md 5.3) and this page must never grow into a
+     second one - it may only nudge the same request flags the physical
+     kitchen button nudges.
+-->
+
+<!--
+  Home-screen app. Add to Home Screen on iOS gives a full-screen launch off an
+  icon - no URL bar, no tab, no typing 192.168.4.1 in the dark.
+
+  Android gets the icon too, but only a shortcut, not a WebAPK: Chrome gates
+  real installability on HTTPS, and this node serves plain http on a SoftAP
+  with no CA and no clock to validate a certificate against. A self-signed cert
+  would trade the URL bar for an interstitial, which is worse. Accepted.
+
+  No service worker for the same reason (not a secure context), and none is
+  wanted: the page is already served from flash on the same origin as the API
+  it drives, so there is nothing an offline cache would add.
+-->
+<link rel="manifest" href="/van-ui/manifest.webmanifest">
+<link rel="icon" href="/van-ui/icon.png">
+<link rel="apple-touch-icon" href="/van-ui/icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="van">
+<!-- black-translucent so the page paints under the notch; the body already
+     pads for env(safe-area-inset-*). -->
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0b0f14">
+<style>
+:root{
+  --bg:#0b0f14; --card:#151b23; --card2:#1c242e; --line:#243040;
+  --fg:#e6edf3; --muted:#8b949e; --dim:#5a6673;
+  --ok:#3fb950; --warn:#ffb020; --bad:#f85149;
+  --tap:52px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--fg)}
+body{
+  font:16px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  /* Top inset matters only in the standalone home-screen app, where
+     black-translucent puts the header under the iOS status bar. Zero in a
+     normal browser tab. */
+  padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+  max-width:560px;margin:0 auto;
+}
+h2{font:600 13px/1 system-ui;letter-spacing:.12em;text-transform:uppercase;
+   color:var(--muted);margin:0 0 10px}
+
+/* ---- header: always visible, because these two facts always matter ---- */
+header{padding:10px 14px 8px;border-bottom:1px solid var(--line)}
+.hrow{display:flex;align-items:baseline;gap:10px}
+.soc{font:700 34px/1 system-ui;font-variant-numeric:tabular-nums}
+.unit{font:400 18px/1 system-ui;color:var(--muted);margin-left:4px}
+.hsub{margin-left:auto;text-align:right;font-size:13px;color:var(--muted);
+      font-variant-numeric:tabular-nums}
+.bar{height:6px;border-radius:3px;background:var(--card2);margin-top:8px;overflow:hidden}
+.bar>i{display:block;height:100%;width:0;background:var(--ok)}
+.link{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);margin-top:6px}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--dim);flex:none}
+.dot.up{background:var(--ok)} .dot.down{background:var(--bad)}
+
+/* ---- tabs ---- */
+nav{display:grid;grid-template-columns:repeat(4,1fr);
+    background:var(--bg);border-bottom:1px solid var(--line);
+    position:sticky;top:0;z-index:4}
+nav button{appearance:none;border:0;background:none;color:var(--muted);
+  font:600 13px/1 system-ui;padding:14px 0;border-bottom:2px solid transparent;cursor:pointer}
+nav button[aria-current="true"]{color:var(--fg);border-bottom-color:var(--warn)}
+
+main{padding:14px}
+section[hidden]{display:none}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+      padding:14px;margin-bottom:12px}
+
+/* ---- values ---- */
+.big{font:700 46px/1 system-ui;font-variant-numeric:tabular-nums}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.cell{background:var(--card2);border-radius:10px;padding:10px 12px}
+.cell .k{font-size:12px;color:var(--muted)}
+.cell .v{font:600 22px/1.2 system-ui;font-variant-numeric:tabular-nums;margin-top:3px}
+.stale{color:var(--dim)}
+
+/* ---- rows / controls ---- */
+.row{display:flex;align-items:center;gap:12px;min-height:var(--tap);
+     border-top:1px solid var(--line);padding:6px 0}
+.row:first-of-type{border-top:0}
+.row .lbl{flex:1;min-width:0}
+.row .lbl b{display:block;font-weight:500}
+.row .lbl small{color:var(--muted);font-size:12px}
+
+.sw{flex:none;width:60px;height:34px;border-radius:17px;background:var(--card2);
+    border:1px solid var(--line);position:relative;cursor:pointer;padding:0}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:26px;height:26px;
+  border-radius:50%;background:var(--dim)}
+.sw[aria-checked="true"]{background:#123b1c;border-color:#1d5c2c}
+.sw[aria-checked="true"]::after{left:29px;background:var(--ok)}
+.sw[data-guard="1"][aria-checked="true"]{background:#3b2412;border-color:#5c3a1d}
+.sw[data-guard="1"][aria-checked="true"]::after{background:var(--warn)}
+.sw:disabled{opacity:.4}
+
+button.btn{appearance:none;min-height:var(--tap);padding:0 16px;border-radius:10px;
+  border:1px solid var(--line);background:var(--card2);color:var(--fg);
+  font:600 15px/1 system-ui;cursor:pointer}
+button.btn.primary{background:#3b2a0c;border-color:#6b4a12;color:var(--warn)}
+button.btn.danger{background:#3a1614;border-color:#6b2320;color:var(--bad)}
+.btnrow{display:flex;gap:10px;margin-top:12px}
+.btnrow>*{flex:1}
+
+select{appearance:none;min-height:var(--tap);background:var(--card2);color:var(--fg);
+  border:1px solid var(--line);border-radius:10px;padding:0 12px;font:500 15px system-ui}
+
+/* number editor: -, value, +.  A slider is unusable on a bumpy road. */
+.num{display:flex;align-items:center;gap:8px;flex:none}
+.num button{width:44px;height:44px;border-radius:10px;border:1px solid var(--line);
+  background:var(--card2);color:var(--fg);font:600 22px/1 system-ui;cursor:pointer}
+.num output{min-width:80px;text-align:center;font:600 17px/1 system-ui;
+  font-variant-numeric:tabular-nums}
+
+/* ---- chips: the arbiter's reasoning, visible at a glance ---- */
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.chip{font:600 12px/1 system-ui;letter-spacing:.06em;text-transform:uppercase;
+  padding:8px 10px;border-radius:8px;background:var(--card2);color:var(--dim);
+  border:1px solid var(--line)}
+.chip.on{color:var(--bg);background:var(--warn);border-color:var(--warn)}
+.chip.on.force{background:var(--bad);color:#fff;border-color:var(--bad)}
+
+.banner{border-radius:10px;padding:10px 12px;font-size:14px;margin-bottom:12px;
+  border:1px solid var(--line);background:var(--card2)}
+.banner.bad{background:#3a1614;border-color:#6b2320;color:#ffb4ae}
+.banner.warn{background:#3b2a0c;border-color:#6b4a12;color:#ffd79a}
+.note{color:var(--muted);font-size:12px;margin-top:10px}
+table.raw{width:100%;border-collapse:collapse;font:400 12px/1.4 ui-monospace,monospace}
+table.raw td{border-top:1px solid var(--line);padding:4px 0;vertical-align:top}
+table.raw td:first-child{color:var(--muted);padding-right:10px;word-break:break-all}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="hrow">
+    <div class="soc" id="h_soc">--<span class="unit">%</span></div>
+    <div class="hsub">
+      <div id="h_flow">--</div>
+      <div id="h_left">--</div>
+    </div>
+  </div>
+  <div class="bar"><i id="h_bar"></i></div>
+  <div class="link"><span class="dot" id="h_dot"></span><span id="h_link">connecting...</span></div>
+</header>
+
+<nav>
+  <button data-tab="power" aria-current="true">Power</button>
+  <button data-tab="fridge">Fridge</button>
+  <button data-tab="setup">Setup</button>
+  <button data-tab="diag">Diag</button>
+</nav>
+
+<main>
+
+<!-- ============================ POWER ============================ -->
+<section id="tab-power">
+  <div class="card">
+    <h2>Flow</h2>
+    <div class="grid">
+      <div class="cell"><div class="k">Solar in</div><div class="v" data-e="solar_in">--</div></div>
+      <div class="cell"><div class="k">AC charger in</div><div class="v" data-e="ac_in">--</div></div>
+      <div class="cell"><div class="k">Output</div><div class="v" data-e="out">--</div></div>
+      <div class="cell"><div class="k">Net</div><div class="v" id="v_net">--</div></div>
+    </div>
+    <div class="note">Net is input minus output as the station reports them. It
+      excludes the station's own ~48W overhead, which no register exposes
+      (docs/ANALYSIS-2026-08-20.md).</div>
+  </div>
+
+  <div class="card">
+    <h2>Outputs</h2>
+    <div class="row">
+      <div class="lbl"><b>AC inverter</b><small id="ac_sub">arbiter-controlled</small></div>
+      <button class="sw" data-sw="ac" data-guard="1" role="switch" aria-checked="false"></button>
+    </div>
+    <div class="row">
+      <div class="lbl"><b>12V DC output</b><small>feeds every node and all lighting</small></div>
+      <button class="sw" data-sw="dc" data-confirm="Turning DC off kills both ESP nodes and all lighting, and you lose this page. Continue?" role="switch" aria-checked="false"></button>
+    </div>
+    <div class="row">
+      <div class="lbl"><b>USB</b><small>shed first when SOC is low</small></div>
+      <button class="sw" data-sw="usb" role="switch" aria-checked="false"></button>
+    </div>
+    <div class="row">
+      <div class="lbl"><b>Silent charging</b><small>slower AC charge, quieter fan</small></div>
+      <button class="sw" data-sw="silent" role="switch" aria-checked="false"></button>
+    </div>
+    <div class="note" id="ac_note"></div>
+  </div>
+
+  <div class="card">
+    <h2>Charging</h2>
+    <div class="row">
+      <div class="lbl"><b>AC charge limit</b><small>drop it at idle so the alternator is not cooked</small></div>
+      <select id="sel_limit"></select>
+    </div>
+    <div class="row" data-num="thr_charge">
+      <div class="lbl"><b>Charge to</b><small>60-80% when parked at home</small></div>
+    </div>
+    <div class="row" data-num="thr_discharge">
+      <div class="lbl"><b>Discharge floor</b><small>station cuts output below this</small></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ FRIDGE =========================== -->
+<section id="tab-fridge" hidden>
+  <div id="fridge_banner"></div>
+
+  <div class="card">
+    <h2>Cabinet</h2>
+    <div class="big"><span data-e="fridge">--</span><span class="unit">&deg;C</span></div>
+    <div class="grid" style="margin-top:12px">
+      <div class="cell"><div class="k">Cabin</div><div class="v" data-e="cabin">--</div></div>
+      <div class="cell"><div class="k">Inverter</div><div class="v" id="v_acstate">--</div></div>
+    </div>
+    <div class="chips">
+      <span class="chip force" data-chip="force">force</span>
+      <span class="chip" data-chip="fridge">fridge</span>
+      <span class="chip" data-chip="manual">manual</span>
+      <span class="chip" data-chip="surplus">surplus</span>
+    </div>
+    <div class="note" id="v_reason">reason: --</div>
+  </div>
+
+  <div class="card">
+    <h2>Cooking</h2>
+    <div class="row">
+      <div class="lbl"><b>Manual AC</b><small id="man_sub">not armed</small></div>
+      <button class="btn primary" id="btn_man">Start</button>
+    </div>
+    <div class="btnrow">
+      <button class="btn" id="btn_man_ext">+30 min</button>
+      <button class="btn danger" id="btn_man_cancel">Cancel</button>
+    </div>
+    <div class="note">The same request flag the kitchen button sets. Auto-releases
+      when the load drops below the release floor, and always at 3h.</div>
+  </div>
+
+  <div class="card">
+    <h2>Night</h2>
+    <div class="row">
+      <div class="lbl"><b>Sleep mode</b><small id="sleep_sub">--</small></div>
+      <button class="sw" data-sw="sleep" role="switch" aria-checked="false"></button>
+    </div>
+    <div class="note">Blanks the display, suppresses surplus loads and holds the
+      heater off. The 10&deg;C hard override still applies: food outranks silence.</div>
+  </div>
+
+  <div class="card">
+    <h2>Storage</h2>
+    <div class="row">
+      <div class="lbl"><b>Parked mode</b><small id="park_sub">--</small></div>
+      <button class="sw" data-sw="parked" data-guard="1" role="switch" aria-checked="false"
+              data-confirm-on="Parked mode holds the inverter OFF and DISARMS the fail-safe: BLE loss, a dead probe and the 10 C override will all resolve to AC OFF. Only do this with the fridge emptied. Continue?"></button>
+    </div>
+    <div class="note" id="park_note">For the van standing at home with the fridge
+      emptied. This is the only mode that overrides the fail-safe, so arming is
+      refused while the cabinet still reads colder than the cabin.</div>
+    <div class="btnrow">
+      <button class="btn danger" id="btn_park_force">Park (force)</button>
+    </div>
+    <div class="note">Force bypasses the interlock. Needed when a probe is
+      unplugged, and wrong every other time.</div>
+  </div>
+</section>
+
+<!-- ============================ SETUP ============================ -->
+<section id="tab-setup" hidden>
+  <div class="card">
+    <h2>Fridge thresholds</h2>
+    <div class="row" data-num="temp_on"><div class="lbl"><b>Cool above</b><small>request cooling over this</small></div></div>
+    <div class="row" data-num="temp_off"><div class="lbl"><b>Release below</b><small>stop requesting under this</small></div></div>
+    <div class="row" data-num="temp_hard"><div class="lbl"><b>Hard override</b><small>cool regardless of everything</small></div></div>
+    <div class="note">The cabinet sits at 7-8&deg;C with the mechanical thermostat at
+      its warmest setting (MEASURED 2026-08-19). Set these against where it
+      actually sits, not against a nominal 4&deg;C.</div>
+  </div>
+
+  <div class="card">
+    <h2>Sleep</h2>
+    <div class="row" data-num="sleep_ceiling"><div class="lbl"><b>Overnight ceiling</b><small>above 6&deg;C is outside the safe band for dairy and meat</small></div></div>
+    <div class="row" data-num="sleep_target"><div class="lbl"><b>Coast target</b><small>a night cycle goes all the way down to this</small></div></div>
+  </div>
+
+  <div class="card">
+    <h2>Cycle shaping</h2>
+    <div class="row" data-num="min_on"><div class="lbl"><b>Minimum on</b></div></div>
+    <div class="row" data-num="min_off"><div class="lbl"><b>Minimum off</b><small>anti-short-cycle</small></div></div>
+    <div class="row" data-num="idle_w"><div class="lbl"><b>Compressor idle threshold</b></div></div>
+    <div class="row" data-num="idle_s"><div class="lbl"><b>Compressor idle debounce</b><small>every second here is pure idle waste</small></div></div>
+    <div class="note">UNVERIFIED for this appliance: it has a variable-speed
+      inverter compressor, so the two idle settings above may never trigger.
+      See docs/ANALYSIS-2026-08-20.md.</div>
+  </div>
+
+  <div class="card">
+    <h2>Manual</h2>
+    <div class="row" data-num="man_min"><div class="lbl"><b>Duration</b></div></div>
+    <div class="row" data-num="man_w"><div class="lbl"><b>Release power</b><small>above the fridge, below a kettle</small></div></div>
+  </div>
+
+  <div class="card">
+    <h2>Storage</h2>
+    <div class="row" data-num="park_soc"><div class="lbl"><b>Parked charge max</b><small>calendar ageing vs reserve; solar-only here</small></div></div>
+    <div class="row" data-num="park_delta"><div class="lbl"><b>Arming interlock</b><small>refuse to park while the cabinet is this far below cabin</small></div></div>
+  </div>
+
+  <div class="card">
+    <h2>Surplus</h2>
+    <div class="row" data-num="sur_w"><div class="lbl"><b>Margin</b><small>input minus output must exceed this</small></div></div>
+    <div class="row" data-num="sur_soc"><div class="lbl"><b>Minimum SOC</b></div></div>
+  </div>
+</section>
+
+<!-- ============================ DIAG ============================= -->
+<section id="tab-diag" hidden>
+  <div class="card">
+    <h2>Health</h2>
+    <div class="grid">
+      <div class="cell"><div class="k">BLE link</div><div class="v" id="d_ble">--</div></div>
+      <div class="cell"><div class="k">Fridge probe</div><div class="v" id="d_probe">--</div></div>
+      <div class="cell"><div class="k">Uptime</div><div class="v" data-e="uptime">--</div></div>
+      <div class="cell"><div class="k">Board</div><div class="v" data-e="board">--</div></div>
+    </div>
+    <div class="note" id="d_ver">--</div>
+  </div>
+
+  <div class="card">
+    <h2>Pre-trip check</h2>
+    <div class="note" style="margin:0">Pull the BLE antenna, unplug the probe,
+      confirm the inverter ends up ON. Before every trip (CLAUDE.md 11).
+      Drive inhibit is a bench-test stand-in until van-vehicle exists.</div>
+    <div class="row" style="margin-top:10px;border-top:1px solid var(--line)">
+      <div class="lbl"><b>Drive inhibit (test)</b><small>suppressor only; force_on still wins</small></div>
+      <button class="sw" data-sw="inhibit" data-guard="1" role="switch" aria-checked="false"></button>
+    </div>
+    <div class="btnrow">
+      <button class="btn" id="btn_default">ESPHome default UI</button>
+      <button class="btn danger" id="btn_restart">Restart node</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>All entities</h2>
+    <div class="note" style="margin:0 0 8px">Everything the node publishes, as
+      received. Amber ids are ones this page does not know about - that is where
+      an ENTITIES mismatch shows up after the first flash.</div>
+    <table class="raw"><tbody id="d_raw"></tbody></table>
+  </div>
+</section>
+
+</main>
+
+<script>
+"use strict";
+/* ---------------------------------------------------------------------------
+ * Entity map.
+ *
+ * ESPHome derives each web_server id as "<domain>-<slugified name>". The names
+ * are in nodes/van-core.yaml. They are ALL declared here, in one block, on
+ * purpose: after the first flash, open Diag > All entities, compare, and fix
+ * any mismatch in exactly one place instead of hunting through the markup.
+ * ------------------------------------------------------------------------ */
+const E = {
+  soc:        "sensor-battery",
+  in:         "sensor-input_power",
+  out:        "sensor-output_power",
+  solar_in:   "sensor-solar_input_power",
+  ac_in:      "sensor-ac_input_power",
+  left:       "sensor-remaining_minutes",
+  fridge:     "sensor-fridge_temperature",
+  cabin:      "sensor-cabin_temperature",
+  man_left:   "sensor-manual_ac_remaining",
+  uptime:     "sensor-van_core_uptime",
+  board:      "sensor-van_core_board_temperature",
+
+  ble:        "binary_sensor-p310_connected",
+  ac_on:      "binary_sensor-ac_on",
+  f_force:    "binary_sensor-force_on_fail_safe",
+  f_fridge:   "binary_sensor-fridge_request",
+  f_manual:   "binary_sensor-manual_request",
+  f_surplus:  "binary_sensor-surplus_request",
+  f_parked:   "binary_sensor-parked",
+  parked_d:   "sensor-parked_for",
+
+  reason:     "text_sensor-ac_reason",
+  version:    "text_sensor-van_core_esphome_version",
+
+  sw_ac:      "switch-p310_ac_inverter",
+  sw_dc:      "switch-p310_dc_output",
+  sw_usb:     "switch-p310_usb_output",
+  sw_silent:  "switch-p310_silent_charging",
+  sw_sleep:   "switch-sleep_mode",
+  sw_inhibit: "switch-drive_inhibit_test",
+  sw_parked:  "switch-parked_mode",
+
+  sel_limit:  "select-ac_charge_limit",
+
+  btn_man:        "button-manual_ac_start",
+  btn_man_ext:    "button-manual_ac_extend",
+  btn_man_cancel: "button-manual_ac_cancel",
+  btn_park_force: "button-park_force",
+  btn_restart:    "button-van_core_restart",
+};
+
+/* Number entities: [id, step, unit, decimals]. Steps mirror the YAML so the UI
+ * cannot ask for a value the node will refuse. */
+const NUMS = {
+  thr_charge:    ["number-charge_max",                1,   "%",   0],
+  thr_discharge: ["number-discharge_min",             1,   "%",   0],
+  temp_on:       ["number-fridge_on_above",           0.5, "°C", 1],
+  temp_off:      ["number-fridge_off_below",          0.5, "°C", 1],
+  temp_hard:     ["number-fridge_hard_override",      0.5, "°C", 1],
+  sleep_ceiling: ["number-sleep_ceiling",             0.5, "°C", 1],
+  sleep_target:  ["number-sleep_coast_target",        0.5, "°C", 1],
+  min_on:        ["number-minimum_inverter_on_time",  1,   "min", 0],
+  min_off:       ["number-minimum_inverter_off_time", 1,   "min", 0],
+  idle_w:        ["number-compressor_idle_threshold", 1,   "W",   0],
+  idle_s:        ["number-compressor_idle_debounce",  5,   "s",   0],
+  man_min:       ["number-manual_ac_duration",        5,   "min", 0],
+  man_w:         ["number-manual_ac_release_power",   10,  "W",   0],
+  sur_w:         ["number-surplus_margin",            50,  "W",   0],
+  sur_soc:       ["number-surplus_minimum_soc",       5,   "%",   0],
+  park_soc:      ["number-parked_charge_max",         5,   "%",   0],
+  park_delta:    ["number-parked_arm_delta",          0.5, "°C", 1],
+};
+
+/* --- state ------------------------------------------------------------- */
+const S = Object.create(null);   // entity id -> {value, state, at}
+const STALE_MS = 45000;          // matches the arbiter's own sensor_max_age
+let linkUp = null, lastMsg = 0;
+
+const $  = function (s, r) { return (r || document).querySelector(s); };
+const $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
+
+function ent(k)  { return S[E[k] || k]; }
+function num(k)  { var e = ent(k); var v = e && e.value;
+                   return (typeof v === "number" && isFinite(v)) ? v : null; }
+function bool(k) { var e = ent(k); if (!e) return null;
+                   if (typeof e.value === "boolean") return e.value;
+                   return e.state === "ON" || e.state === "on" || e.value === 1; }
+function fresh(k){ var e = ent(k); return !!e && (Date.now() - e.at) < STALE_MS; }
+function txt(k)  { var e = ent(k); return e && e.state != null ? String(e.state) : ""; }
+
+/* --- transport ---------------------------------------------------------- */
+// The live stream, kept module-level so the watchdog and the wake handler can
+// tear a dead one down. Only the newest EventSource is ever `stream`; older
+// ones ignore their own callbacks.
+var stream = null;
+function connect() {
+  if (stream) { try { stream.close(); } catch (e) {} stream = null; }
+  // Give the new stream a full watchdog window before it is judged, so a
+  // reconnect cannot immediately trigger another one.
+  lastMsg = Date.now();
+  var es = new EventSource("/events");
+  stream = es;
+  es.addEventListener("state", function (ev) {
+    var d; try { d = JSON.parse(ev.data); } catch (err) { return; }
+    if (!d || !d.id) return;
+    S[d.id] = { value: d.value, state: d.state, name: d.name,
+                options: d.option || d.options, at: Date.now() };
+    lastMsg = Date.now(); setLink(true); render();
+  });
+  es.addEventListener("ping", function () { lastMsg = Date.now(); setLink(true); });
+  es.onopen = function () { lastMsg = Date.now(); setLink(true); };
+  // Reconnect explicitly rather than trusting EventSource's own retry: on a
+  // SoftAP behind a 3300W inverter the socket dies silently often enough that
+  // this matters.
+  es.onerror = function () {
+    if (stream !== es) return;          // a superseded stream, not our problem
+    setLink(false); es.close(); stream = null; setTimeout(connect, 3000);
+  };
+}
+function setLink(up) {
+  if (up === linkUp) return;
+  linkUp = up;
+  $("#h_dot").className = "dot " + (up ? "up" : "down");
+  $("#h_link").textContent = up ? "van-core connected" : "no connection to van-core";
+}
+// A dead SSE stream can still look open - it does not always fire onerror, and
+// an iOS home-screen app that has been backgrounded comes back to a socket that
+// is silently gone. So do not merely report it: tear it down and reconnect.
+setInterval(function () {
+  if (Date.now() - lastMsg > 20000) { setLink(false); connect(); }
+  render();
+}, 2000);
+
+// Reconnect on wake rather than waiting out the watchdog. Standalone home-screen
+// launches spend most of their life backgrounded, and the first thing wanted on
+// unlocking the phone is a live number, not 20s of a stale one.
+document.addEventListener("visibilitychange", function () {
+  if (!document.hidden && Date.now() - lastMsg > 5000) connect();
+});
+
+function post(path) {
+  return fetch(path, { method: "POST" }).catch(function () { setLink(false); });
+}
+function oid(id) { return id.slice(id.indexOf("-") + 1); }
+var cmd = {
+  sw:  function (id, on) { return post("/switch/" + oid(id) + "/turn_" + (on ? "on" : "off")); },
+  n:   function (id, v)  { return post("/number/" + oid(id) + "/set?value=" + v); },
+  sel: function (id, o)  { return post("/select/" + oid(id) + "/set?option=" + encodeURIComponent(o)); },
+  btn: function (id)     { return post("/button/" + oid(id) + "/press"); }
+};
+
+/* --- tabs --------------------------------------------------------------- */
+$$("nav button").forEach(function (b) {
+  b.onclick = function () {
+    $$("nav button").forEach(function (x) { x.setAttribute("aria-current", String(x === b)); });
+    $$("main > section").forEach(function (s) { s.hidden = (s.id !== "tab-" + b.dataset.tab); });
+    render();
+  };
+});
+
+/* --- switches ----------------------------------------------------------- */
+var SW = { ac: "sw_ac", dc: "sw_dc", usb: "sw_usb", silent: "sw_silent",
+           sleep: "sw_sleep", inhibit: "sw_inhibit", parked: "sw_parked" };
+$$("[data-sw]").forEach(function (el) {
+  el.onclick = function () {
+    var id = E[SW[el.dataset.sw]];
+    var next = el.getAttribute("aria-checked") !== "true";
+    if (el.dataset.confirm && next === false && !confirm(el.dataset.confirm)) return;
+    if (el.dataset.confirmOn && next === true && !confirm(el.dataset.confirmOn)) return;
+    cmd.sw(id, next);
+    el.setAttribute("aria-checked", String(next));  // optimistic; SSE corrects it
+  };
+});
+
+/* --- number rows: built from NUMS, never hand-written ------------------- */
+$$("[data-num]").forEach(function (row) {
+  var spec = NUMS[row.dataset.num];
+  if (!spec) return;
+  var id = spec[0], step = spec[1], unit = spec[2], dp = spec[3];
+  var wrap = document.createElement("div"); wrap.className = "num";
+  var dec = document.createElement("button"); dec.textContent = "−";
+  var out = document.createElement("output");
+  var inc = document.createElement("button"); inc.textContent = "+";
+  wrap.appendChild(dec); wrap.appendChild(out); wrap.appendChild(inc);
+  row.appendChild(wrap);
+  row._out = out; row._spec = spec;
+  function bump(d) {
+    var cur = num(id); if (cur === null) return;
+    // Snap to the step grid so repeated taps cannot drift off it.
+    var v = Math.round((cur + d * step) / step) * step;
+    out.textContent = v.toFixed(dp) + " " + unit;   // optimistic
+    cmd.n(id, v);
+  }
+  dec.onclick = function () { bump(-1); };
+  inc.onclick = function () { bump(1); };
+});
+
+/* --- one-shot buttons --------------------------------------------------- */
+$("#btn_man").onclick        = function () { cmd.btn(E.btn_man); };
+$("#btn_man_ext").onclick    = function () { cmd.btn(E.btn_man_ext); };
+$("#btn_man_cancel").onclick = function () { cmd.btn(E.btn_man_cancel); };
+$("#btn_park_force").onclick = function () {
+  if (!confirm("Force parked mode, bypassing the empty-fridge interlock? " +
+               "The inverter will be held OFF with no fail-safe until cleared."))
+    return;
+  cmd.btn(E.btn_park_force);
+};
+$("#btn_restart").onclick    = function () {
+  if (confirm("Restart van-core? The inverter is forced ON through the reboot."))
+    cmd.btn(E.btn_restart);
+};
+$("#btn_default").onclick    = function () { location.href = "/"; };
+$("#sel_limit").onchange     = function (e) { cmd.sel(E.sel_limit, e.target.value); };
+
+/* --- render ------------------------------------------------------------- */
+function fmtW(v) {
+  if (v === null) return "--";
+  return Math.abs(v) >= 1000 ? (v / 1000).toFixed(2) + " kW" : Math.round(v) + " W";
+}
+function fmtHM(mins) {
+  if (mins === null) return "--";
+  var h = Math.floor(mins / 60), m = Math.round(mins % 60);
+  return h ? h + "h " + String(m).padStart(2, "0") + "m" : m + "m";
+}
+function put(sel, text, stale) {
+  $$(sel).forEach(function (el) {
+    el.textContent = text;
+    el.classList.toggle("stale", !!stale);
+  });
+}
+
+function render() {
+  /* --- header --- */
+  var soc = num("soc");
+  $("#h_soc").innerHTML = (soc === null ? "--" : Math.round(soc)) +
+                          '<span class="unit">%</span>';
+  var bar = $("#h_bar");
+  bar.style.width = (soc === null ? 0 : Math.max(0, Math.min(100, soc))) + "%";
+  bar.style.background = soc === null ? "var(--dim)"
+                       : soc < 20 ? "var(--bad)" : soc < 40 ? "var(--warn)" : "var(--ok)";
+  var pin = num("in"), pout = num("out");
+  $("#h_flow").textContent = (pin === null && pout === null) ? "--"
+    : fmtW(pin === null ? 0 : pin) + " in / " + fmtW(pout === null ? 0 : pout) + " out";
+  $("#h_left").textContent = num("left") === null ? "--" : fmtHM(num("left")) + " left";
+
+  /* --- power --- */
+  put('[data-e="solar_in"]', fmtW(num("solar_in")), !fresh("solar_in"));
+  put('[data-e="ac_in"]',    fmtW(num("ac_in")),    !fresh("ac_in"));
+  put('[data-e="out"]',      fmtW(pout),            !fresh("out"));
+  var net = (pin !== null && pout !== null) ? pin - pout : null;
+  var netEl = $("#v_net");
+  netEl.textContent = net === null ? "--" : (net >= 0 ? "+" : "−") + fmtW(Math.abs(net));
+  netEl.style.color = net === null ? "" : net >= 0 ? "var(--ok)" : "var(--warn)";
+
+  /* --- switches --- */
+  Object.keys(SW).forEach(function (k) {
+    var b = $('[data-sw="' + k + '"]');
+    var st = S[E[SW[k]]];
+    var on = st ? (st.value === true || st.state === "ON") : false;
+    b.setAttribute("aria-checked", String(on));
+    b.disabled = !st;
+  });
+  // The AC switch stays exposed for commissioning, but the arbiter re-asserts
+  // once a tick. Say so, rather than letting a tap look like it did not stick.
+  $("#ac_sub").textContent = "arbiter-controlled - " + (txt("reason") || "--");
+  $("#ac_note").textContent = bool("f_force")
+    ? "Fail-safe active: AC is forced ON and a manual OFF will be undone within seconds."
+    : "A manual change here is temporary by design: the arbiter re-asserts its decision on the next tick.";
+
+  /* --- charge limit select --- */
+  var sel = $("#sel_limit"), lim = S[E.sel_limit];
+  if (lim && lim.options && sel.options.length !== lim.options.length) {
+    sel.innerHTML = "";
+    lim.options.forEach(function (o) { sel.add(new Option(o, o)); });
+  }
+  if (lim && document.activeElement !== sel && lim.state != null) sel.value = lim.state;
+
+  /* --- numbers --- */
+  $$("[data-num]").forEach(function (row) {
+    if (!row._spec || !row._out) return;
+    var v = num(row._spec[0]);
+    row._out.textContent = v === null ? "--" : v.toFixed(row._spec[3]) + " " + row._spec[2];
+  });
+
+  /* --- fridge --- */
+  var ft = num("fridge");
+  put('[data-e="fridge"]', ft === null ? "--" : ft.toFixed(1), ft !== null && !fresh("fridge"));
+  var ct = num("cabin");
+  put('[data-e="cabin"]', ct === null ? "--" : ct.toFixed(1) + " °C", ct !== null && !fresh("cabin"));
+  var acOn = bool("ac_on");
+  var acEl = $("#v_acstate");
+  acEl.textContent = acOn === null ? "--" : acOn ? "ON" : "off";
+  acEl.style.color = acOn ? "var(--warn)" : "var(--muted)";
+  $("#v_reason").textContent = "reason: " + (txt("reason") || "--");
+  var flags = { force: "f_force", fridge: "f_fridge", manual: "f_manual", surplus: "f_surplus" };
+  Object.keys(flags).forEach(function (c) {
+    $('[data-chip="' + c + '"]').classList.toggle("on", bool(flags[c]) === true);
+  });
+
+  var ml = num("man_left");
+  var armed = ml !== null && ml > 0.5;
+  $("#man_sub").textContent = armed ? Math.round(ml) + " min remaining" : "not armed";
+  $("#btn_man").textContent = armed ? "+30 min" : "Start";
+
+  var parked = bool("f_parked") === true;
+  var pdays = num("parked_d");
+  $("#park_sub").textContent = parked
+    ? "AC held off" + (pdays === null ? "" : " for " + pdays.toFixed(1) + " days")
+    : "normal operation";
+  // Say what was actually refused, not a generic "cannot". The two numbers are
+  // the whole argument, and the user is standing next to both sensors.
+  $("#park_note").textContent = parked
+    ? "Fail-safe DISARMED. BLE loss, a dead probe and the 10 C override all resolve to AC OFF until this is cleared."
+    : (ft !== null && ct !== null && ct - ft > (num("number-parked_arm_delta") || 3))
+      ? "Arming would be refused: cabinet " + ft.toFixed(1) + " C against cabin " +
+        ct.toFixed(1) + " C - that is a working fridge, so empty it first."
+      : "For the van standing at home with the fridge emptied. Arming is refused while the cabinet still reads colder than the cabin.";
+
+  var sleeping = bool("sw_sleep") === true;
+  var ceil = num("number-sleep_ceiling");
+  $("#sleep_sub").textContent = sleeping
+    ? "coasting to a " + (ceil === null ? "--" : ceil.toFixed(1)) + " °C ceiling"
+    : "normal thresholds";
+
+  /* --- the banners worth interrupting for --- */
+  var html = "";
+  // First, and unconditionally: every other banner on this page is written on
+  // the assumption that the fail-safe is armed, and parked is the one state
+  // where it is not.
+  if (parked)
+    html += '<div class="banner bad">PARKED' +
+            (pdays === null ? "" : " for " + pdays.toFixed(1) + " days") +
+            '. The inverter is held OFF and the fail-safe is disarmed. ' +
+            'Do not load food without clearing this.</div>';
+  if (bool("ble") === false)
+    html += '<div class="banner bad">BLE link to the P310 is down. AC is forced ON. Nothing here can be commanded until it returns.</div>';
+  else if (ft === null || !fresh("fridge"))
+    html += '<div class="banner warn">Fridge probe reading is missing or stale. After 5 minutes the arbiter forces AC ON.</div>';
+  if (armed)
+    html += '<div class="banner warn">Manual AC armed, ' + Math.round(ml) +
+            ' min left. Do not drive off with this running.</div>';
+  $("#fridge_banner").innerHTML = html;
+
+  /* --- diag --- */
+  var bleUp = bool("ble");
+  $("#d_ble").textContent = bleUp === null ? "--" : bleUp ? "up" : "DOWN";
+  $("#d_ble").style.color = bleUp ? "var(--ok)" : "var(--bad)";
+  var probeOk = ft !== null && fresh("fridge");
+  $("#d_probe").textContent = probeOk ? "ok" : "STALE";
+  $("#d_probe").style.color = probeOk ? "var(--ok)" : "var(--bad)";
+  var up = num("uptime");
+  put('[data-e="uptime"]', up === null ? "--" : fmtHM(up / 60));
+  var bt = num("board");
+  put('[data-e="board"]', bt === null ? "--" : bt.toFixed(0) + " °C");
+  $("#d_ver").textContent = "ESPHome " + (txt("version") || "--");
+
+  if (!$("#tab-diag").hidden) {
+    var known = {};
+    Object.keys(E).forEach(function (k) { known[E[k]] = 1; });
+    Object.keys(NUMS).forEach(function (k) { known[NUMS[k][0]] = 1; });
+    $("#d_raw").innerHTML = Object.keys(S).sort().map(function (id) {
+      var e = S[id];
+      var style = known[id] ? "" : ' style="color:var(--warn)"';
+      var v = e.state != null ? e.state : e.value;
+      return "<tr><td" + style + ">" + id + "</td><td>" + v + "</td></tr>";
+    }).join("");
+  }
+}
+
+render();
+connect();
+</script>
+</body>
+</html>

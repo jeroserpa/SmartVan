@@ -1,0 +1,805 @@
+# van-core-ttgo - bench bring-up rig on a LilyGO TTGO T-Display.
+#
+# NOT the target hardware. This is a board that was already in a drawer, used
+# to answer the questions that do not need the final board:
+#
+#   1. Does ESP-FBot actually build and connect on esp32dev + esp-idf?
+#      CLAUDE.md section 2 asserts this ("proven on esp32dev + esp-idf") and the
+#      whole board choice rests on it, but it has never been run here.
+#   2. Does the P310 MAC in substitutions still answer, and do the registers
+#      read the values docs/ble-registers.md says they do?
+#   3. Do BLE client + SoftAP + web server + display coexist in ESPHome's single
+#      cooperative loop? (CLAUDE.md section 2 "Risk")
+#   4. Does web_server local:true even FIT alongside BLE on 4MB flash? If not,
+#      that is a real finding about the classic ESP32, not a setback.
+#
+# NO AUTOMATION. There is no arbiter here and no control loop of any kind, so
+# nothing on this rig can decide by itself to turn the inverter off - which is
+# the failure mode that spoils food. One `ac` switch is exposed for a deliberate
+# human tap, because ESP-FBot's headers force a switch platform to exist anyway
+# and because proving the WRITE path is the point (see the `switch:` block).
+#
+# Chip confirmed by esptool 2026-08-23: ESP32-D0WDQ6 rev v1.0, MAC ac:67:b2:2a:ea:90.
+#
+# Flash:  esphome run nodes/van-core-ttgo.yaml --device COM9
+
+substitutions:
+  node_name: van-core-ttgo
+  friendly_name: Van core bench
+  # POWER-0183, found by tools/fbot_probe.py scan on 2026-08-18.
+  p310_mac: "E8:06:90:C7:AD:F6"
+
+  # --- T-Display onboard pinout (fixed by the board, not a design choice) ---
+  pin_lcd_sclk: GPIO18
+  pin_lcd_mosi: GPIO19
+  pin_lcd_cs: GPIO5
+  pin_lcd_dc: GPIO16
+  pin_lcd_rst: GPIO23
+  pin_lcd_bl: GPIO4
+  # GPIO35 is the right-hand button: input-only, no internal pull-up, so the
+  # board's external pull-up is doing the work. GPIO0 (left button) is left
+  # unused on purpose - strapping pin, and holding it across a reset drops the
+  # board into download mode (CLAUDE.md section 2 "Button map").
+  pin_btn_page: GPIO35
+
+esphome:
+  name: ${node_name}
+  friendly_name: ${friendly_name}
+  comment: "Bench rig: P310 BLE + SoftAP + web + display, read-only"
+  min_version: 2025.7.0
+  # DIAGNOSTIC, remove when M9 is closed. ESPHome logs nothing for SoftAP
+  # client join/leave, so a phone dropping off is invisible in the device log.
+  includes:
+    - ap_diag.h
+    - vc_draw.h
+  on_boot:
+    - priority: -200
+      then:
+        - lambda: van_diag::install_ap_logging();
+
+esp32:
+  board: esp32dev
+  framework:
+    # The point of the exercise. ESP-FBot's examples target esp-idf; this is
+    # where that claim gets tested on real silicon.
+    type: esp-idf
+
+packages:
+  base: !include ../common/base.yaml
+
+external_components:
+  - source: github://ylianst/esp-fbot
+    refresh: 1d
+  # The real UI, not ESPHome's stock entity list.
+  - source:
+      type: local
+      path: ../components
+
+# The van-core web UI at /ui, gzipped into flash by tools/pack_ui.py.
+#
+# EXPECT GAPS ON THIS RIG. ui/index.html is written against van-core.yaml's
+# full entity set - arbiter flags (force/fridge/manual/parked), fridge and
+# cabin probes, the parked-mode controls. None of that exists here: this is a
+# read-only bench rig with no arbiter and no DS18B20. Those fields will render
+# empty. What SHOULD populate is everything fed from the P310 over BLE - SOC,
+# input/output power, AC/DC state - which is exactly what this rig is for.
+#
+# Left at the default /ui rather than at_root, so ESPHome's stock UI stays on
+# "/" as the fallback that shows every entity when this page's assumptions are
+# wrong (components/van_ui/van_ui.h). With captive_portal now gone, "/" is
+# actually free for it.
+van_ui:
+  path: /ui
+
+# SoftAP only, same as the real node: no station mode, so it cannot sit there
+# scanning for a network that does not exist.
+wifi:
+  ap:
+    ssid: !secret wifi_ssid
+    password: !secret wifi_password
+
+# captive_portal is DELIBERATELY ABSENT. `MEASURED 2026-08-24`: with it
+# enabled, joining the AP and browsing to 192.168.4.1 serves the captive
+# portal's wifi-provisioning page - a scan list of nearby networks - not the
+# web_server UI. It registers a catch-all handler and wins "/".
+#
+# That is worse than cosmetic on this node. van-core is SoftAP-only by design
+# (CLAUDE.md section 4: no router exists in the van, and no station mode is
+# configured on purpose). There are no credentials to provision, so the portal
+# offers an action that must never be taken, in place of the only UI there is.
+#
+# This settles the open `VERIFY on hardware` in components/van_ui/__init__.py:
+# captive_portal wins "/" over both web_server and a van_ui at_root handler.
+
+# -----------------------------------------------------------------------------
+# P310 over BLE
+#
+# `scan_parameters.window` is set EXPLICITLY and must stay that way.
+#
+# ESPHome 2026.8.0 raises a *defaulted* scan window to equal the interval
+# whenever software coexistence is compiled in and IDF >= 5.5.5 - see
+# esp32_ble_tracker/__init__.py, _raise_defaulted_scan_window(). The default
+# build therefore compiled to set_scan_interval(512)/set_scan_window(512),
+# i.e. 320ms/320ms: a 100% duty-cycle BLE scan, on the stated theory that
+# "BLE uses the airtime wifi does not claim".
+#
+# That theory does not survive contact with SoftAP. `MEASURED 2026-08-23`
+# (measurements.md M9): with the full-duty scan running, a phone could see the
+# AP but every join ended in "saved, connection failure" - the WPA2 4-way
+# handshake never completed. Removing BLE entirely fixed it instantly.
+# The coexistence arbiter is tuned for station mode, where wifi has a beacon
+# schedule to sync against; an AP has to run its own beacons AND complete a
+# timing-sensitive handshake, and it loses.
+#
+# 30ms/320ms is ~9% duty. The same ESPHome source notes "a user-set window is
+# never touched", so setting it here opts out of the aggressive default.
+# Do not delete this key to "clean up the config" - it is load-bearing.
+# -----------------------------------------------------------------------------
+esp32_ble_tracker:
+  scan_parameters:
+    interval: 320ms
+    window: 30ms
+
+ble_client:
+  - mac_address: ${p310_mac}
+    id: p310_ble
+
+fbot:
+  id: p310
+  polling_interval: 5s
+  settings_polling_interval: 60s
+  poll_timeout: 15s
+  max_poll_failures: 3
+
+# -----------------------------------------------------------------------------
+# Display. 135x240 native, rotated to 240x135 landscape.
+# -----------------------------------------------------------------------------
+spi:
+  clk_pin: ${pin_lcd_sclk}
+  mosi_pin: ${pin_lcd_mosi}
+
+# =============================================================================
+# THE DESIGN - ported from the "van-core display simulator" artifact, then
+# REWORKED FOR DISTANCE READING (2026-08-24).
+#
+# What changed from the mockup and why:
+#
+#   The simulator was drawn for someone standing AT the panel. In the van the
+#   screen is read from across the cabin, one-handed, often while doing
+#   something else. At arm's length the 320x172 layout is dense but fine; at
+#   three metres none of it resolves. Density, not pixel count, is the problem
+#   - so a bigger panel would not have fixed it.
+#
+#   Therefore: ONE IDEA PER PAGE, and the number that page exists for is set as
+#   large as the panel allows. The old HOME page carried SOC, cabin, solar in
+#   and output at once; that is now two pages, each with a single hero value.
+#   Five pages of one thing each beat four pages of four things, because the
+#   cost of an extra button press is trivial next to the cost of walking over
+#   to read the screen.
+#
+#   Secondary detail did not get deleted, it got demoted: heater state moved
+#   into the top strip as an icon, cabin temperature to the fridge page and
+#   diagnostics. DIAGNOSTICS stays deliberately dense - it is a walk-up page,
+#   read at 30cm while debugging, and distance legibility is not its job.
+#
+# Type scale: 56 / 34 / 20 / 14 / 11 px against the mockup's 46 / 34 / 24 / 22
+# / 20 / 14 / 11. The hero number went UP even though the panel is SMALLER.
+#
+# COLOURS remain the mockup's literals verbatim, so the two cannot drift.
+# ICONS remain real MDI via ESPHome's `mdi:` source, sized up for distance.
+# =============================================================================
+
+font:
+  # The hero. Only the glyphs a large number can contain.
+  - file: "gfonts://Roboto@700"
+    id: f_mega
+    size: 56
+    glyphs: "0123456789.-+% CL"
+  - file: "gfonts://Roboto@700"
+    id: f_big
+    size: 34
+    glyphs: "0123456789.-+% CWL"
+  - file: "gfonts://Roboto@500"
+    id: f_med
+    size: 20
+  - file: "gfonts://Roboto"
+    id: f_row
+    size: 14
+  - file: "gfonts://Roboto@500"
+    id: f_clock
+    size: 13
+  - file: "gfonts://Roboto@500"
+    id: f_lbl
+    size: 11
+
+# Sized up from the mockup: a 12px icon is decoration at three metres.
+image:
+  - { id: ico_bt,       file: "mdi:bluetooth",       resize: 14x14, type: BINARY }
+  - { id: ico_btoff,    file: "mdi:bluetooth-off",   resize: 14x14, type: BINARY }
+  - { id: ico_moon,     file: "mdi:weather-night",   resize: 14x14, type: BINARY }
+  - { id: ico_pot,      file: "mdi:pot-steam",       resize: 14x14, type: BINARY }
+  - { id: ico_car,      file: "mdi:car",             resize: 14x14, type: BINARY }
+  - { id: ico_flame_s,  file: "mdi:fire",            resize: 14x14, type: BINARY }
+  - { id: ico_thermo,   file: "mdi:thermometer",     resize: 16x16, type: BINARY }
+  - { id: ico_batt,     file: "mdi:battery-outline", resize: 18x18, type: BINARY }
+  - { id: ico_sun,      file: "mdi:weather-sunny",   resize: 20x20, type: BINARY }
+  - { id: ico_plug,     file: "mdi:power-plug",      resize: 20x20, type: BINARY }
+  - { id: ico_snow,     file: "mdi:snowflake",       resize: 14x14, type: BINARY }
+  - { id: ico_drop,     file: "mdi:water",           resize: 14x14, type: BINARY }
+
+display:
+  - platform: st7789v
+    id: van_display
+    model: TTGO_TDISPLAY_135X240
+    cs_pin: ${pin_lcd_cs}
+    dc_pin: ${pin_lcd_dc}
+    reset_pin: ${pin_lcd_rst}
+    rotation: 90
+    eightbitcolor: true
+    update_interval: 1s
+    lambda: |-
+      using namespace esphome::vc;
+      it.fill(bg());
+
+      // ---- shared state ----------------------------------------------------
+      bool ble    = id(p310_connected).state && !id(mock_ble_down).state;
+      bool probe  = id(mock_probe_ok).state;
+      bool force  = !ble || !probe;
+      bool manual = id(mock_manual).state;
+      bool sleep_ = id(mock_sleep).state;
+      bool drive  = id(mock_drive).state;
+      bool heat   = id(mock_heater).state;
+      bool ac_on  = force || id(mock_ac_on).state || manual || id(mock_surplus).state;
+
+      float soc  = id(battery_percent).has_state()
+                     ? id(battery_percent).state : id(mock_soc).state;
+      float win  = id(input_watts).has_state()
+                     ? id(input_watts).state : id(mock_in_w).state;
+      float wout = id(output_watts).has_state()
+                     ? id(output_watts).state : id(mock_out_w).state;
+      float net  = win - wout;
+
+      const char *reason = force   ? (!ble ? "BLE down" : "probe stale")
+                         : manual  ? "manual"
+                         : id(mock_ac_on).state ? "fridge"
+                         : id(mock_surplus).state ? "surplus" : "idle";
+
+      // ---- top strip, 18px, identical on every page ------------------------
+      // Status lives here so the pages below never have to carry it. Anything
+      // that is merely a STATE (not a value) belongs in this strip.
+      static const char *PAGES[5] = {"BATTERY", "POWER", "FRIDGE", "WATER", "DIAG"};
+      int pg = id(page_idx);
+      it.printf(4, 2, id(f_clock), dim(), "%02u:%02u",
+                (unsigned) ((millis() / 3600000UL) % 24U),
+                (unsigned) ((millis() / 60000UL) % 60U));
+      it.print(46, 3, id(f_lbl), amber(), PAGES[pg]);
+      if (force)
+        it.print(104, 3, id(f_lbl), bad(), "FAIL-SAFE");
+
+      int ix = 223;
+      if (ac_on) ac_symbol(it, ix, 2, 14, force ? bad() : amber(), false);
+      else       ac_symbol(it, ix, 2, 14, dim(), true);
+      ix -= 17;
+      it.image(ix, 2, ble ? id(ico_bt) : id(ico_btoff), ble ? good() : bad(), bg());
+      if (sleep_) { ix -= 17; it.image(ix, 2, id(ico_moon),    water(),  bg()); }
+      if (manual) { ix -= 17; it.image(ix, 2, id(ico_pot),     good(),   bg()); }
+      if (drive)  { ix -= 17; it.image(ix, 2, id(ico_car),     bad(),    bg()); }
+      if (heat)   { ix -= 17; it.image(ix, 2, id(ico_flame_s), amber(),  bg()); }
+      it.line(0, 18, 240, 18, faint());
+
+      // =====================================================================
+      if (pg == 0) {
+        // ---- BATTERY: one number, as large as the panel allows -------------
+        // The gauge is centred rather than pushed left. Nothing shares this
+        // page: SOC is the number that decides whether the trip continues.
+        auto soc_col = soc > 40.0f ? good() : (soc > 20.0f ? amber() : bad());
+        arc_gauge(it, 120, 74, 50, 39, soc, soc_col, faint());
+
+        it.image(111, 26, id(ico_batt), dim(), bg());
+        it.printf(120, 46, id(f_mega), soc_col, TextAlign::TOP_CENTER, "%.0f%%", soc);
+
+        it.printf(120, 106, id(f_row), dim(), TextAlign::TOP_CENTER, "%.1f h left",
+                  id(mock_remaining_h).state);
+        // Net in the gauge's own open bottom: the SIGN of net is the real
+        // question and neither raw flow figure answers it.
+        auto net_col = fabsf(net) < 5.0f ? dim() : (net > 0 ? good() : amber());
+        it.printf(120, 120, id(f_row), net_col, TextAlign::TOP_CENTER, "%+.0f W", net);
+
+      } else if (pg == 1) {
+        // ---- POWER: net is the hero, the two flows support it --------------
+        auto net_col = fabsf(net) < 5.0f ? dim() : (net > 0 ? good() : amber());
+        it.print(4, 22, id(f_lbl), dim(), net > 0 ? "CHARGING" : "DRAINING");
+        it.printf(120, 34, id(f_mega), net_col, TextAlign::TOP_CENTER, "%+.0f", net);
+        it.print(236, 74, id(f_med), net_col, TextAlign::TOP_RIGHT, "W");
+
+        it.line(0, 96, 240, 96, faint());
+
+        it.image(6, 104, id(ico_sun), win > 0 ? good() : faint(), bg());
+        it.printf(112, 102, id(f_med), win > 0 ? good() : dim(),
+                  TextAlign::TOP_RIGHT, "%.0f W", win);
+        it.line(120, 100, 120, 130, faint());
+        it.image(130, 104, id(ico_plug), wout > 0 ? fg() : faint(), bg());
+        it.printf(236, 102, id(f_med), wout > 0 ? fg() : dim(),
+                  TextAlign::TOP_RIGHT, "%.0f W", wout);
+
+      } else if (pg == 2) {
+        // ---- FRIDGE: temperature, the deadband, and the AC verdict ---------
+        float t = id(mock_fridge_temp).state;
+        float t_on = id(mock_temp_on).state, t_off = id(mock_temp_off).state;
+
+        it.image(4, 22, id(ico_snow), water(), bg());
+        it.print(22, 24, id(f_lbl), dim(), "FRIDGE");
+        it.printf(236, 24, id(f_lbl), dim(), TextAlign::TOP_RIGHT, "cabin %.1f",
+                  id(mock_cabin_temp).state);
+
+        if (probe) {
+          auto col = t > 10.0f ? bad() : (t > t_on ? amber() : fg());
+          it.printf(120, 32, id(f_mega), col, TextAlign::TOP_CENTER, "%.1f C", t);
+        } else {
+          it.print(120, 32, id(f_mega), bad(), TextAlign::TOP_CENTER, "-- C");
+        }
+
+        // The deadband strip, now full width and twice as tall. This is the
+        // idea the bare number never gives you: not "4.6 C" but "4.6 C, and
+        // this far from a compressor start". Zones: satisfied / hysteresis gap
+        // / compressor wanted / 10 C hard override.
+        int sx = 4, sy = 94, sw = 232, sh = 14;
+        auto pos = [&](float v) {
+          if (v < 0.0f) v = 0.0f;
+          if (v > 12.0f) v = 12.0f;
+          return sx + (int) (v / 12.0f * sw);
+        };
+        int x_off = pos(t_off), x_on = pos(t_on), x_hard = pos(10.0f);
+        it.filled_rectangle(sx, sy, x_off - sx, sh, Color(0x12, 0x3a, 0x4a));
+        it.filled_rectangle(x_off, sy, x_on - x_off, sh, Color(0x2b, 0x2f, 0x28));
+        it.filled_rectangle(x_on, sy, x_hard - x_on, sh, Color(0x5a, 0x3a, 0x12));
+        it.filled_rectangle(x_hard, sy, sx + sw - x_hard, sh, Color(0x4a, 0x1a, 0x14));
+        it.rectangle(sx, sy, sw, sh, faint());
+        if (probe)
+          it.filled_rectangle(pos(t) - 2, sy - 4, 4, sh + 8, fg());
+
+        // The verdict as a full-width bar. Legible as colour alone from across
+        // the van; the words are there for when you get closer.
+        it.filled_rectangle(0, 116, 240, 19, ac_on ? (force ? bad() : amber()) : faint());
+        if (ac_on)
+          it.printf(120, 119, id(f_med), ink(), TextAlign::TOP_CENTER, "AC ON - %s", reason);
+        else
+          it.print(120, 119, id(f_med), dim(), TextAlign::TOP_CENTER, "AC OFF");
+
+      } else if (pg == 3) {
+        // ---- WATER ---------------------------------------------------------
+        // Degrades rather than blanks: van-water is a separate node and its
+        // absence is normal (it may simply be unpowered), not a fault.
+        bool up = id(mock_water_up).state;
+        auto col = up ? water() : faint();
+
+        int tx = 4, ty = 24, tw = 40, th = 100;
+        it.rectangle(tx, ty, tw, th, col);
+        if (up) {
+          int fh = (int) ((th - 4) * id(mock_water_pct).state / 100.0f);
+          it.filled_rectangle(tx + 2, ty + th - 2 - fh, tw - 4, fh, col);
+          for (int i = 1; i < 4; i++)
+            it.line(tx, ty + th * i / 4, tx + 6, ty + th * i / 4, dim());
+        }
+
+        it.image(54, 22, id(ico_drop), up ? water() : faint(), bg());
+        it.print(74, 24, id(f_lbl), dim(), "FRESH WATER");
+        int litres = (int) (id(mock_water_pct).state * 0.7f);
+        if (up) {
+          it.printf(54, 36, id(f_mega), fg(), "%d L", litres);
+          it.printf(54, 98, id(f_row), dim(), "of 70 L - %.0f%%",
+                    id(mock_water_pct).state);
+          // 12 L/day is an ASSUMPTION. The line says so rather than letting a
+          // bare number imply it was measured.
+          it.printf(54, 116, id(f_row), dim(), "~%.1f days at 12 L/day",
+                    litres / 12.0f);
+        } else {
+          it.print(54, 36, id(f_mega), dim(), "-- L");
+          it.print(54, 98, id(f_row), bad(), "node unreachable");
+          it.print(54, 116, id(f_row), dim(), "last seen 4 min ago");
+        }
+
+      } else {
+        // ---- DIAGNOSTICS ---------------------------------------------------
+        // DELIBERATELY DENSE. This is a walk-up page read at 30cm while
+        // debugging, so distance legibility is explicitly not its job and the
+        // one-idea-per-page rule does not apply.
+        int y0 = 22, dy = 15;
+        it.print(4, y0, id(f_row), dim(), "BLE");
+        it.print(116, y0, id(f_row), ble ? fg() : bad(), TextAlign::TOP_RIGHT,
+                 ble ? "up" : "DOWN");
+        it.print(4, y0 + dy, id(f_row), dim(), "probe");
+        it.print(116, y0 + dy, id(f_row), probe ? fg() : bad(), TextAlign::TOP_RIGHT,
+                 probe ? "ok" : "STALE");
+        it.print(4, y0 + 2 * dy, id(f_row), dim(), "fridge");
+        if (probe)
+          it.printf(116, y0 + 2 * dy, id(f_row), fg(), TextAlign::TOP_RIGHT, "%.1f C",
+                    id(mock_fridge_temp).state);
+        else
+          it.print(116, y0 + 2 * dy, id(f_row), bad(), TextAlign::TOP_RIGHT, "--");
+        it.print(4, y0 + 3 * dy, id(f_row), dim(), "cabin");
+        it.printf(116, y0 + 3 * dy, id(f_row), fg(), TextAlign::TOP_RIGHT, "%.1f C",
+                  id(mock_cabin_temp).state);
+        it.print(4, y0 + 4 * dy, id(f_row), dim(), "uptime");
+        it.printf(116, y0 + 4 * dy, id(f_row), fg(), TextAlign::TOP_RIGHT, "%uh %um",
+                  (unsigned) (millis() / 3600000UL),
+                  (unsigned) ((millis() / 60000UL) % 60U));
+
+        it.print(128, y0, id(f_row), dim(), "AP");
+        it.print(236, y0, id(f_row), fg(), TextAlign::TOP_RIGHT, "192.168.4.1");
+        it.print(128, y0 + dy, id(f_row), dim(), "clients");
+        it.printf(236, y0 + dy, id(f_row), fg(), TextAlign::TOP_RIGHT, "%.0f",
+                  id(ap_clients).has_state() ? id(ap_clients).state : -1.0f);
+        it.print(128, y0 + 2 * dy, id(f_row), dim(), "heap");
+        it.printf(236, y0 + 2 * dy, id(f_row), fg(), TextAlign::TOP_RIGHT, "%u kB",
+                  (unsigned) (esp_get_free_heap_size() / 1024));
+        it.print(128, y0 + 3 * dy, id(f_row), dim(), "drops");
+        it.printf(236, y0 + 3 * dy, id(f_row), fg(), TextAlign::TOP_RIGHT, "%u",
+                  (unsigned) id(ble_drops));
+        it.print(128, y0 + 4 * dy, id(f_row), dim(), "build");
+        it.print(236, y0 + 4 * dy, id(f_row), dim(), TextAlign::TOP_RIGHT, "ttgo rig");
+
+        it.line(122, 20, 122, 96, faint());
+        it.line(0, 98, 240, 98, faint());
+
+        pill(it, id(f_lbl), 4, 106, 55, 17, "FRIDGE", id(mock_ac_on).state, amber());
+        pill(it, id(f_lbl), 62, 106, 55, 17, "MANUAL", manual, good());
+        pill(it, id(f_lbl), 120, 106, 55, 17, "SURPLUS", id(mock_surplus).state, water());
+        pill(it, id(f_lbl), 178, 106, 55, 17, "FORCE", force, bad());
+      }
+
+# NOTE - backlight: the TTGO_TDISPLAY_135X240 model already claims GPIO4 as its
+# backlight pin internally, so it cannot also be driven by a `ledc` output here
+# (ESPHome rejects the double claim). Consequence: on this rig the backlight is
+# plain on/off, not PWM-dimmable, and the 60s blanking behaviour of CLAUDE.md
+# section 2 cannot be exercised. That is a limitation of the bench rig only -
+# the real board declares the panel as `model: Custom` and keeps the backlight
+# on its own `ledc` channel (see nodes/van-core.yaml), which is the arrangement
+# that has to work.
+
+# -----------------------------------------------------------------------------
+# Instrumentation - the same counters the soak config keeps, because this rig
+# is answering the same question on cheaper hardware.
+# -----------------------------------------------------------------------------
+globals:
+  # Which page the single display lambda draws. Cycled by the bezel button.
+  - id: page_idx
+    type: int
+    restore_value: false
+    initial_value: "0"
+  - id: ble_drops
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: ble_down_since
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: ble_longest_gap_s
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+
+binary_sensor:
+  - platform: fbot
+    fbot_id: p310
+    connected:
+      name: "P310 connected"
+      id: p310_connected
+      on_press:
+        - lambda: |-
+            // Reconnected: close out the gap we were timing.
+            if (id(ble_down_since) != 0) {
+              uint32_t gap = (millis() - id(ble_down_since)) / 1000;
+              if (gap > id(ble_longest_gap_s)) id(ble_longest_gap_s) = gap;
+              id(ble_down_since) = 0;
+            }
+      on_release:
+        - lambda: |-
+            id(ble_drops)++;
+            id(ble_down_since) = millis();
+    ac_active:
+      name: "P310 AC output active"
+      id: p310_ac_active
+    dc_active:
+      name: "P310 DC output active"
+      id: p310_dc_active
+
+  # Page cycling. Input-only pin with the board's external pull-up; pressed
+  # pulls to ground, hence inverted.
+  - platform: gpio
+    name: "Page button"
+    id: btn_page
+    pin:
+      number: ${pin_btn_page}
+      inverted: true
+    filters:
+      - delayed_on: 50ms
+      - delayed_off: 50ms
+    on_press:
+      - lambda: id(page_idx) = (id(page_idx) + 1) % 5;
+      - component.update: van_display
+
+# -----------------------------------------------------------------------------
+# The AC switch.
+#
+# NOT optional, even though this rig is meant to be read-only: ESP-FBot's
+# fbot.h includes esphome/components/switch/switch.h UNCONDITIONALLY (unlike
+# number.h and select.h, which are behind USE_NUMBER / USE_SELECT). Without a
+# switch platform somewhere in the config, ESPHome never compiles the switch
+# component and the build dies with "switch.h: No such file or directory".
+# nodes/van-core-soak.yaml has the same latent failure - it declares no switch
+# either, so it has never been compiled.
+#
+# Given it has to exist, it is `ac` and nothing else:
+#   - `ac` is the one the project actually needs to prove it can write. Reading
+#     the P310 is the easy half; commanding the inverter is the half everything
+#     rests on, and this rig can settle it with a deliberate tap in the web UI.
+#   - `dc` is deliberately NOT exposed. The habitation 12V bus hangs off it,
+#     and therefore so does this node - shedding it is unrecoverable without
+#     walking to the P310 (CLAUDE.md section 9 Phase 5, measurements.md
+#     2026-08-18). It must not be one mis-tap away in a web UI.
+#   - `usb`, `light`, `ac_silent`, `key_sound`: no question here needs them.
+#
+# Nothing automatic writes this. There is no arbiter on this rig, so the only
+# thing that can turn the inverter off is a human choosing to.
+switch:
+  - platform: fbot
+    fbot_id: p310
+    ac:
+      name: "P310 AC output"
+      id: p310_ac
+
+  # --- mock state, rig only --------------------------------------------------
+  # These stand in for the arbiter and the probes so the ported van-core pages
+  # can be driven into every state they must render. They control NOTHING: no
+  # arbiter exists here, and none of these is wired to p310_ac. Display only.
+  - platform: template
+    name: "mock AC on"
+    id: mock_ac_on
+    optimistic: true
+    restore_mode: ALWAYS_ON
+  - platform: template
+    name: "mock BLE down"
+    id: mock_ble_down
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+  - platform: template
+    name: "mock manual req"
+    id: mock_manual
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+  - platform: template
+    name: "mock surplus req"
+    id: mock_surplus
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+  - platform: template
+    name: "mock sleep mode"
+    id: mock_sleep
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+  - platform: template
+    name: "mock parked"
+    id: mock_parked
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+  - platform: template
+    name: "mock probe ok"
+    id: mock_probe_ok
+    optimistic: true
+    restore_mode: ALWAYS_ON
+  - platform: template
+    name: "mock drive inhibit"
+    id: mock_drive
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+  - platform: template
+    name: "mock van-water online"
+    id: mock_water_up
+    optimistic: true
+    restore_mode: ALWAYS_ON
+  - platform: template
+    name: "mock heater on"
+    id: mock_heater
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+
+sensor:
+  - platform: fbot
+    fbot_id: p310
+    battery_level:
+      name: "Battery"
+      id: battery_percent
+    input_power:
+      name: "Input power"
+      id: input_watts
+    output_power:
+      name: "Output power"
+      id: output_watts
+    # NOT a power. docs/ble-registers.md: reg 21 reads ~2285 with AC input
+    # present and 14-24 without, i.e. almost certainly AC input voltage x0.1.
+    # Kept on screen precisely so that gets confirmed or refuted on this rig.
+    system_power:
+      name: "System power (reg 21, NOT watts)"
+      id: system_watts
+
+  - platform: template
+    name: "BLE disconnect count"
+    accuracy_decimals: 0
+    update_interval: 60s
+    lambda: return id(ble_drops);
+
+  - platform: template
+    name: "Longest BLE gap"
+    unit_of_measurement: "s"
+    accuracy_decimals: 0
+    update_interval: 60s
+    lambda: return id(ble_longest_gap_s);
+
+  - platform: template
+    name: "Free heap"
+    unit_of_measurement: "B"
+    accuracy_decimals: 0
+    update_interval: 60s
+    lambda: return esp_get_free_heap_size();
+
+  # DIAGNOSTIC (see ap_diag.h). 5s so a drop is visible on the display almost
+  # immediately rather than up to a minute later.
+  - platform: template
+    name: "AP clients"
+    id: ap_clients
+    accuracy_decimals: 0
+    update_interval: 5s
+    lambda: return van_diag::ap_client_count();
+
+# DIAGNOSTIC (remove together with ap_diag.h). Heap logged at WARN so it shows
+# at logger level INFO.
+#
+# `JSON document overflow` from ESPHome's /events endpoint is an ArduinoJson v7
+# *allocation failure*, not a fixed-buffer limit - JsonDocument grows on the
+# heap and overflowed() means malloc said no. So the only question that matters
+# is how much heap is actually left when the page loads.
+#
+# Prime suspect: the ST7789V framebuffer. ST7789V::get_buffer_length_() is
+# width * height * 2 = 135 * 240 * 2 = 64800 bytes, taken from ordinary heap via
+# RAMAllocator (display_buffer.cpp) - and this board has no PSRAM. The same
+# 64800 bytes pushed over SPI is also the ~57ms redraw stalling the loop, so one
+# allocation explains both symptoms. `eightbitcolor: true` halves it to 32400.
+# MEASURE BEFORE CHANGING IT.
+#
+# largest_block matters as much as free: a fragmented heap with plenty free but
+# no contiguous run will fail the same allocation.
+interval:
+  - interval: 10s
+    then:
+      - lambda: |-
+          ESP_LOGW("heap", "free=%u  min_ever=%u  largest_block=%u",
+                   (unsigned) esp_get_free_heap_size(),
+                   (unsigned) esp_get_minimum_free_heap_size(),
+                   (unsigned) heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+
+# --- mock values, rig only ---------------------------------------------------
+# Settable from the web UI so a screen can be pushed to its worst case on
+# demand. Defaults are values measured in this van rather than round numbers:
+# the cabinet sits at 7-8 C with the mechanical thermostat at its warmest
+# setting (measurements.md, 2026-08-19), which is exactly the uncomfortable
+# reading these pages have to render honestly.
+number:
+  - platform: template
+    name: "mock fridge temp"
+    id: mock_fridge_temp
+    optimistic: true
+    initial_value: 7.5
+    min_value: -5
+    max_value: 25
+    step: 0.1
+    unit_of_measurement: "C"
+  - platform: template
+    name: "mock cabin temp"
+    id: mock_cabin_temp
+    optimistic: true
+    initial_value: 27.0
+    min_value: -10
+    max_value: 50
+    step: 0.5
+    unit_of_measurement: "C"
+  - platform: template
+    name: "mock SOC"
+    id: mock_soc
+    optimistic: true
+    initial_value: 78
+    min_value: 0
+    max_value: 100
+    step: 1
+    unit_of_measurement: "%"
+  - platform: template
+    name: "mock input W"
+    id: mock_in_w
+    optimistic: true
+    initial_value: 0
+    min_value: 0
+    max_value: 1200
+    step: 10
+    unit_of_measurement: "W"
+  - platform: template
+    name: "mock output W"
+    id: mock_out_w
+    optimistic: true
+    initial_value: 48
+    min_value: 0
+    max_value: 3300
+    step: 10
+    unit_of_measurement: "W"
+  - platform: template
+    name: "mock hours remaining"
+    id: mock_remaining_h
+    optimistic: true
+    initial_value: 31.5
+    min_value: 0
+    max_value: 200
+    step: 0.5
+    unit_of_measurement: "h"
+  - platform: template
+    name: "mock manual min left"
+    id: mock_manual_min
+    optimistic: true
+    initial_value: 45
+    min_value: 0
+    max_value: 180
+    step: 1
+    unit_of_measurement: "min"
+  - platform: template
+    name: "mock sleep ceiling"
+    id: mock_sleep_ceiling
+    optimistic: true
+    initial_value: 6.0
+    min_value: 4
+    max_value: 10
+    step: 0.5
+    unit_of_measurement: "C"
+  - platform: template
+    name: "mock parked days"
+    id: mock_parked_days
+    optimistic: true
+    initial_value: 12.3
+    min_value: 0
+    max_value: 99
+    step: 0.1
+    unit_of_measurement: "d"
+  - platform: template
+    name: "mock temp on"
+    id: mock_temp_on
+    optimistic: true
+    initial_value: 7.0
+    min_value: 4
+    max_value: 12
+    step: 0.5
+    unit_of_measurement: "C"
+  - platform: template
+    name: "mock temp off"
+    id: mock_temp_off
+    optimistic: true
+    initial_value: 4.0
+    min_value: 0
+    max_value: 8
+    step: 0.5
+    unit_of_measurement: "C"
+  - platform: template
+    name: "mock water pct"
+    id: mock_water_pct
+    optimistic: true
+    initial_value: 68
+    min_value: 0
+    max_value: 100
+    step: 1
+    unit_of_measurement: "%"
+  - platform: template
+    name: "mock water temp"
+    id: mock_water_temp
+    optimistic: true
+    initial_value: 18
+    min_value: 5
+    max_value: 75
+    step: 1
+    unit_of_measurement: "C"

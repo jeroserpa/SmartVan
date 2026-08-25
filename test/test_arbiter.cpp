@@ -48,6 +48,8 @@ struct Sim {
     in.input_power_w = 0.0f;
     in.soc_valid = true;
     in.soc_pct = 90.0f;
+    in.cabin_valid = true;
+    in.cabin_temp_c = 20.0f;
   }
 
   const ArbiterOutputs &tick() { return core.tick(t, in); }
@@ -469,6 +471,167 @@ static void test_millis_rollover() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Parked mode: the van left at home, fridge emptied, AC off for weeks. This is
+// the one mode that inverts the fail-safe direction, so it gets the most
+// suspicious tests in the file.
+// ---------------------------------------------------------------------------
+static void test_parked() {
+  CASE("parking is refused while the cabinet still looks like a working fridge");
+  {
+    Sim s;
+    s.settle();
+    s.in.fridge_temp_c = 3.0f;   // cold
+    s.in.cabin_temp_c = 20.0f;   // cabin warm => it is running, with food in it
+    s.tick();
+    CHECK(!s.core.park_request(s.t));
+    CHECK(s.core.outputs().park_refused);
+    CHECK(!s.core.outputs().parked);
+  }
+
+  CASE("parking is refused when either probe is missing");
+  {
+    Sim s;
+    s.settle();
+    s.in.fridge_temp_c = 19.0f;
+    s.in.cabin_valid = false;
+    s.tick();
+    CHECK(!s.core.park_request(s.t));
+    CHECK(s.core.outputs().park_refused);
+  }
+
+  CASE("an emptied fridge sitting at cabin temperature may be parked");
+  {
+    Sim s;
+    s.settle();
+    s.in.fridge_temp_c = 19.0f;
+    s.in.cabin_temp_c = 20.0f;
+    s.tick();
+    CHECK(s.core.park_request(s.t));
+    CHECK(!s.core.outputs().park_refused);
+    const ArbiterOutputs &o = s.run(1 * MIN);
+    CHECK(o.parked);
+    CHECK(!o.ac_on);
+    CHECK(o.reason == AcReason::PARKED);
+  }
+
+  CASE("the interlock can be forced, for the case where it is wrong");
+  {
+    Sim s;
+    s.settle();
+    s.in.fridge_temp_c = 2.0f;
+    s.tick();
+    CHECK(!s.core.park_request(s.t));
+    CHECK(s.core.park_request(s.t, /*force=*/true));
+    CHECK(s.core.outputs().parked);
+  }
+
+  CASE("parked, the fail-safe is inverted: BLE loss must NOT power the inverter");
+  {
+    Sim s;
+    s.settle();
+    s.in.fridge_temp_c = 19.0f;
+    s.tick();
+    CHECK(s.core.park_request(s.t));
+    s.in.ble_connected = false;
+    s.run(10 * MIN);
+    CHECK(!s.core.outputs().ac_on);
+    CHECK(!s.core.outputs().force_on);
+    CHECK(s.core.outputs().reason == AcReason::PARKED);
+  }
+
+  CASE("parked, a dead probe and a warm cabinet must NOT power the inverter");
+  {
+    Sim s;
+    s.settle();
+    s.in.fridge_temp_c = 19.0f;
+    s.tick();
+    CHECK(s.core.park_request(s.t));
+    s.in.temp_valid = false;
+    s.run(30 * MIN);          // well past temp_stale_ms
+    CHECK(!s.core.outputs().ac_on);
+    s.in.temp_valid = true;
+    s.in.fridge_temp_c = 25.0f;  // above the 10 C hard override
+    s.run(10 * MIN);
+    CHECK(!s.core.outputs().ac_on);
+    CHECK(!s.core.outputs().fridge_hard);
+  }
+
+  CASE("parked suppresses surplus, so solar never starts the inverter");
+  {
+    Sim s;
+    s.settle();
+    s.in.fridge_temp_c = 19.0f;
+    s.tick();
+    CHECK(s.core.park_request(s.t));
+    s.in.input_power_w = 700.0f;
+    s.in.soc_pct = 99.0f;
+    s.run(30 * MIN);
+    CHECK(!s.core.outputs().surplus_req);
+    CHECK(!s.core.outputs().ac_on);
+  }
+
+  CASE("a reboot while parked stays parked, interlock notwithstanding");
+  {
+    Sim s;
+    s.core.set_parked(s.t, true);  // the restore path: no probe has reported yet
+    s.tick();
+    CHECK(s.core.outputs().parked);
+    CHECK(!s.core.outputs().ac_on);
+    CHECK(!s.core.outputs().force_on);   // the boot force-on window is overridden
+  }
+
+  CASE("the cooking button is the exit gesture, and arms manual as usual");
+  {
+    Sim s;
+    s.settle();
+    s.in.fridge_temp_c = 19.0f;
+    s.tick();
+    CHECK(s.core.park_request(s.t));
+    s.run(2 * MIN);
+    s.core.manual_press(s.t);
+    const ArbiterOutputs &o = s.tick();
+    CHECK(!o.parked);
+    CHECK(o.manual_req);
+    CHECK(o.ac_on);
+  }
+
+  CASE("leaving parked mode powers the inverter immediately, then hands over");
+  {
+    Sim s;
+    s.settle();
+    s.in.fridge_temp_c = 19.0f;
+    s.tick();
+    CHECK(s.core.park_request(s.t));
+    s.run(3 * 24 * 60 * MIN);   // three days of storage
+    CHECK(s.core.outputs().parked_for_s > 3u * 24u * 3600u - 60u);
+    s.core.park_exit(s.t);
+    const ArbiterOutputs &o = s.tick();
+    CHECK(o.ac_on);
+    CHECK(o.force_on);          // boot window re-armed: load food, get cold
+    CHECK(o.reason == AcReason::BOOT);
+
+    // ...and once it expires the thermostat takes over on a warm cabinet with
+    // no anti-short-cycle lockout inherited from storage.
+    s.run(2 * MIN);
+    CHECK(s.core.outputs().fridge_req);
+    CHECK(s.core.outputs().ac_on);
+  }
+
+  CASE("parked mode survives the millis wrap");
+  {
+    Sim s(0xFFFFFF00u - 10 * MIN);
+    s.settle();
+    s.in.fridge_temp_c = 19.0f;
+    s.tick();
+    CHECK(s.core.park_request(s.t));
+    s.run(60 * MIN);            // straight through the wrap
+    CHECK(s.core.outputs().parked);
+    CHECK(!s.core.outputs().ac_on);
+    CHECK(s.core.outputs().parked_for_s > 55u * 60u);
+  }
+}
+
 int main() {
   test_failsafe();
   test_fridge();
@@ -476,6 +639,7 @@ int main() {
   test_manual();
   test_surplus();
   test_inhibit();
+  test_parked();
   test_millis_rollover();
 
   if (g_failures == 0) {

@@ -21,6 +21,7 @@ ac_arbiter_ns = cg.esphome_ns.namespace("ac_arbiter")
 AcArbiter = ac_arbiter_ns.class_("AcArbiter", cg.PollingComponent)
 
 CONF_FRIDGE_TEMPERATURE = "fridge_temperature"
+CONF_CABIN_TEMPERATURE = "cabin_temperature"
 CONF_OUTPUT_POWER = "output_power"
 CONF_INPUT_POWER = "input_power"
 CONF_BATTERY_LEVEL = "battery_level"
@@ -39,6 +40,10 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Required(CONF_AC_SWITCH): cv.use_id(switch.Switch),
         # Optional: only surplus_req needs these.
         cv.Optional(CONF_INPUT_POWER): cv.use_id(sensor.Sensor),
+        # Optional, but parked mode's arming interlock refuses without it:
+        # without cabin ambient there is no way to tell an emptied fridge from
+        # a working one, and "cannot tell" is a refusal.
+        cv.Optional(CONF_CABIN_TEMPERATURE): cv.use_id(sensor.Sensor),
         cv.Optional(CONF_BATTERY_LEVEL): cv.use_id(sensor.Sensor),
         # How old a reading may be before it counts as missing. Must comfortably
         # exceed the slowest feeding sensor's update_interval.
@@ -56,6 +61,8 @@ async def to_code(config):
     cg.add(var.set_ble_connected(await cg.get_variable(config[CONF_BLE_CONNECTED])))
     cg.add(var.set_ac_switch(await cg.get_variable(config[CONF_AC_SWITCH])))
 
+    if CONF_CABIN_TEMPERATURE in config:
+        cg.add(var.set_cabin_temperature(await cg.get_variable(config[CONF_CABIN_TEMPERATURE])))
     if CONF_INPUT_POWER in config:
         cg.add(var.set_input_power(await cg.get_variable(config[CONF_INPUT_POWER])))
     if CONF_BATTERY_LEVEL in config:

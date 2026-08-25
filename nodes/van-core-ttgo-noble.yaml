@@ -1,0 +1,75 @@
+# van-core-ttgo-noble - isolation test, NOT a rig to keep.
+#
+# Same board, same AP config as van-core-ttgo.yaml, with ble_client/fbot
+# removed entirely. Exists to answer one question: does the phone join the
+# AP cleanly with the radio doing WiFi only?
+#
+# Trigger: van-core-ttgo.yaml's AP is visible but every join attempt from the
+# phone ends "saved, connection failure" - i.e. the WPA2 handshake itself is
+# failing, not DHCP. CLAUDE.md section 2 already flags BLE+SoftAP+web+display
+# contention on one radio/one cooperative loop as the risk to watch. If this
+# variant joins fine and van-core-ttgo.yaml does not, that confirms the BLE
+# client's continuous scan-for-P310 (device out of range on the bench) is
+# starving the AP's handshake timing - a real finding, not a typo in secrets.yaml.
+#
+# Delete this file once the question is answered either way.
+
+substitutions:
+  node_name: van-core-ttgo-noble
+  friendly_name: Van core bench noble
+
+  pin_lcd_sclk: GPIO18
+  pin_lcd_mosi: GPIO19
+  pin_lcd_cs: GPIO5
+  pin_lcd_dc: GPIO16
+  pin_lcd_rst: GPIO23
+  pin_lcd_bl: GPIO4
+
+esphome:
+  name: ${node_name}
+  friendly_name: ${friendly_name}
+  comment: "Isolation test: AP only, no BLE"
+  min_version: 2025.7.0
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+packages:
+  base: !include ../common/base.yaml
+
+wifi:
+  ap:
+    ssid: !secret wifi_ssid
+    password: !secret wifi_password
+
+captive_portal:
+
+spi:
+  clk_pin: ${pin_lcd_sclk}
+  mosi_pin: ${pin_lcd_mosi}
+
+font:
+  - file: "gfonts://Roboto"
+    id: font_med
+    size: 17
+  - file: "gfonts://Roboto"
+    id: font_small
+    size: 12
+
+display:
+  - platform: st7789v
+    id: van_display
+    model: TTGO_TDISPLAY_135X240
+    cs_pin: ${pin_lcd_cs}
+    dc_pin: ${pin_lcd_dc}
+    reset_pin: ${pin_lcd_rst}
+    rotation: 90
+    update_interval: 1s
+    lambda: |-
+      it.printf(2, 0, id(font_med), "NO-BLE isolation test");
+      it.printf(2, 24, id(font_med), "AP 192.168.4.1");
+      it.printf(2, 46, id(font_small), "uptime: %u s", (unsigned) (millis() / 1000));
+      it.printf(2, 62, id(font_small), "heap: %u", (unsigned) esp_get_free_heap_size());
+      it.printf(2, 84, id(font_small), "try joining van-core WiFi now");

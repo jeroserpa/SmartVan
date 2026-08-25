@@ -289,10 +289,15 @@ swap stays cheap.
    `filters: - timeout:` on every sensor feeding a control decision. A bug that
    silently kills the fridge for two days while nobody is in the van is the one
    failure mode that actually costs money.
-   **Exception — the alternator charging path fails toward DISCONNECTED.** A
+   **Exception 1 — the alternator charging path fails toward DISCONNECTED.** A
    stuck-closed 100A path drains the starter battery and strands the van. See
-   §9 Phase 4. Every control path must have its fail-safe direction stated
-   explicitly; do not assume the fridge convention applies elsewhere.
+   §9 Phase 4.
+   **Exception 2 — parked mode fails toward UNPOWERED.** With the fridge
+   emptied there is no food to protect, and a forced-on inverter flattens the
+   pack in days. This is the only mode that disarms `force_on`; everything that
+   makes it safe is at the entry gate, not in the loop. See §6 "Parked mode".
+   Every control path must have its fail-safe direction stated explicitly; do
+   not assume the fridge convention applies elsewhere.
 3. **Single writer.** Exactly one place in the code writes `ac_switch`. Multiple
    consumers express *requests* as booleans; an arbiter ORs them. See §6.
 4. **Standby power is a first-class requirement.** Every added device gets
@@ -304,6 +309,12 @@ swap stays cheap.
 ---
 
 ## 6. AC inverter arbiter — specification
+
+> **`PARTIALLY SUPERSEDED 2026-08-20.` Read `docs/ANALYSIS-2026-08-20.md`
+> before implementing anything in this section.** `fridge_req` below has been
+> rewritten; `P3` in `docs/PATCHES.md` (sleep mode) is specified but **not yet
+> applied**, and the thermal-budget table further down still assumes a cycling
+> fixed-speed compressor that this appliance does not have.
 
 Three independent request flags, ORed by a single 5s interval, with a fail-safe
 override on top.
@@ -324,27 +335,75 @@ ac_on = force_on
         OR ( (fridge_req OR manual_req OR surplus_req) AND NOT drive_inhibit )
 ```
 
+**And `parked` gates everything, `force_on` included** — the only suppressor in
+the system that outranks the fail-safe. The complete equation is:
+
+```
+ac_on = parked ? false
+      : force_on
+        OR fridge_hard
+        OR ( (fridge_req OR manual_req OR surplus_req) AND NOT drive_inhibit )
+```
+
 ### `force_on` (fail-safe override)
 True if any of: node just booted; BLE `connected` false; fridge temperature
 sensor stale > 5 min; arbiter watchdog expired.
 
-### `fridge_req`
-- Set true when fridge temp > 7.0 °C.
-- Set false when **all** of: temp < 4.0 °C **and** `output_power` < 15W
-  continuously for **90s** (compressor satisfied) **and** inverter has been on
-  ≥ 10 min.
-- **Why 90s and not 5 min:** the tail between compressor stop and inverter
-  shutdown is pure idle waste, incurred every cycle. At 12 cycles/day a 5 min
-  tail burns 60 min of idle = 35 Wh/day, i.e. ~7% of the entire project saving
-  spent on detection latency. The BLE power sensor sees the compressor stop
-  within one poll (~5s); 90s is ample debounce. Make this a tunable `number` and
-  push it lower once behaviour is observed.
-- **Prefer fewer, longer cycles.** Widen the temperature deadband as far as food
-  safety allows. (Added thermal ballast is **rejected** — the volume is needed
-  for food. The contents are the only thermal mass available.)
-- Hard override: temp > 10.0 °C forces true regardless of anything else.
-- **Anti-short-cycle:** enforce a 5 min minimum OFF time before re-energising.
-- Thresholds are tunable ESPHome `number` entities, not magic constants.
+### `fridge_req` — `REWRITTEN 2026-08-20`, see `docs/ANALYSIS-2026-08-20.md` §4
+
+**This section previously specified `fridge_req` as a follower of the
+compressor. There is nothing to follow.** The fridge is an
+**ESSENTIELB ERT85-55mib6 with a variable-speed inverter compressor**: it
+modulates its speed against accumulated heat with hours of lag, and at high
+ambient it does not stop at all. The old release condition
+`output_power < 15W` **can never be satisfied while the compressor modulates**,
+so anything built from the old spec latches `fridge_req` true forever. Duty
+cycle is not a usable diagnostic for this appliance either — see §8.4.
+
+`fridge_req` is therefore a **block scheduler with a temperature guard**, not a
+compressor follower. The supervisor chooses the cycles; the appliance no longer
+does.
+
+- **Run/rest block schedule.** Blocks of **20–30 min minimum**, not 5 —
+  inverter compressors dislike frequent restarts, and each restart costs a
+  pressure-equalisation penalty that scales with cycle *count*.
+- **Temperature is an override ceiling, not the primary input.** Cabinet
+  temperature above the ceiling forces a run block regardless of schedule.
+  This inverts the old design, where temperature drove the request directly.
+- **Hard override: temp > 10.0 °C forces true regardless of anything else.**
+  Unchanged.
+- **Anti-short-cycle:** minimum OFF time before re-energising, now sized to the
+  block length rather than the old 5 min.
+- Every threshold and both block lengths are tunable ESPHome `number` entities,
+  not magic constants.
+- **Prefer fewer, longer blocks.** Added thermal ballast remains **rejected** —
+  the volume is needed for food. The contents are the only thermal mass
+  available, and the 9 h power-failure rating says that buffer is ample.
+
+**There is less temperature headroom than this document used to assume.**
+The cabinet sits at **7–8 °C with the mechanical thermostat at its warmest
+setting** (`MEASURED` 2026-08-19), not at the 4 °C setpoint §6 was written
+around. 7–8 °C is already at the top of the safe band for dairy and meat, so
+any ceiling must be set against where the cabinet actually sits. Calibrate the
+DS18B20 against a reference thermometer before trusting any ceiling — see §2.
+
+**The DS18B20 is now load-bearing, not a convenience.** With no electrical
+signature of cooling state, cabinet temperature is the arbiter's *only*
+feedback channel. The two primary probes are required; the optional third
+(free-air, door detection) stays optional.
+
+**`BLOCKED` on two measurements before any of this is implemented:**
+1. **`tools/fbot_probe.py idle-test`** — splits the measured ~50 W station
+   overhead into inverter idle and station base load. Below ~11 W of inverter
+   idle, imposed cycling stops paying and the answer is a 12 V compressor
+   fridge instead (ANALYSIS §4.3, §5).
+2. **Overnight log** — how long the fridge stays off once it stops, which
+   decides Strategy A (follow the compressor's own stops, which do occur at
+   low ambient) versus Strategy B (impose blocks).
+
+The **pulldown penalty of imposed cycling is `UNVERIFIED`** and the entire
+Strategy B saving rests on it. Estimated 15–30 %; measure it with the A/B test
+in §9 Phase 0 before committing to block lengths.
 
 ### `manual_req` (cooking button)
 - Short press → true, 45 min timer.
@@ -425,6 +484,119 @@ to go and measure deliberately.
 - `ac_silent` on the P310 is worth enabling if ever charging from shore power
   overnight.
 
+### Parked mode — `IMPLEMENTED 2026-08-21`
+
+The van standing outside the house for days or weeks: fridge emptied and the
+door propped open, nobody living in it, nothing that needs 230V. Sleep mode and
+drive inhibit both *defer* compressor work and coast on the food's thermal
+mass. Parked mode does neither, because there is nothing in the fridge to
+coast.
+
+**This is the one mode where §5.2 is inverted, and the inversion is the whole
+feature.** Everywhere else, "fail toward powered" is correct because a bug that
+silently kills the fridge costs a fridge full of food. Parked, that reasoning
+runs backwards:
+
+| | Fridge loaded | Fridge emptied, parked |
+|---|---|---|
+| Cost of a stuck-ON inverter | ~48W, annoying | ~48W × weeks — **pack flat** |
+| Cost of a stuck-OFF inverter | spoiled food | nothing |
+
+At the `MEASURED` ~48W station overhead, a 3.9 kWh pack held on by a BLE
+dropout runs flat in roughly **three days** with no solar, and then sits at 0%
+until someone notices. Leaving a LiFePO4 pack flat is the one outcome in this
+project that damages hardware rather than food. So while parked, **BLE loss, a
+dead probe, a starved loop and the 10 °C hard override all resolve to OFF.**
+
+**Everything that makes this safe is at the entry gate.** Once parked, the
+arbiter is not protecting anything and cannot be argued out of it — so the only
+question that matters is whether the mode can be entered by mistake.
+
+#### Arming interlock
+An emptied fridge with its door propped open equilibrates to cabin ambient; a
+loaded, working one does not. **Refuse to arm while the cabinet reads more than
+`parked_arm_delta` (default 3 °C) below cabin.** Refuse equally when either
+probe is missing — *"I cannot tell whether there is food in there"* is a
+refusal, not a shrug. This is the whole reason the cabin DS18B20 stopped being
+a nice-to-have.
+
+The refusal is audible (double chirp) and logged with both temperatures,
+because the screen is likely blank and the user is about to walk away believing
+the van is parked.
+
+`Park (force)` exists as a separate deliberate entity for when the interlock is
+wrong — an unplugged probe, a fridge already at room temperature for other
+reasons. It is not a flag on the switch: forcing it must always be a decision.
+
+#### Entering
+- **Gesture:** bezel sleep button, ≥5s (1–4s is still sleep mode). Or the
+  `Parked mode` switch in the web UI.
+- Shed `usb`. **Never `dc`** — the 12V habitation bus, and therefore van-core
+  itself, hangs off it; shedding it is unrecoverable without walking to the
+  P310 (`measurements.md` 2026-08-18).
+- Cap `threshold_charge` at `Parked charge max` (default **80%**). Solar-only
+  at home with no shore power, so the charge cap is the only calendar-ageing
+  lever there is — and dropping it to 60% also drops the buffer against a
+  fortnight of December. Lower it deliberately for winter storage, not by
+  default. Restored to 100% on exit.
+- Blank the display; suppress the buzzer.
+
+#### While parked
+- **A dim blue blink on the kitchen button LED, ~1s in 4.** In a dark van with
+  a blank screen this is the only sign that the fridge is deliberately dead,
+  and it is the mitigation for the one real hazard below.
+- The display page still says `PARKED n.n d — FRIDGE OFF` when woken.
+- The arbiter keeps re-asserting AC OFF once a minute, so a poke at the P310's
+  own front panel does not quietly re-energise the inverter for a fortnight.
+- All arbiter timers are rolled forward every tick, so the mode can be left at
+  any hour of any week without inheriting an anti-short-cycle lockout or a
+  stale-probe trip from storage.
+
+#### Leaving
+- Any of: the bezel gesture again, the web switch, **or a press of the kitchen
+  cooking button** — someone back in the van wanting 230V is a deliberate press
+  of a dedicated button, so treat it as the exit gesture rather than ignoring
+  it and looking broken.
+- Exit re-arms the boot force-on window: AC comes on immediately and the
+  thermostat takes over once the probes have reported. Coming out of parked
+  mode is exactly when food gets loaded, and a cabinet sitting at 20 °C should
+  not wait on a poll cycle.
+
+#### Persistence, and why it is not a `restore_mode`
+Parked state lives in a `restore_value` global, restored explicitly at
+`on_boot` priority −100. A switch's own `restore_mode` would fire its
+`turn_on`/`turn_off` action at boot — running the arming interlock against
+probes that have not reported yet, which refuses, and so **silently un-parks a
+van that is meant to stay parked for three weeks** on any brownout. That is the
+subtle failure this design exists to avoid; do not "simplify" it back.
+
+A reboot while parked therefore pulses AC on for the fraction of a second
+before the global is read. Accepted, and visible in the log as `ON` immediately
+followed by `OFF (parked)`. The alternative is holding AC off until a flash
+read completes, which puts a storage feature on the fridge's critical path.
+
+#### The real hazard: parking, then loading food
+The interlock catches "arm it with food inside". It cannot catch "arm it
+correctly, then load the van for a trip a week later and drive off". That is
+the two-days-of-spoiled-food failure of §5.2 arriving through a side door.
+
+Mitigations available today: the blue LED, the display page, and the pre-trip
+checklist in §11. **The proper mitigation is Phase 4** — `van-vehicle` runs on
+switched ignition, so its very existence is a key-on signal, and key-on should
+clear parked mode. Until then this is a procedural guard, not an engineered
+one, and it is stated here rather than papered over.
+
+#### Open — `UNVERIFIED`
+- **van-core's own standby draw while parked.** With AC off, the load is the
+  node plus the station's base consumption, and the station's share is exactly
+  the unknown that `tools/fbot_probe.py idle-test` exists to split out. Until
+  that number exists, the achievable parked duration is a guess. Measure it as
+  SOC slope over 48h.
+- If that draw turns out to dominate in winter, the remaining lever is
+  duty-cycled deep sleep on van-core (wake every 30 min, check SOC, sleep).
+  That costs the web UI and the BLE link between wakes and is **not** worth
+  designing before the measurement exists.
+
 ---
 
 ## 7. MiBoxer E2-WR — three routes
@@ -498,9 +670,19 @@ Ordered by how much they'd change the design.
 1. ~~**Does the fridge auto-restart after power is restored?**~~ **ANSWERED:
    yes** — restarts automatically on the medium-cold setting. Project premise
    holds.
-2. **Actual inverter idle draw.** Stated 35W (manufacturer). Confirm in situ:
-   AC on, nothing plugged in, read `system_power` / `output_power`. Fan
-   behaviour and ambient heat may push it above spec in an August van.
+2. **Actual inverter idle draw.** Stated 35W (manufacturer).
+   `CORRECTED 2026-08-19 — the method below was wrong.` This used to read
+   "AC on, nothing plugged in, read `system_power` / `output_power`", on the
+   assumption that ESP-FBot's `system_power` (input reg 21) reported the
+   station's own consumption. **It does not: reg 21 is not a power at all**
+   (reads 2285 with AC input present, 14–24 without, regardless of charge rate
+   — almost certainly AC input voltage ×0.1). See `docs/ANALYSIS-2026-08-20.md`
+   §2 and `docs/ble-registers.md`.
+   **No register found so far reports the station's own draw.** Every power
+   register is an external input or an external output; the ~50W of overhead is
+   only visible as the SOC balance not accounted for by any of them, which is
+   what `tools/fbot_probe.py idle-test` measures. Fan behaviour and ambient
+   heat may push it above spec in an August van.
 3. ~~**Is the 35W fridge figure average or compressor-running power?**~~
    **ANSWERED: 35W is the running power.** The compressor is small, so the
    inverter idle equals the useful load.
@@ -528,6 +710,13 @@ Ordered by how much they'd change the design.
 9. **E2-WR idle power**, unprovisioned.
 10. **2.4GHz link quality with the inverter under load** — decides whether the
     RS485 escape hatch gets pulled forward.
+11. **van-core's own standby draw in parked mode.** With AC off, the only loads
+    left are the node and the station's own base consumption — and the
+    station's share is precisely what `tools/fbot_probe.py idle-test` exists to
+    separate out (§8.2). Until both numbers exist, how long a van can sit
+    parked on solar in December is a guess. Measure as SOC slope over 48h with
+    parked mode armed. Decides whether duty-cycled deep sleep on van-core is
+    ever needed (§6 "Parked mode").
 
 ---
 
@@ -1004,6 +1193,10 @@ custom firmware justified.
   measured get marked `UNVERIFIED` in the config comments too.
 - Test the fail-safe path deliberately before each trip: pull the BLE antenna,
   unplug the probe, and confirm the inverter ends up ON.
+- **And confirm parked mode is OFF before loading food.** It is the one state
+  in which the previous check is expected to fail: parked, all three faults
+  resolve to AC OFF by design (§6 "Parked mode"). Blue blink on the kitchen
+  button = still parked.
 
 ---
 

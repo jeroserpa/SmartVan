@@ -62,6 +62,13 @@ struct ArbiterConfig {
 
   // --- drive inhibit (Phase 4, default off; suppressor, never a request) ---
   uint32_t inhibit_max_ms = 4u * 60u * 60u * 1000u; // stuck-true must expire
+
+  // --- parked mode (van left at home, fridge emptied, AC hard off) ---
+  // The arming interlock. An empty fridge with the door ajar equilibrates to
+  // cabin ambient; a loaded, running one does not. Refuse to arm while the
+  // cabinet is more than this far below cabin, because parking with food
+  // inside is the one way this mode spoils anything.
+  float parked_arm_delta_c = 3.0f;
 };
 
 // Everything the arbiter is allowed to know about the outside world.
@@ -82,6 +89,11 @@ struct ArbiterInputs {
   bool soc_valid = false;
   float soc_pct = 0.0f;
 
+  // Cabin ambient. Not a control input: it exists only so parked mode can tell
+  // an emptied fridge from a working one before it disarms the fail-safe.
+  bool cabin_valid = false;
+  float cabin_temp_c = 0.0f;
+
   bool sleep_mode = false;
   bool drive_inhibit = false;
 };
@@ -90,6 +102,7 @@ struct ArbiterInputs {
 // "the inverter is on" without a reason is an undebuggable system.
 enum class AcReason : uint8_t {
   OFF = 0,
+  PARKED, // off, and deliberately not coming back on
   BOOT,
   BLE_LOST,
   TEMP_STALE,
@@ -110,6 +123,9 @@ struct ArbiterOutputs {
   bool inhibit_active = false; // drive inhibit, after its hard timeout
   bool manual_warning = false; // within manual_warn_ms of auto-release
   uint32_t manual_remaining_s = 0;
+  bool parked = false;         // long-term storage: AC held off, fail-safe disarmed
+  bool park_refused = false;   // last park_request() was rejected by the interlock
+  uint32_t parked_for_s = 0;   // since entry, or since the last reboot while parked
   AcReason reason = AcReason::BOOT;
 };
 
@@ -128,6 +144,21 @@ class ArbiterCore {
   // --- button events, edge-triggered from the ESPHome binary_sensor ---
   void manual_press(uint32_t now_ms);  // short press: arm, or extend
   void manual_cancel(uint32_t now_ms); // long press: drop immediately
+
+  // --- parked mode ---
+  // Guarded entry, for anything a person can press. Returns false and sets
+  // out_.park_refused if the cabinet still looks like a working fridge, or if
+  // the temperatures needed to tell are missing. `force` bypasses the
+  // interlock and must only be reachable from a deliberate two-step gesture.
+  bool park_request(uint32_t now_ms, bool force = false);
+
+  // Unguarded. This is the reboot-restore path only: at boot no probe has
+  // reported yet, so the interlock would refuse and silently un-park a van
+  // that is meant to stay parked for weeks. Never wire a button to it.
+  void set_parked(uint32_t now_ms, bool on);
+
+  void park_exit(uint32_t now_ms);
+  bool parked() const { return parked_; }
 
   ArbiterConfig &config() { return cfg_; }
   const ArbiterOutputs &outputs() const { return out_; }
@@ -160,6 +191,11 @@ class ArbiterCore {
   // drive inhibit
   bool inhibit_seen_ = false;
   uint32_t inhibit_since_ms_ = 0;
+
+  // parked mode
+  bool parked_ = false;
+  uint32_t parked_since_ms_ = 0;
+  ArbiterInputs last_in_;  // snapshot for the arming interlock
 };
 
 // Wrap-safe "has at least `span` elapsed since `mark`".

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>van-core</title>
+<!--
+  The captive-portal landing page.
+
+  This is what the phone's own connectivity probe gets - /generate_204,
+  /hotspot-detect.html and friends - so it is what Android's "Sign in to
+  network" notification and iOS's captive sheet render.
+
+  It is deliberately NOT the app. A captive sheet is a stripped WKWebView that
+  the OS closes when it feels like it; running the real UI inside one is a way
+  to lose state mid-tap. This is a signpost: one big link out to the real page
+  in the real browser, and the instruction that turns this into a one-tap
+  routine for good.
+
+  Absolute URL on purpose. Inside the captive sheet the Host header is
+  whatever the probe asked for (connectivitycheck.gstatic.com), and a relative
+  link would work but would bookmark that hostname to the home screen.
+  192.168.4.1 is the SoftAP address fixed by CLAUDE.md section 4; if that ever
+  moves, it moves here too.
+-->
+<link rel="icon" href="/van-ui/icon.png">
+<style>
+html,body{margin:0;height:100%;background:#0b0f14;color:#e6edf3;
+  font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+body{display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:22px;padding:24px;text-align:center}
+img{width:88px;height:88px;border-radius:20px}
+a{display:block;min-height:52px;line-height:52px;padding:0 32px;
+  background:#ffb020;color:#0b0f14;font-weight:700;text-decoration:none;
+  border-radius:12px}
+p{margin:0;color:#8b949e;font-size:14px;max-width:22em}
+</style>
+</head>
+<body>
+<img src="/van-ui/icon.png" alt="">
+<a href="http://192.168.4.1/ui">Open van-core</a>
+<p>Open it once in the browser, then <b>Add to Home Screen</b> &mdash; after that
+the icon is the app and this page never has to be tapped again.</p>
+<p>The van AP has no internet. That is expected: keep the phone connected.</p>
+</body>
+</html>

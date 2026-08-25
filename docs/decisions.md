@@ -117,3 +117,172 @@ options ESPHome disables to save memory.
 file only; it does not walk up to the repo root. CLAUDE.md section 10 shows
 `secrets.yaml` at the root, which does not work with configs in `nodes/`.
 **CLAUDE.md section 10 needs updating to match.**
+
+---
+
+## 2026-08-21 — D-08: the BrightEMS replacement is a static page on ESPHome's own web server
+
+**Decision.** `ui/index.html` — one self-contained file, no build step, no
+framework — gzipped into flash by `tools/pack_ui.py` and served by
+`components/van_ui/`, a handler registered on the `web_server_base` instance
+`web_server` already runs. It drives ESPHome's existing API and nothing else:
+`GET /events` (SSE) for state, `POST /<domain>/<object_id>/<action>` for
+commands.
+
+**Why not the stock ESPHome UI.** It is a flat alphabetical list of ~50
+entities. It cannot say *why* the inverter is on, cannot put the manual timer
+next to the fridge temperature, and cannot warn that manual AC is still armed.
+Those are the three things a van-core UI exists to say. The stock UI stays
+reachable at `/` as the fallback that shows every entity when this page's
+assumptions are wrong.
+
+**Why not a second web server / SD-served files.** Same origin, same port, same
+TCP stack means no CORS, no second listener, and no dependency on a mounted
+card for the UI to exist. Served straight from flash with no heap copy — this
+node runs a BLE client, a SoftAP and a display in one cooperative loop
+(CLAUDE.md section 2), and a ~30kB allocation per page load is not something to
+hand it. 9.5kB gzipped as of this commit.
+
+**Why the page cannot make control decisions.** It is a view. It writes only
+the same request flags the physical kitchen button writes, through three
+`button` entities added to `van-core.yaml`. The arbiter remains the single
+writer of `ac_switch` (CLAUDE.md section 5.3), and the AC switch stays exposed
+only so commissioning can override it — the UI says out loud that the arbiter
+re-asserts on the next tick.
+
+**Development without hardware.** `tools/mock_core.py` serves the identical
+`/events` + REST surface from a laptop, with fault injection (`--fault
+ble|probe|flat|night`). The page was built and exercised against it; the ESP
+serves the same bytes later.
+
+**`UNVERIFIED` until the soak, both about who owns `/`:**
+- `van_ui` defaults to `/ui`. `at_root: true` makes it register before
+  `web_server` and claim `/`. Untested on hardware.
+- `captive_portal` also wants `/` in AP mode, and this node is AP-only. Settle
+  the three-way ordering during the soak, not in a car park.
+
+**`VERIFIED` against ESPHome 2025.7.0 source, not assumed:** `web_server_idf`
+provides `beginResponse(code, type, const uint8_t *, size_t)` and
+`AsyncWebHandler::canHandle(...) const` / `isRequestHandlerTrivial() const`, so
+the handler compiles under esp-idf. `WebServer::canHandle` does not claim
+`/ui`.
+
+---
+
+## 2026-08-21 — D-09: parked mode inverts the fail-safe, and the safety lives at the entry gate
+
+**Decision.** A `parked` mode that holds the P310 inverter OFF unconditionally —
+overriding `force_on`, BLE loss, a stale probe, the starved-loop watchdog and
+the 10 °C hard override alike. It is the only suppressor in the system that
+outranks the §5.2 fail-safe.
+
+**Why the inversion is correct here and nowhere else.** "Fail toward powered"
+is a statement about the cost of being wrong, and parked at home that cost
+flips. Empty fridge: a stuck-OFF inverter costs nothing, a stuck-ON one burns
+the `MEASURED` ~48W station overhead through a 3.9 kWh pack in about three days
+and then leaves it flat. Food spoiling is the expensive failure when there is
+food; a flat LiFePO4 pack is the expensive failure when there is not.
+
+**Where the safety went instead.** Once parked, the arbiter protects nothing and
+cannot be argued out of it, so the entire risk is concentrated in whether the
+mode can be entered by mistake. Hence the arming interlock: refuse while the
+cabinet reads more than 3 °C below cabin ambient (a working, loaded fridge), and
+refuse when either probe is missing. "Cannot tell" is a refusal. This is what
+promoted the cabin DS18B20 from nice-to-have to load-bearing.
+
+**Rejected: a hard timeout on the mode**, by analogy with the drive inhibit's
+4h expiry. The inhibit expires because a stuck engine signal must not strand the
+fridge; parked mode has no upstream signal to get stuck, and weeks of standing
+still is the requirement, not the failure. An expiry would silently re-energise
+the inverter of a van nobody is visiting — the exact outcome the mode prevents.
+
+**Rejected: persisting the mode with the switch's own `restore_mode`.** It fires
+the switch action at boot, which runs the arming interlock against probes that
+have not reported yet, which refuses — quietly un-parking a van on any brownout.
+Persistence is an explicit `restore_value` global read at `on_boot` priority
+−100 instead.
+
+**Known gap, stated rather than papered over.** The interlock catches arming
+with food inside. It cannot catch arming correctly and then loading the van a
+week later. Today that is a blue blinking LED and a checklist line; the
+engineered fix is Phase 4, where `van-vehicle` running on switched ignition
+makes key-on a signal that clears the mode.
+
+**Reopen if:** the parked standby measurement (SOC slope over 48h with AC off)
+shows van-core's own draw dominating in winter. The next lever is duty-cycled
+deep sleep, and it costs the web UI and the BLE link between wakes — not worth
+designing before that number exists.
+
+---
+
+## 2026-08-24 — D-10: the UI opens from a home-screen icon, and the AP deliberately reports "no internet"
+
+**Problem.** Reaching the UI meant: join the van AP by hand, dismiss the phone's
+"this network has no internet" nag, open a browser, type `192.168.4.1/ui`. Four
+steps, one of which is typing an IP address in the dark.
+
+That splits into two unrelated problems, and they were solved separately.
+
+### Home-screen app — decided: manifest + iOS meta, no service worker
+
+`ui/index.html` now carries a web app manifest, an `apple-touch-icon` and the
+`apple-mobile-web-app-*` meta tags. `tools/pack_ui.py` packs the manifest and a
+generated icon (`tools/make_icon.py`, deterministic, same palette as the page)
+into flash alongside the page; `van_ui` serves them at `/van-ui/*`.
+
+Cost: **13.7 kB of flash in total, +3.2 kB over the page alone.** On 16 MB that
+is not a number worth thinking about, and nothing new runs at runtime — it is
+three more rows in a string-compare table on a handler that already existed.
+
+- **iOS gets the real thing.** Add to Home Screen launches full-screen, no URL
+  bar, no tab. Apple never required a secure context for this.
+- **Android gets a shortcut, not a WebAPK.** Chrome gates installability on
+  HTTPS, and this node serves plain http on a SoftAP with no CA and no clock to
+  validate a certificate against. A self-signed cert trades the URL bar for a
+  security interstitial, which is worse. `ACCEPTED`.
+- **No service worker**, for the same secure-context reason, and none is wanted:
+  the page is already served from flash on the same origin as the API it drives.
+
+### Captive portal — decided: fail validation, do not spoof internet
+
+`captive_portal:` already runs a catch-all DNS server, so every OS connectivity
+probe (`/generate_204`, `/hotspot-detect.html`, `/connecttest.txt`, …) lands on
+this node. `van_ui` now claims those paths and answers them with a small landing
+page — deliberately *not* the 204 / `Success` body the OS is looking for.
+
+| | Fail validation (**chosen**) | Spoof internet (rejected) |
+|---|---|---|
+| Phone's default data route | stays on cellular | **switches to the van AP** |
+| Rest of the phone while at the van | works normally | **no internet at all** |
+| Nagging | one "stay connected?" per phone | none |
+| Getting into the UI | tap the "sign in to network" notification | type the IP |
+
+Spoofing wins on nagging and loses on everything that matters: an AP that claims
+internet and has none makes the phone useless for anything else while parked at
+the van. The tap-through is a better answer than the silent auto-join, and the
+home-screen icon removes the typing regardless.
+
+The landing page is a **signpost, not the app**. A captive sheet is a stripped
+WKWebView the OS closes when it feels like it; running the real UI inside one is
+a way to lose state mid-tap. It shows one big link out to the real browser, the
+Add-to-Home-Screen instruction that makes this a one-time ritual, and a line
+saying the missing internet is expected.
+
+`captive_landing: false` in `nodes/van-core.yaml` hands those URLs back to
+ESPHome's own captive_portal.
+
+**Consequence:** `/ui` now answers unconditionally, even under `at_root: true`,
+because `ui/portal.html` hard-codes `http://192.168.4.1/ui` — the captive sheet
+sees whatever hostname the probe asked for, so a relative link would bookmark
+`connectivitycheck.gstatic.com` to the home screen.
+
+**`VERIFY` on hardware during the soak:**
+- Handler order against `captive_portal`. `van_ui` registers at
+  `setup_priority::WIFI + 1`, i.e. first, so it should win the probe paths —
+  but AsyncWebServer order is registration order, and this has not been seen on
+  the device yet.
+- That Android actually offers the notification rather than silently dropping
+  to cellular, and that iOS's sheet renders the landing page.
+- Whether the standalone iOS app keeps the SSE connection alive across a
+  backgrounding, or reconnects cleanly. If it does not, the page needs a
+  `visibilitychange` reconnect.

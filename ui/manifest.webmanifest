@@ -1,0 +1,19 @@
+{
+  "name": "van-core",
+  "short_name": "van",
+  "description": "Van energy supervisor",
+  "start_url": "http://192.168.4.1/ui",
+  "scope": "http://192.168.4.1/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b0f14",
+  "theme_color": "#0b0f14",
+  "icons": [
+    {
+      "src": "http://192.168.4.1/van-ui/icon.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -17,6 +17,10 @@ This file is just how to build and test it.
 | `nodes/van-core-soak.yaml` | The 24h BLE + SoftAP + web + display + SD stability test. **Run this first.** |
 | `common/base.yaml` | Logger, OTA, web server, diagnostics. Shared by every node. |
 | `tools/fbot_probe.py` | Laptop-side BLE client. Protocol validation and 24h logging with no microcontroller. |
+| `ui/index.html` | The web UI that replaces the BrightEMS app. One self-contained file: no framework, no build step, no asset from the internet. |
+| `components/van_ui/` | Serves that page, gzipped, from flash on the web server ESPHome already runs. |
+| `tools/pack_ui.py` | Packs `ui/index.html` into `components/van_ui/van_ui_html.h`. Run it after every UI edit. |
+| `tools/mock_core.py` | A fake van-core on the laptop. Same `/events` + REST surface, so the UI is developed and tested with no hardware. |
 
 ## Test the arbiter (no hardware needed)
 
@@ -29,7 +33,8 @@ is plain and portable.)
 
 Builds with `g++ -Wall -Wextra -Werror` and runs ~50 assertions in under a
 second: fail-safe paths, thermostat hysteresis, anti-short-cycle, sleep-mode
-coasting, the manual timer, surplus hysteresis, the Phase 4 drive inhibit, and
+coasting, the manual timer, surplus hysteresis, the Phase 4 drive inhibit,
+parked mode and its arming interlock, and
 the 49.7-day `millis()` rollover.
 
 Two real bugs have already been caught here rather than in a van — see
@@ -52,6 +57,88 @@ cd nodes && cp secrets.yaml.example secrets.yaml
 ```bash
 cd nodes && esphome compile van-core.yaml
 ```
+
+## The web UI
+
+Two pages are served, on purpose:
+
+| URL | What |
+|---|---|
+| `http://192.168.4.1/ui` | The custom UI. Power, fridge and the arbiter's reasoning, all the tunables, diagnostics. |
+| `http://192.168.4.1/` | Stock ESPHome UI. Kept as the fallback that lists every entity when the custom page is wrong about one. |
+| `http://192.168.4.1/van-ui/portal` | The captive landing page, as the phone sees it. |
+
+It is a **view**. It never decides anything: it drives the same request flags
+the kitchen button drives, and the arbiter stays the single writer of
+`ac_switch`.
+
+### Setting up a phone (once)
+
+The AP is a network with no internet, so the phone will say so. That is
+deliberate — see `docs/decisions.md` D-10. It keeps mobile data as its default
+route, so the rest of the phone still works while parked at the van.
+
+1. Join the van AP. When the phone asks, **stay connected** despite no internet.
+   Android: also turn off "switch to mobile data automatically" for this
+   network.
+2. A **"Sign in to network"** notification appears — tap it. That is van-core's
+   landing page. Tap **Open van-core**.
+3. In the browser, **Add to Home Screen**.
+
+After that it is one tap on an icon. On iOS it launches full-screen with no URL
+bar; on Android it is a shortcut into Chrome, because Chrome only installs a
+real web app over HTTPS and this node serves plain http.
+
+The phone auto-joins the AP from then on. Step 2 exists only for the first time
+and as the way back in if the icon is ever lost.
+
+To hand the connectivity-probe URLs back to ESPHome's own captive portal, set
+`captive_landing: false` under `van_ui:` in `nodes/van-core.yaml`.
+
+### Working on it without hardware
+
+```bash
+python tools/mock_core.py --fast 60
+```
+
+Then open `http://127.0.0.1:8080/`. The mock speaks ESPHome's `/events` SSE
+stream and `POST /<domain>/<object_id>/<action>`, so the page runs unchanged on
+the ESP32 afterwards. Edit `ui/index.html`, reload the browser — no rebuild.
+
+The states worth designing for are the broken ones, so they are one flag away:
+
+```bash
+python tools/mock_core.py --fault ble
+```
+
+`--fault ble | probe | flat | night` gives a dropped BLE link, a stale fridge
+probe, a 12% battery and a sleeping van.
+
+### Shipping a UI change
+
+```bash
+python tools/pack_ui.py
+```
+
+This regenerates `components/van_ui/van_ui_html.h`, which is committed. It packs
+four files — `index.html`, `portal.html`, `manifest.webmanifest` and `icon.png`
+— into ~14 kB of flash. The component hashes all four at codegen time and
+**fails the build** if you forgot — a firmware that flashes cleanly but ships
+last week's UI is a bad afternoon.
+
+The icon is generated, not committed as an opaque blob, so it cannot drift from
+the page's palette:
+
+```bash
+python tools/make_icon.py
+```
+
+### After the first flash
+
+Open **Diag > All entities**. Anything in amber is an entity the page does not
+know about. If something the page needs is missing, the entity id is wrong:
+fix it in the single `ENTITIES` block at the top of the `<script>`, nowhere
+else.
 
 ## Flashing and OTA, without a router
 

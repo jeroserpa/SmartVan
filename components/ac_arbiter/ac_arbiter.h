@@ -55,6 +55,7 @@ class AcArbiter : public PollingComponent {
 
   // --- wiring, set from codegen ---
   void set_fridge_temperature(sensor::Sensor *s);
+  void set_cabin_temperature(sensor::Sensor *s);
   void set_output_power(sensor::Sensor *s);
   void set_input_power(sensor::Sensor *s);
   void set_battery_level(sensor::Sensor *s);
@@ -68,6 +69,19 @@ class AcArbiter : public PollingComponent {
   void manual_press() { core_.manual_press(millis()); update(); }
   void manual_cancel() { core_.manual_cancel(millis()); update(); }
 
+  // --- parked mode ---
+  // Guarded: returns false if the interlock says this still looks like a
+  // loaded, running fridge. The YAML caller is responsible for putting its
+  // switch back OFF and telling the user why.
+  bool park_request(bool force = false) {
+    const bool ok = core_.park_request(millis(), force);
+    update();
+    return ok;
+  }
+  // Restore-from-flash path only (see arbiter_core.h).
+  void set_parked(bool on) { core_.set_parked(millis(), on); update(); }
+  void park_exit() { core_.park_exit(millis()); update(); }
+
   // --- outputs for display / web / logging ---
   bool ac_on() const { return core_.outputs().ac_on; }
   bool force_on() const { return core_.outputs().force_on; }
@@ -75,6 +89,9 @@ class AcArbiter : public PollingComponent {
   bool manual_req() const { return core_.outputs().manual_req; }
   bool surplus_req() const { return core_.outputs().surplus_req; }
   bool manual_warning() const { return core_.outputs().manual_warning; }
+  bool parked() const { return core_.outputs().parked; }
+  bool park_refused() const { return core_.outputs().park_refused; }
+  uint32_t parked_for_s() const { return core_.outputs().parked_for_s; }
   uint32_t manual_remaining_s() const { return core_.outputs().manual_remaining_s; }
   const char *reason() const { return van::ac_reason_str(core_.outputs().reason); }
 
@@ -84,6 +101,7 @@ class AcArbiter : public PollingComponent {
   van::ArbiterCore core_;
 
   FreshValue fridge_temp_;
+  FreshValue cabin_temp_;
   FreshValue output_power_;
   FreshValue input_power_;
   FreshValue soc_;

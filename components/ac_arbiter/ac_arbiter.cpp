@@ -14,6 +14,9 @@ static const uint32_t REASSERT_MS = 60000;
 void AcArbiter::set_fridge_temperature(sensor::Sensor *s) {
   s->add_on_state_callback([this](float v) { this->fridge_temp_.set(v); });
 }
+void AcArbiter::set_cabin_temperature(sensor::Sensor *s) {
+  s->add_on_state_callback([this](float v) { this->cabin_temp_.set(v); });
+}
 void AcArbiter::set_output_power(sensor::Sensor *s) {
   s->add_on_state_callback([this](float v) { this->output_power_.set(v); });
 }
@@ -29,6 +32,13 @@ void AcArbiter::setup() {
   this->core_.begin(millis());
   // Fail toward powered from the first millisecond, before any sensor has had
   // a chance to report and before BLE has connected.
+  //
+  // A van rebooting in parked mode therefore pulses AC on for the fraction of
+  // a second before the parked switch restores from flash and calls
+  // set_parked(). That is the correct trade: the alternative is holding AC off
+  // until a flash read completes, which puts a storage feature on the fridge's
+  // critical path. Accepted; visible in the log as an ON immediately followed
+  // by OFF (parked).
   if (this->ac_switch_ != nullptr)
     this->ac_switch_->turn_on();
 }
@@ -43,6 +53,10 @@ void AcArbiter::update() {
 
   in.temp_valid = this->fridge_temp_.valid(this->sensor_max_age_ms_);
   in.fridge_temp_c = this->fridge_temp_.value();
+  // Cabin ambient updates slowly (30s), so it gets its own generous window.
+  // It feeds the parked-mode arming interlock and nothing else.
+  in.cabin_valid = this->cabin_temp_.valid(this->sensor_max_age_ms_ * 3);
+  in.cabin_temp_c = this->cabin_temp_.value();
   in.power_valid = this->output_power_.valid(this->sensor_max_age_ms_);
   in.output_power_w = this->output_power_.value();
   in.input_power_valid = this->input_power_.valid(this->sensor_max_age_ms_);
@@ -80,6 +94,10 @@ void AcArbiter::dump_config() {
                 c.compressor_idle_ms / 1000u);
   ESP_LOGCONFIG(TAG, "  min on/off: %u / %u s", c.min_on_ms / 1000u, c.min_off_ms / 1000u);
   ESP_LOGCONFIG(TAG, "  sensor max age: %u s", this->sensor_max_age_ms_ / 1000u);
+  ESP_LOGCONFIG(TAG, "  parked arm interlock: cabinet within %.1f C of cabin",
+                c.parked_arm_delta_c);
+  if (this->core_.parked())
+    ESP_LOGW(TAG, "  PARKED: AC held off and the fail-safe is disarmed");
 }
 
 }  // namespace ac_arbiter
