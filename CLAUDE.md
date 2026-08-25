@@ -89,8 +89,12 @@ under 2W total.
 - **MiBoxer E2-WR** LED controllers (dual-white/CCT, WiFi+BLE+2.4G RF, Tuya).
   Tuya WiFi side requires internet to provision → unusable in the van as-is.
   The 2.4GHz RF side works standalone. See §7 for the three routes.
-- **Resistive water level sender** with analogue gauge (AliExpress kit).
-  Resistance range **unverified** — see §8.
+- **Two resistive water level senders** with analogue gauges (AliExpress kit) —
+  one for the **fresh** tank, one for the **grey** tank. Both fit on the single
+  ADS1115 already budgeted, so the second tank costs one resistor: see §9
+  Phase 2 and BOM D5.
+  Resistance ranges **unverified, and must be measured separately** — nominally
+  identical senders are not necessarily identical parts. See §8.7.
 
 ### To acquire
 - ESP32-WROOM devkits (classic ESP32, *not* C3 — the ESP-FBot BLE component is
@@ -145,6 +149,8 @@ under 2W total.
     reference thermometer, settle for a few hours, record the offset to the wall
     sensor. That single number is what makes the food-safety ceiling meaningful.
 - ADS1115 (water level ADC — the ESP32 internal ADC is too nonlinear/noisy).
+  **One chip covers both tanks**: fresh, grey and an excitation-rail sense on
+  three of its four channels.
 - **Athom ESPHome-preflashed smart plug (16A EU)** for the water heater — see BOM
   D1e. Ships with ESPHome, so no flashing, no cloud, no router. Uses the wall
   socket and heater plug already in place; the 230V install is not modified.
@@ -189,7 +195,8 @@ actually breaks out. Needed: SPI (display), SDMMC (card), I2C (RTC), 1-Wire,
 plus three buttons. The S3 has plenty of pins in principle; the header may not
 expose them all.
 
-Display pages: SOC/power → fridge temp + arbiter state → water → diagnostics.
+Display pages: SOC/power → fridge temp + arbiter state → water (fresh + grey,
+binding constraint first — §9 Phase 2) → diagnostics.
 Blank after 60s of no input.
 
 **Risk:** BLE client + SoftAP + web server + display on one ESP32 can starve the
@@ -232,7 +239,7 @@ No router. `van-core` runs SoftAP; other nodes join it as WiFi clients with
 |---|---|---|
 | `van-core` | beside fridge / P310 | BLE→P310, fridge + cabin DS18B20, manual AC button + LED, AC arbiter, heater permit rules, water-temp estimator, SoftAP, web UI |
 | `van-heater` | wall socket by the heater | ESPHome-preflashed plug: relay + power metering. **Only powered while the inverter is on** — expected, see BOM D1e |
-| `van-water` | beside tank | level sender (ADS1115), future pump control |
+| `van-water` | between the tanks | fresh + grey level senders (one ADS1115), tank cross-check, future pump control |
 | `van-vehicle` | engine bay / dash | ignition + D+ sense, alternator charge limiting (future) |
 
 Static addressing: `192.168.4.1` (core AP), `.10` water, `.11` vehicle,
@@ -703,14 +710,26 @@ Ordered by how much they'd change the design.
    lever in this project is downstream of it.** If measured duty cycle exceeds
    ~45% in mild weather, poor condenser airflow is the first suspect, not the
    fridge.
-7. **Water sender resistance range.** Measure at empty and full. Almost
-   certainly either **0–190Ω (European/VDO)** or **240–33Ω (US/GM)**. Determines
-   the divider resistor (220Ω for the 0–190Ω type).
-8. **E2-WR internals** — single-chip or Tuya-module-plus-MCU (see §7C).
-9. **E2-WR idle power**, unprovisioned.
-10. **2.4GHz link quality with the inverter under load** — decides whether the
+7. **Water sender resistance range — measure both senders, separately.** At
+   empty and full. Almost certainly either **0–190Ω (European/VDO)** or
+   **240–33Ω (US/GM)**. Determines the divider resistor (220Ω for the 0–190Ω
+   type). Two senders out of the same bag can still be different parts, and a
+   240–33Ω sender read with a curve fitted to a 0–190Ω one reads *backwards* —
+   which the §9 cross-check would report as a tank swap. Record both curves in
+   `docs/measurements.md` against the tank each is fitted to.
+8. **Grey tank: capacity, geometry and location.** Litres, and whether it is
+   internal or underslung — see §9 Phase 2. Decides the cable run, whether
+   freezing is in scope, and how nonlinear the sender curve is near the ends.
+   `VERIFY` before ordering cable.
+9. **Grey sender fouling rate.** The one genuinely new failure mode the grey
+   tank adds (§9 Phase 2). Not answerable up front — it is a "re-read the
+   cross-check log after a month of use" question, and the answer decides
+   whether the capacitive-strip retrofit is ever bought.
+10. **E2-WR internals** — single-chip or Tuya-module-plus-MCU (see §7C).
+11. **E2-WR idle power**, unprovisioned.
+12. **2.4GHz link quality with the inverter under load** — decides whether the
     RS485 escape hatch gets pulled forward.
-11. **van-core's own standby draw in parked mode.** With AC off, the only loads
+13. **van-core's own standby draw in parked mode.** With AC off, the only loads
     left are the node and the station's own base consumption — and the
     station's share is precisely what `tools/fbot_probe.py idle-test` exists to
     separate out (§8.2). Until both numbers exist, how long a van can sit
@@ -841,13 +860,114 @@ no crimp tool for field repairs.
   > 85% **and** charging or strong sun — keep heating to times when someone is
   present. **That constraint now does safety work as well as energy work: do not
   relax it, and never heat during sleep mode.**
-- `van-water`: level sender via ADS1115. **No heater involvement** — it reduces
-  to the tank sender alone.
-- Sender conditioning: excite through a MOSFET/GPIO only during a reading (DC
-  through a submerged sender corrodes the wiper), median filter ~30 samples,
-  `throttle_average: 60s` (sloshing while driving makes raw readings useless),
-  calibrate with `calibrate_linear` against **actual litres poured**, not the
-  nominal curve — these senders are rarely linear near the ends.
+- `van-water`: **two** level senders — **fresh and grey** — on one ADS1115.
+  **No heater involvement** — it reduces to the two tank senders alone.
+- Sender conditioning, identical on both channels: excite through a
+  MOSFET/GPIO only during a reading (DC through a submerged sender corrodes the
+  wiper), median filter ~30 samples, `throttle_average: 60s` (sloshing while
+  driving makes raw readings useless), calibrate with `calibrate_linear` against
+  **actual litres poured**, not the nominal curve — these senders are rarely
+  linear near the ends. For grey, "poured" means measured litres down the sink
+  with the dump valve shut; the procedure is the same.
+
+### Grey water tank — `ADDED 2026-08-25`
+
+Two senders are owned, so both tanks get instrumented. **The second tank costs
+one resistor**, because the ADC, the node, the enclosure and the excitation
+gate are all already there for the first — which is the whole argument for
+doing it now rather than "later".
+
+**Channel map on the single ADS1115** (address 0x48, single-ended):
+
+| Ch | Signal | Why |
+|---|---|---|
+| A0 | Fresh sender | |
+| A1 | Grey sender | |
+| A2 | **Excitation rail sense** | Makes the reading *ratiometric* — level comes from `V_sender / V_excite`, so supply droop and the 3.3V regulator's tolerance cancel instead of appearing as a level change |
+| A3 | spare | |
+
+A0/A1 single-ended is right **only if both senders get their own return wire
+back to the node's ground star point.** If either grounds through its tank
+flange to the chassis, use the two differential pairs (A0–A1, A2–A3) instead:
+Phase 4 puts up to 100A of alternator current through that chassis, and tens of
+mV of ground drop is ~3% of tank on a 0–190Ω sender. Differential costs the
+ratiometric channel; a chassis-grounded sender is worth more to fix at the
+sender than to compensate in the ADC. `VERIFY` at install.
+
+At 3.3V excitation through a 220Ω divider, a 0–190Ω sender spans 0–1.53V. PGA
+`±2.048V` → 62.5 µV/LSB, i.e. ~0.004% of tank per count. **The sender is the
+error term, not the ADC** — which is why the calibration is poured litres and
+not arithmetic.
+
+**One MOSFET gates both senders.** Readings are taken in the same burst —
+excite, let it settle, sweep the mux, de-excite — so a second gate buys
+nothing. Grey water is a *better* electrolyte than fresh (dissolved soap,
+salts, organics), so wiper corrosion is worse on that channel, not better:
+the gating is more load-bearing on grey than on the tank it was specified for.
+
+#### What actually differs from the fresh tank
+
+1. **The semantics invert, and that is a UI problem before it is a firmware
+   problem.** Fresh: low is bad. Grey: high is bad. Two independent bars invite
+   the user to read the reassuring one and get surprised by the other, so the
+   display leads with the **binding constraint**:
+   `usable = min(fresh remaining, grey headroom)`, in litres, with which tank
+   is binding named next to it. The two raw levels stay available underneath.
+2. **Fouling is the one genuinely new failure mode.** Soap scum, grease and
+   food solids coat a resistive float; it sticks, typically reading full or
+   parked mid-scale. This is *the* known failure of grey level sensing in RVs,
+   and it is a when, not an if. The response is **detection, not avoidance** —
+   see the cross-check below. Mount the sender away from the drain inlet so it
+   is not sitting under the splash.
+3. **A stuck sender must not be able to take the water away.** See the pump
+   interlock below.
+4. **Location decides the rest.** Underslung: longer run, wet and salty
+   environment, and freezing is in scope; internal: neither. Currently
+   `UNVERIFIED` — §8.8. The fresh sender's "<1m run, no shielding needed"
+   finding does **not** transfer to the grey channel until that is known.
+
+#### The cross-check — free, and it earns its keep
+
+Between dumps, grey should rise by roughly what fresh falls, minus what is
+drunk, cooked with, or drained outside. So `van-water` integrates both and
+flags divergence:
+
+| Symptom | Reading |
+|---|---|
+| Fresh falls, grey flat | Fresh leak, or **grey sender stuck** — the fouling failure above |
+| Grey rises, fresh flat | Inflow (rain into an open vent), or **fresh sender stuck** |
+| Fresh rises while grey falls | **The two plugs are swapped**, or one sender is a 240–33Ω part read with a 0–190Ω curve (§8.7) |
+
+That last row is why no keying scheme is specified for the two sender
+connectors: both are 2-wire, so BOM item 18's "key by pin count" trick cannot
+separate them, and the cross-check catches a swap on the first use of the sink
+— loudly, and without extra hardware. Colour the two plugs anyway; do not rely
+on it.
+
+**State the limits honestly:** two ±5%-class senders averaged over 60s detect
+gross divergence over hours. This finds a stuck float and a swapped plug. It
+does **not** find a slow drip, and must not be described on the display as leak
+detection.
+
+#### Pump interlock (Phase 2b) — fails toward **PERMITTING** the pump
+
+The RV convention is to inhibit the fresh pump when grey is full. **Rejected as
+a hard cut here**, and per §5.2 the direction is stated rather than assumed:
+
+- Overflowing grey is a nuisance and possibly a fine.
+- No water in a van is a real problem, at an unknown hour, possibly nowhere.
+- A fouled or disconnected grey sender reading full is **likely**, not
+  hypothetical (point 2 above).
+
+So a grey sender that is high, stale, or missing raises a **warning** — display
+plus buzzer — and never opens the pump circuit. If a hard cut is ever wanted it
+needs two independent conditions to agree, and it still expires on a timeout,
+like the drive inhibit in Phase 4.
+
+#### Node autonomy (§5.1) is unchanged
+Both levels, the cross-check and the warnings are computed on `van-water` from
+its own two ADC channels. Nothing here reads the network; core is told, not
+asked.
 - **Future: estimated water temperature on the display.** The heater tank is a
   sealed, isolated 230V unit — no draw-off during heating, so no unmodeled
   disturbance. Lumped thermal-capacitance model:
@@ -1085,7 +1205,7 @@ but charge decisions use voltage sensing, not key position (see above).
      until the battery is flat two days later.
   2. **"Manual AC still on" warning** — leaving the inverter armed after cooking
      and driving off is exactly the failure a cabin display can catch.
-  3. SOC, fridge state, water level.
+  3. SOC, fridge state, water — the binding tank, not two bars (§9 Phase 2).
 - **Graceful degradation:** values come from polling `van-core` across several
   metres of van build. Show stale readings greyed out with an age indicator
   rather than blanking, and never let a missing reading stall the node's own

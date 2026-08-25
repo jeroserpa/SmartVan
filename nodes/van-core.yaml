@@ -966,6 +966,10 @@ display:
                       id(arbiter)->parked_for_s() / 86400.0f);
 
       # --- page 3: water (van-water, Phase 2) ---
+      # Two tanks, fresh and grey. When this page is filled in it leads with the
+      # binding constraint - min(fresh remaining, grey headroom) - and names
+      # which tank is binding, because two independent bars invite reading the
+      # reassuring one. Raw levels go underneath. See CLAUDE.md 9 Phase 2.
       - id: page_water
         lambda: |-
           it.printf(4, 0, id(font_small), "WATER");

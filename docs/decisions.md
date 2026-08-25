@@ -286,3 +286,59 @@ sees whatever hostname the probe asked for, so a relative link would bookmark
 - Whether the standalone iOS app keeps the SSE connection alive across a
   backgrounding, or reconnects cleanly. If it does not, the page needs a
   `visibilitychange` reconnect.
+
+---
+
+## 2026-08-25 — D-11: the grey tank is a second channel, and its sender is trusted only as far as the cross-check allows
+
+**Decision.** `van-water` reads **two** senders — fresh and grey — on the one
+ADS1115. Both levels are computed and published locally; neither can inhibit
+anything. What the grey channel *does* drive is a warning and a running
+plausibility check against the fresh channel.
+
+**Why the second tank was not deferred.** Every expensive part of tank sensing
+is a fixed cost already paid by the first tank: the node, the ADC, the buck,
+the enclosure, the gland, and the poured-litres calibration ritual. The grey
+tank adds one divider resistor and one cable run. Deferring it saves nothing
+and guarantees the enclosure is opened twice. Both senders are already owned.
+
+**Why the reading is treated as suspect.** A resistive float in grey water
+fouls — soap, grease, food solids — and the characteristic failure is a stuck
+reading, not a missing one. `FreshValue`-style staleness detection (D-02) does
+not catch it: the ADC keeps returning a perfectly fresh, perfectly wrong
+number. So freshness is not sufficient here and a second, independent argument
+is needed.
+
+**The cross-check is that argument.** Between dumps, grey should rise by
+roughly what fresh falls. Divergence separates the three failures that all look
+identical on a single bar:
+
+| Symptom | Reading |
+|---|---|
+| Fresh falls, grey flat | Fresh leak, or grey float stuck |
+| Grey rises, fresh flat | Inflow, or fresh float stuck |
+| Fresh rises, grey falls | Plugs swapped, or one sender is a 240–33Ω part read with a 0–190Ω curve |
+
+The third row is why no connector keying is specified for the senders: both are
+2-wire, so BOM's key-by-pin-count rule cannot express the difference, and the
+cross-check catches a swap on the first use of the sink. This is the same
+preference as D-09 — an engineered detection beats a procedural instruction —
+but applied one level down: the error is not prevented, it is made loud.
+
+**What it explicitly does not claim.** Two ±5%-class senders averaged over 60s
+resolve gross divergence over hours. That finds a stuck float and a swapped
+plug. It does not find a slow drip, and the display must not call it leak
+detection.
+
+**Fail-safe direction — opposite to the RV convention.** The usual rule is to
+cut the fresh pump when grey reads full. Here a grey sender that is high,
+stale, or missing **warns and never opens the pump circuit**: overflowing grey
+is a nuisance, no water in a van at an unknown hour is not, and a fouled grey
+sender is the expected failure rather than a hypothetical one. §5.2's "fail
+toward powered" happens to give the right answer for this path too, but for its
+own reason, which is why it is written down rather than inherited.
+
+**Reopen if:** the cross-check log shows the float sticking often enough to be
+noise rather than signal. The fix is an external capacitive strip on the grey
+tank — a different voltage source into the same ADC channel, so no design
+change, only a recalibration. Buy it then, not now (BOM D5).

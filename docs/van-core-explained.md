@@ -461,7 +461,8 @@ Two carry meaning in their limits rather than their defaults:
 
 ### `display:` — four pages
 
-Battery → fridge/arbiter → water (Phase 2 stub) → diagnostics. Cycled by the
+Battery → fridge/arbiter → water (Phase 2 stub — fresh and grey, binding tank
+first) → diagnostics. Cycled by the
 bezel button; the first press only wakes, because cycling pages on a dark screen
 is useless.
 
