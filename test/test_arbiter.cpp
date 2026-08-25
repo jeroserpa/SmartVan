@@ -172,17 +172,22 @@ static void test_failsafe() {
     CHECK(!s.tick().ac_on);
   }
 
-  CASE("unreadable power sensor never releases the inverter early");
+  // D-03 still holds, but it is now about the *early* release only: with the
+  // block scheduler, temperature releases on its own authority and does not
+  // consult the power register at all.
+  CASE("unreadable power never triggers the compressor-stopped early release");
   {
     Sim s;
     s.settle();
     s.in.fridge_temp_c = 9.0f;
     s.run(10 * SEC);
     CHECK(s.core.outputs().fridge_req);
-    s.in.fridge_temp_c = 2.0f;
+    // Still above the floor, so nothing but a stopped compressor could end the
+    // block this early - and unknown power must not be read as stopped.
+    s.in.fridge_temp_c = 6.0f;
     s.in.power_valid = false;  // BLE up but the power register is not arriving
-    s.run(30 * MIN);
-    CHECK(s.core.outputs().fridge_req);  // unknown power counts as compressor busy
+    s.run(15 * MIN);
+    CHECK(s.core.outputs().fridge_req);
   }
 }
 
@@ -213,27 +218,92 @@ static void test_fridge() {
     CHECK(s.core.outputs().reason == AcReason::FRIDGE);
   }
 
-  CASE("release needs cold AND quiet AND minimum on-time, all three");
+  // THE regression test for PATCHES P2 / ANALYSIS 4.1. This appliance has a
+  // variable-speed inverter compressor: it modulates for hours and at high
+  // ambient never stops, so output_power never falls quiet. The old release
+  // required quiet, so fridge_req latched true forever and the inverter ran
+  // 24/7 - the project's entire saving, silently zero. The block timer must end
+  // the block with the compressor still drawing and the cabinet still warm.
+  CASE("an inverter compressor that never stops still gets its block ended");
   {
     Sim s;
     s.settle();
     s.in.fridge_temp_c = 8.0f;
+    s.in.output_power_w = 30.0f;  // and it stays there. It always stays there.
     s.run(10 * SEC);
     CHECK(s.core.outputs().fridge_req);
 
-    // Compressor running, pulling the temperature down.
-    s.in.output_power_w = 35.0f;
-    s.run(9 * MIN);
-    s.in.fridge_temp_c = 3.0f;
-    s.run(1 * MIN);
-    CHECK(s.core.outputs().fridge_req);  // cold and settled, but still drawing
+    // Modulating away, cabinet coming down but not to the floor.
+    s.in.fridge_temp_c = 5.0f;
+    CHECK(s.run(20 * MIN).fridge_req);  // run_block_ms is 30 min
+    const ArbiterOutputs &o = s.run(11 * MIN);
+    CHECK(!o.fridge_req);
+    CHECK(!o.ac_on);
+  }
 
-    s.in.output_power_w = 5.0f;  // compressor stops
-    s.run(60 * SEC);
-    CHECK(s.core.outputs().fridge_req);  // 90s debounce not yet elapsed
-    s.run(45 * SEC);
-    CHECK(!s.core.outputs().fridge_req);
-    CHECK(!s.core.outputs().ac_on);
+  CASE("a run block ends on any of cold, the block timer, or a stopped compressor");
+  {
+    // (a) cold, while still drawing: temperature releases on its own authority.
+    Sim a;
+    a.settle();
+    a.in.fridge_temp_c = 8.0f;
+    a.run(10 * SEC);
+    a.in.output_power_w = 35.0f;
+    a.run(9 * MIN);
+    a.in.fridge_temp_c = 3.0f;
+    CHECK(!a.run(2 * MIN).fridge_req);
+
+    // (b) the compressor genuinely stopping, cabinet still above the floor.
+    // Strategy A, salvaged - taken when available, never required.
+    Sim b;
+    b.settle();
+    b.in.fridge_temp_c = 8.0f;
+    b.run(10 * SEC);
+    b.in.output_power_w = 35.0f;
+    b.run(11 * MIN);
+    b.in.fridge_temp_c = 6.0f;
+    CHECK(b.run(1 * MIN).fridge_req);
+    b.in.output_power_w = 5.0f;
+    CHECK(b.run(60 * SEC).fridge_req);  // 90s debounce not yet elapsed
+    CHECK(!b.run(45 * SEC).fridge_req);
+  }
+
+  CASE("the schedule starts a block with the cabinet inside the deadband");
+  {
+    Sim s;
+    s.settle();  // t = 2 min
+    // 5 C: below the 7 C ceiling, above the 4 C floor. The old thermostat would
+    // sit here indefinitely; the scheduler banks cold on its own initiative.
+    s.in.fridge_temp_c = 5.0f;
+    // A real draw, not the rig's 0 W default - at 0 W the compressor reads as
+    // permanently stopped and the early release pre-empts the schedule. This
+    // appliance draws ~30 W continuously (measurements.md M6).
+    s.in.output_power_w = 30.0f;
+    // begin() back-dates fridge_since_ms_ by min_off (D-04), so the rest block
+    // is measured from t = -20 min and expires at t = 10 min.
+    CHECK(!s.run(5 * MIN).fridge_req);  // t = 7 min
+    CHECK(s.run(5 * MIN).fridge_req);   // t = 12 min
+  }
+
+  CASE("coasting has no schedule, so a quiet night stays quiet");
+  {
+    Sim s;
+    s.settle();
+    s.in.sleep_mode = true;
+    s.in.fridge_temp_c = 5.0f;  // under the 6 C sleep ceiling
+    s.in.output_power_w = 30.0f;
+    // Two full rest blocks pass and nothing starts. This is P3: sleep mode is
+    // no longer suppressing cycles the appliance chose, it is simply the
+    // supervisor declining to schedule any.
+    CHECK(!s.run(70 * MIN).fridge_req);
+  }
+
+  CASE("no scheduled block while the cabinet is already at the target");
+  {
+    Sim s;
+    s.settle();
+    s.in.fridge_temp_c = 2.0f;  // below the floor: nothing to gain
+    CHECK(!s.run(90 * MIN).fridge_req);
   }
 
   CASE("minimum on-time holds even if the fridge is already cold");
@@ -260,10 +330,12 @@ static void test_fridge() {
     s.run(12 * MIN);
     CHECK(!s.core.outputs().fridge_req);
     s.in.fridge_temp_c = 8.0f;  // door left open
-    s.run(2 * MIN);
-    CHECK(!s.core.outputs().fridge_req);  // 5 min minimum off
-    s.run(4 * MIN);
+    s.run(15 * MIN);
+    CHECK(!s.core.outputs().fridge_req);  // min_off is 20 min, sized to the block
+    s.run(6 * MIN);
     CHECK(s.core.outputs().fridge_req);
+    // And the 10 C hard override is the safety net that makes a 20 min lockout
+    // acceptable - covered by the next case.
   }
 
   CASE("hard override beats the anti-short-cycle timer");

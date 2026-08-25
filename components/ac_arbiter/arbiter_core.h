@@ -30,16 +30,28 @@ struct ArbiterConfig {
   float sleep_ceiling_c = 6.0f; // raised ceiling while coasting
   float sleep_target_c = 1.0f;  // when a coast cycle does run, go all the way down
 
-  // --- compressor-satisfied detection ---
-  // The tail between compressor stop and inverter shutdown is pure idle waste,
-  // incurred every cycle; 90s is debounce, not caution. Push it lower once the
-  // 24h log exists.
+  // --- opportunistic early release (ANALYSIS 4.2 "Strategy A") ---
+  // The compressor genuinely stopping is worth acting on, but it is NOT the
+  // release condition. This fridge has a variable-speed inverter compressor: it
+  // modulates for hours and at high ambient never stops at all, so a release
+  // that *required* a quiet compressor could never fire and latched fridge_req
+  // true forever (ANALYSIS 4.1). It is now one of several ways a run block can
+  // end, never the only one.
   float compressor_idle_w = 15.0f;
   uint32_t compressor_idle_ms = 90u * 1000u;
 
+  // --- block schedule (ANALYSIS 4.2 "Strategy B") ---
+  // The supervisor picks the cycles; the appliance no longer does. Both lengths
+  // are `UNVERIFIED` - they follow from the coast rate and the pulldown penalty,
+  // neither of which is measured yet. 30 min is the low end of the 20-30 min
+  // floor in CLAUDE.md section 6: an inverter compressor dislikes restarts, and
+  // the pressure-equalisation penalty scales with cycle *count*, so err long.
+  uint32_t run_block_ms = 30u * 60u * 1000u;
+  uint32_t rest_block_ms = 30u * 60u * 1000u;
+
   // --- cycle shaping ---
-  uint32_t min_on_ms = 10u * 60u * 1000u; // do not release before this
-  uint32_t min_off_ms = 5u * 60u * 1000u; // anti-short-cycle
+  uint32_t min_on_ms = 10u * 60u * 1000u;  // do not release before this
+  uint32_t min_off_ms = 20u * 60u * 1000u; // anti-short-cycle, sized to the block
 
   // --- manual (cooking) button ---
   uint32_t manual_initial_ms = 45u * 60u * 1000u;

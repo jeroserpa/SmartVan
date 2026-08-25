@@ -163,8 +163,16 @@ const ArbiterOutputs &ArbiterCore::tick(uint32_t now_ms, const ArbiterInputs &in
   return out_;
 }
 
-// Fridge thermostat. The only consumer that is allowed to be slow and boring:
-// prefer fewer, longer cycles, and never short-cycle the compressor.
+// Fridge block scheduler. `REWRITTEN 2026-08-25` per docs/PATCHES.md P2 and
+// ANALYSIS section 4 - this was a compressor follower, and there is nothing to
+// follow. The appliance has a variable-speed inverter compressor that modulates
+// against accumulated heat for hours and at high ambient never stops, so the old
+// release condition (output_power quiet for 90s) could never be satisfied and
+// the inverter stayed on permanently, saving nothing.
+//
+// So the supervisor picks the cycles now. Temperature is an override ceiling
+// rather than the primary input - the inversion is the point of the rewrite.
+// Prefer fewer, longer blocks: the restart penalty scales with cycle count.
 void ArbiterCore::update_fridge_(uint32_t now_ms, const ArbiterInputs &in) {
   if (!in.temp_valid)
     return;  // hold the previous request; force_on is already covering this
@@ -189,21 +197,64 @@ void ArbiterCore::update_fridge_(uint32_t now_ms, const ArbiterInputs &in) {
   const float floor_c = coasting ? cfg_.sleep_target_c : cfg_.temp_off_c;
 
   if (!out_.fridge_req) {
-    if (in.fridge_temp_c > ceiling && elapsed(now_ms, fridge_since_ms_, cfg_.min_off_ms)) {
+    // Anti-short-cycle first: nothing starts a block before the rest floor,
+    // except the hard override, which returned above.
+    if (!elapsed(now_ms, fridge_since_ms_, cfg_.min_off_ms))
+      return;
+
+    // Two ways in. The ceiling is the safety net; the schedule is the normal
+    // path and is suppressed while coasting, which is what makes sleep mode
+    // "pre-cool, then nothing until the ceiling" rather than a cycle count.
+    const bool too_warm = in.fridge_temp_c > ceiling;
+    const bool scheduled = !coasting && elapsed(now_ms, fridge_since_ms_, cfg_.rest_block_ms) &&
+                           in.fridge_temp_c > floor_c;
+    // The floor test on `scheduled` matters: starting a block on a cabinet
+    // already at target would burn min_on_ms of inverter for no cooling, every
+    // rest period, forever.
+    if (too_warm || scheduled) {
       out_.fridge_req = true;
       fridge_since_ms_ = now_ms;
     }
     return;
   }
 
-  // Release needs all three: cold enough, compressor quiet long enough, and
-  // the inverter having been up long enough to be worth having started.
-  const bool cold = in.fridge_temp_c < floor_c;
-  const bool quiet = elapsed(now_ms, compressor_busy_ms_, cfg_.compressor_idle_ms);
+  // --- running: when does the block end? ---
   const bool settled = elapsed(now_ms, fridge_since_ms_, cfg_.min_on_ms);
-  if (cold && quiet && settled) {
+  if (!settled)
+    return;
+
+  const bool cold = in.fridge_temp_c < floor_c;
+
+  // A run that started as the hard override runs properly back down to the
+  // floor: once it has been let go that far, ending on a block timer would
+  // leave it barely inside the safe band and straight back at the ceiling.
+  if (out_.fridge_hard) {
+    if (cold) {
+      out_.fridge_req = false;
+      out_.fridge_hard = false;
+      fridge_since_ms_ = now_ms;
+    }
+    return;
+  }
+
+  // Coasting has no block schedule, so its only exit is reaching the target -
+  // and the target is the deep one, to maximise the coast that follows.
+  if (coasting) {
+    if (cold) {
+      out_.fridge_req = false;
+      fridge_since_ms_ = now_ms;
+    }
+    return;
+  }
+
+  // Normal running. Any one of three ends the block - note OR, not AND. The
+  // compressor-stopped term is the salvaged Strategy A: worth taking when this
+  // fridge does stop (it does, at low ambient), but never required, because
+  // requiring it is precisely the bug this rewrite exists to remove.
+  const bool block_done = elapsed(now_ms, fridge_since_ms_, cfg_.run_block_ms);
+  const bool compressor_stopped = elapsed(now_ms, compressor_busy_ms_, cfg_.compressor_idle_ms);
+  if (cold || block_done || compressor_stopped) {
     out_.fridge_req = false;
-    out_.fridge_hard = false;
     fridge_since_ms_ = now_ms;
   }
 }

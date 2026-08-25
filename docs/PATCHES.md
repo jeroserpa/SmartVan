@@ -3,12 +3,18 @@
 Not applied automatically: I don't have the repo. These are the edits the
 2026-08-18 log and the fridge identification require. Ordered by severity.
 
+**Status 2026-08-25.** P1, P2 and P3 are **APPLIED** — P2 in code as well as
+prose, with the block scheduler in `components/ac_arbiter/` and its regression
+test in `test/`. P4–P8 remain outstanding: P4 and P5 partly overtaken by the
+§8 rewrites for the water work, P6 (reopening the 12V fridge) and P7/P8 (BOM)
+still to do.
+
 Rationale for each lives in `docs/measurements.md` (M1–M8) — the edits below
 should reference it rather than restate it.
 
 ---
 
-## P1 — §1 Problem statement: replace the figures table
+## P1 — §1 Problem statement: replace the figures table — `APPLIED 2026-08-25`
 
 The fridge is an **ESSENTIELB ERT85-55mib6 with an inverter compressor**.
 Everything in §1 that assumes a cycling fixed-speed compressor is wrong.
@@ -36,7 +42,7 @@ That is a stronger case for the project than the original framing, not weaker.
 Replace the saving table with the M8 estimates, and mark the 15% pulldown
 penalty `UNVERIFIED` in bold — the entire saving rests on it.
 
-## P2 — §6 arbiter: `fridge_req` becomes a scheduler — **the big one**
+## P2 — §6 arbiter: `fridge_req` becomes a scheduler — **the big one** — `APPLIED 2026-08-25, code included`
 
 `fridge_req` was specified to follow the compressor. There is nothing to
 follow. Rewrite as a block scheduler with a temperature guard:
@@ -53,7 +59,7 @@ follow. Rewrite as a block scheduler with a temperature guard:
 - The DS18B20 is now **more** important, not less: with no compressor signal to
   read, temperature is the only feedback the arbiter has.
 
-## P3 — §6 Sleep mode: simplify
+## P3 — §6 Sleep mode: simplify — `APPLIED 2026-08-25`
 
 Sleep mode gets easier, not harder. It is no longer an attempt to suppress
 cycles the fridge chooses — the supervisor chooses them. A pre-cool block

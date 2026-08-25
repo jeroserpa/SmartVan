@@ -415,3 +415,55 @@ since the station would hold the inverter up with the node unplugged entirely.
 inverter to cycle and no remote command in the safety path, so this whole
 failure class stops existing rather than being managed — which is a point in
 that option's favour that the energy comparison alone does not capture.
+
+---
+
+## 2026-08-25 — D-13: the fridge block scheduler, and why the release is OR not AND
+
+**The defect.** `fridge_req` released only when `cold && quiet && settled`,
+where `quiet` meant `output_power` under 15W for 90s. The fridge is an
+ESSENTIELB ERT85-55mib6 with a **variable-speed inverter compressor**: it
+modulates against accumulated heat for hours and at high ambient does not stop
+at all (measurements.md M6, duty cycle `CONFIRMED` 100%). So `quiet` could never
+become true, `fridge_req` latched on permanently, and the inverter would have
+run 24/7 — **the project's entire saving, silently zero.** Specified in
+PATCHES P2 as "the big one" and unapplied in code until now.
+
+**Why the test suite did not catch it.** The rig's baseline is
+`output_power_w = 0.0f`, i.e. a fridge drawing nothing, which makes `quiet`
+permanently true. Every fridge test passed against a fixed-speed appliance that
+stops — the one the project does not own. Two of the new tests now set a
+realistic continuous draw, and one is named for the failure directly.
+
+**Decision.** `fridge_req` is a run/rest block scheduler with temperature as an
+override ceiling. The supervisor picks the cycles; the appliance no longer does.
+
+- A block **starts** on either the ceiling (safety net) or the schedule (normal
+  path). The schedule additionally requires the cabinet to be above the floor —
+  without that, every rest period would burn `min_on_ms` of inverter cooling a
+  cabinet already at target.
+- A block **ends** on **any** of: cold, the block timer, or the compressor
+  genuinely stopping. The last of these is ANALYSIS's "Strategy A" kept as an
+  opportunistic win rather than a requirement.
+- `min_off_ms` moves 5 → 20 min, sized to the block. An inverter compressor
+  dislikes restarts and the equalisation penalty scales with cycle *count*.
+  The 10 °C hard override is what makes a 20 min lockout safe: it beats the
+  anti-short-cycle timer outright, and has a test saying so.
+
+**Strategy A vs B was a false choice.** ANALYSIS §4.2 framed them as
+alternatives to be decided by the overnight log. They compose: with an `OR`
+release, a night where the compressor does stop is harvested for free, and a
+day where it never stops is still cycled. The overnight measurement now tunes
+rest-block length instead of selecting an architecture — which also means the
+implementation was never actually blocked on it, only the numbers were.
+
+**What stays unmeasured, and it is the number that matters.** The **pulldown
+penalty of imposed cycling**, estimated 15–30%, never measured. Both block
+lengths ship as `UNVERIFIED` 30 min defaults and are exposed as `number`
+entities. Break-even against the full ~48W station overhead is an 89% penalty
+so the margin is large; break-even against *inverter idle alone* at 50% duty
+and a 20% penalty is ~11W, and if `idle-test` returns below that the answer is
+a 12V compressor fridge instead.
+
+**Reopen if:** `idle-test` puts inverter idle under ~11W (see P6, the reopened
+12V fridge decision), or the A/B test puts the pulldown penalty far above 30%.

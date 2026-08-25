@@ -649,6 +649,9 @@ number:
     on_value:
       - lambda: id(arbiter)->config().sleep_target_c = x;
 
+  # Opportunistic early release only (ANALYSIS 4.2 Strategy A). This fridge's
+  # inverter compressor modulates rather than stopping, so this will rarely
+  # fire - and it must never be the only way a block ends. See PATCHES P2.
   - platform: template
     name: "Compressor idle threshold"
     id: num_compressor_idle_w
@@ -701,12 +704,48 @@ number:
     min_value: 1
     max_value: 60
     step: 1
-    initial_value: 5
+    # Sized to the block, not the old 5 min. An inverter compressor dislikes
+    # frequent restarts and the equalisation penalty scales with cycle count.
+    # The 10 C hard override is what makes a 20 min lockout safe - it beats
+    # this timer outright.
+    initial_value: 20
     optimistic: true
     restore_value: true
     entity_category: config
     on_value:
       - lambda: id(arbiter)->config().min_off_ms = (uint32_t)(x * 60000);
+
+  # --- block schedule. The two numbers the whole saving turns on, and both
+  # are UNVERIFIED: they follow from the coast rate (section 8.5) and the
+  # pulldown penalty, neither of which is measured. Tune these first once the
+  # A/B test exists. ---
+  - platform: template
+    name: "Fridge run block"
+    id: num_run_block_min
+    unit_of_measurement: "min"
+    min_value: 10
+    max_value: 120
+    step: 5
+    initial_value: 30
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value:
+      - lambda: id(arbiter)->config().run_block_ms = (uint32_t)(x * 60000);
+
+  - platform: template
+    name: "Fridge rest block"
+    id: num_rest_block_min
+    unit_of_measurement: "min"
+    min_value: 10
+    max_value: 240
+    step: 5
+    initial_value: 30
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value:
+      - lambda: id(arbiter)->config().rest_block_ms = (uint32_t)(x * 60000);
 
   - platform: template
     name: "Manual AC duration"

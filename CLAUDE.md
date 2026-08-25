@@ -13,52 +13,62 @@ and no internet in the van**.
 The van's fridge is a 230V domestic unit. Running it means the AFERIY P310's
 3300W inverter is on 24/7.
 
-### Measured / stated figures
+### Measured / stated figures — `REVISED 2026-08-20`, see `docs/ANALYSIS-2026-08-20.md`
+
+The fridge is an **ESSENTIELB ERT85-55mib6 with a variable-speed inverter
+compressor.** Everything this section used to say assumed a cycling fixed-speed
+one, and was wrong in the direction that matters.
 
 | Quantity | Value | Confidence |
 |---|---|---|
-| Inverter idle draw | **35W** | manufacturer figure, `UNVERIFIED` in situ |
-| Fridge draw **while compressor runs** | **35W AC** | stated |
-| Fridge duty cycle | **UNKNOWN** | *the critical unknown — see §8.3* |
-| Usable capacity | ~3500Wh of 3840Wh | assumed reserve |
+| Compressor type | **Variable-speed inverter** | `CONFIRMED` from model spec |
+| Station overhead, AC on | **~48W** | `MEASURED` 2026-08-18, M2 |
+| — of which inverter idle | **UNKNOWN** | `ac` was never commanded off; `tools/fbot_probe.py idle-test` splits it |
+| Fridge draw, continuous | **24W @ 27 °C, 32–34W earlier** | `MEASURED`, M6 |
+| Fridge duty cycle | **100% — it does not cycle** | `CONFIRMED`, M6 |
+| Rated consumption | 114 kWh/yr = 13W avg | manufacturer, EU test cycle |
+| Power-failure autonomy | 9 h | manufacturer |
+| Usable capacity | **~3900 Wh** | `MEASURED` via energy balance, M2 |
 | Observed autonomy | 1.5–2 days with cooking | includes cooking + other loads |
 
-### Battery-side power states
+**The station overhead is nearly twice the load it supports.** ~48W of overhead
+to deliver ~27W battery-side of refrigeration. That is a *stronger* case for
+this project than the original "the idle equals the useful load" framing, not a
+weaker one — and it is measured rather than quoted from a datasheet.
 
-| State | DC draw |
-|---|---|
-| Inverter ON, compressor running | ~74W (35 idle + 35/0.9 conversion) |
-| Inverter ON, compressor off | 35W |
-| Inverter OFF | ~0W |
+### What this changed
 
-**The idle equals the useful load.** The fridge subsystem spends 35W of pure
-overhead to deliver 35W of refrigeration. The cheaper the compressor, the more
-completely the fixed idle dominates — which is what makes this project worth
-doing.
+The compressor does not cycle, so there is no duty cycle to follow and nothing
+to switch off between cycles. **The supervisor has to impose the cycles itself**
+— see §6 `fridge_req`, rewritten as a block scheduler, and ANALYSIS §4.
 
 ### The saving
 
-```
-saving = 35W × (fraction of time the inverter is OFF)
-```
+Imposed cycling, all ~50W assumed to be inverter idle, 20% pulldown penalty:
 
-At an assumed 35% duty cycle:
+| Inverter duty | Daily |
+|---|---|
+| Continuous (now) | 1.59 kWh |
+| 50% | 1.07 kWh |
+| 33% | 0.87 kWh |
 
-| | Now | Supervised |
-|---|---|---|
-| Fridge subsystem | ~49W → 1.17 kWh/day | ~28W → 0.66 kWh/day |
+**The `UNVERIFIED` number the whole saving rests on is the pulldown penalty of
+imposed cycling** — estimated 15–30%, never measured. Break-even against the
+full ~50W overhead is an **89% penalty**, so the margin is enormous; but
+break-even against *inverter idle alone* at 50% duty and a 20% penalty is
+**~11W**. If `idle-test` returns an idle below that, imposed cycling is not
+worth doing and the answer is a 12V compressor fridge instead (ANALYSIS §4.3,
+§5, and the reopened decision in `docs/decisions.md`).
 
-**~43% cut on the fridge subsystem.** Overall autonomy gain is smaller
-(~35–40%) because cooking is a large share of the remaining budget.
+**Measure the penalty before tuning block lengths.** Everything downstream is
+arithmetic on a number nobody has yet.
 
-Duty cycle scales this directly. In a van at 35 °C in August, duty could be
-50–60% rather than 35%, shrinking the saving proportionally. **Measure it before
-tuning anything.**
+The fridge is **not** being replaced — pending the pulldown measurement, which
+could reopen that (ANALYSIS §5). The fix is to duty-cycle the inverter.
 
-The fridge is **not** being replaced. The fix is to duty-cycle the inverter.
-
-**Target:** inverter duty ≈ fridge duty + <10% overhead, control-system standby
-under 2W total.
+**Target:** the lowest inverter duty the cabinet's coast will carry, with
+control-system standby under 2W total. Note this is no longer "fridge duty plus
+overhead": there is no fridge duty to add to.
 
 ---
 
@@ -367,11 +377,13 @@ swap stays cheap.
 
 ## 6. AC inverter arbiter — specification
 
-> **`PARTIALLY SUPERSEDED 2026-08-20.` Read `docs/ANALYSIS-2026-08-20.md`
-> before implementing anything in this section.** `fridge_req` below has been
-> rewritten; `P3` in `docs/PATCHES.md` (sleep mode) is specified but **not yet
-> applied**, and the thermal-budget table further down still assumes a cycling
-> fixed-speed compressor that this appliance does not have.
+> **`RECONCILED 2026-08-25.` `docs/ANALYSIS-2026-08-20.md` is still the
+> reasoning behind this section, but the patches it called for are now applied
+> here and in `components/ac_arbiter/`.** `fridge_req` is a block scheduler
+> (P2), sleep mode is the scheduler with its schedule switched off (P3), and
+> the thermal-budget table premised on a cycling compressor is gone rather than
+> restated. What remains outstanding is measurement, not specification: the
+> block lengths are `UNVERIFIED` defaults.
 
 Three independent request flags, ORed by a single 5s interval, with a fail-safe
 override on top.
@@ -416,7 +428,10 @@ A wedged-but-open link was previously invisible here: the local probe kept the
 thermostat running happily and it went on commanding a switch nobody was
 listening to.
 
-### `fridge_req` — `REWRITTEN 2026-08-20`, see `docs/ANALYSIS-2026-08-20.md` §4
+### `fridge_req` — `REWRITTEN 2026-08-20, IMPLEMENTED 2026-08-25`
+
+See `docs/ANALYSIS-2026-08-20.md` §4 for the reasoning and
+`components/ac_arbiter/arbiter_core.cpp` for the state machine.
 
 **This section previously specified `fridge_req` as a follower of the
 compressor. There is nothing to follow.** The fridge is an
@@ -459,14 +474,24 @@ signature of cooling state, cabinet temperature is the arbiter's *only*
 feedback channel. The two primary probes are required; the optional third
 (free-air, door detection) stays optional.
 
-**`BLOCKED` on two measurements before any of this is implemented:**
+**The state machine is implemented; the *numbers* are still blocked.** Both
+block lengths ship as `UNVERIFIED` defaults (30 min each) and the two
+measurements below are what turn them into engineering rather than guesses:
 1. **`tools/fbot_probe.py idle-test`** — splits the measured ~50 W station
    overhead into inverter idle and station base load. Below ~11 W of inverter
    idle, imposed cycling stops paying and the answer is a 12 V compressor
    fridge instead (ANALYSIS §4.3, §5).
-2. **Overnight log** — how long the fridge stays off once it stops, which
-   decides Strategy A (follow the compressor's own stops, which do occur at
-   low ambient) versus Strategy B (impose blocks).
+2. **Overnight log** — how long the fridge stays off once it stops. This no
+   longer decides Strategy A *versus* Strategy B: the implementation takes both,
+   because there was never a reason to choose. A block ends on **any** of cold,
+   the block timer, or the compressor genuinely stopping — so a night where the
+   compressor does stop is harvested for free, and a day where it never stops
+   is still cycled. The measurement now tunes rest-block length rather than
+   selecting an architecture.
+
+   **The old spec required the compressor to stop, and that was the bug.**
+   Requiring it on an appliance that never stops meant `fridge_req` latched
+   true forever and the inverter ran 24/7. `OR`, not `AND`.
 
 The **pulldown penalty of imposed cycling is `UNVERIFIED`** and the entire
 Strategy B saving rests on it. Estimated 15–30 %; measure it with the A/B test
@@ -499,35 +524,39 @@ water heater. **Suppressed entirely during sleep mode.**
 ### Sleep mode
 
 The P310 lives under the bed. Its fan cycles because of heat generated by the
-**35W idle**, which runs all night regardless of whether the compressor ever
-starts. Sleep mode is therefore not primarily about suppressing compressor
-cycles — it is about removing the continuous idle heat source. This is likely
-the single biggest quality-of-life win in the project.
+**~48W station overhead** (`MEASURED`, §1), which runs all night regardless of
+what the fridge is doing. Sleep mode is therefore not primarily about
+suppressing compressor cycles — it is about removing the continuous idle heat
+source. This is likely the single biggest quality-of-life win in the project.
 
-**Goal: at most one compressor cycle between roughly 23:00 and 06:00.**
-Zero is not achievable without added thermal mass, which is **rejected — the
-volume is needed for food.** The food itself is the thermal mass.
+**`SIMPLIFIED 2026-08-20` — see `docs/PATCHES.md` P3. Sleep mode got easier,
+not harder.** It used to be an attempt to suppress cycles the appliance chose.
+The appliance chooses nothing now (§6 `fridge_req`): the supervisor picks the
+blocks, so sleep mode is just **a pre-cool block, then no scheduled blocks
+until morning.** No new machinery — it is the ordinary scheduler with its
+schedule switched off and its ceiling raised.
 
 Sequence:
-1. **Pre-cool** in the hour before sleep, while noise is irrelevant: drive the
-   fridge to 1 °C.
-2. **Coast** through the night with a raised ceiling (6–8 °C, configurable).
-3. **If the ceiling is reached**, run a full cycle back down to 1 °C — not to the
-   normal 4 °C setpoint. Same single run, maximum remaining coast; often turns
-   two cycles into one.
-4. **Exit** on schedule or button press; normal thresholds resume.
+1. **Pre-cool** in the hour before sleep, while noise is irrelevant: run a
+   block down to 1 °C.
+2. **Coast** through the night. No scheduled blocks at all; only the raised
+   ceiling (6–8 °C, configurable) can start one.
+3. **If the ceiling is reached**, the run goes all the way back to 1 °C — not to
+   the normal 4 °C setpoint. Maximum remaining coast from a single run.
+4. **Exit** on schedule or button press; the normal schedule resumes.
 
-Thermal budget (order-of-magnitude, verify by test — §8.5). Coast length varies
-with how full the fridge is:
+The old "at most one compressor cycle" goal is retired: it was framed around an
+appliance that cycles on its own. The goal now is simply **no scheduled block
+between roughly 23:00 and 06:00**, which the supervisor controls outright. The
+only thing that can break the silence is the ceiling, and that is a food
+decision, not a scheduling one.
 
-| Contents | Heat capacity | 1 → 8 °C | Coast at ~25W leak |
-|---|---|---|---|
-| Well stocked (~20 kg) | ~70 kJ/K | 490 kJ ≈ 136 Wh | ~5.4 h |
-| Half full (~10 kg) | ~35 kJ/K | 245 kJ ≈ 68 Wh | ~2.7 h |
-| Nearly empty | — | — | ~1 h |
-
-**The real comparison is not "one cycle vs zero" but "one 15-minute cycle vs
-35W of continuous idle heat and uncontrolled fan cycling all night."**
+**Coast budget: `UNVERIFIED` pending the dT/dt measurement (§8.5).** The old
+table here assumed a ~25W heat leak and produced coast times of 1–5.4h
+depending on fill. Those numbers were never measured and the assumed leak came
+from the same fixed-speed-compressor model that §1 has now discarded, so they
+are removed rather than restated. The adaptive prediction below measures the
+real figure every night for free — which is the honest way to fill this in.
 
 ### Adaptive prediction
 Measure dT/dt over the first 30 min of coast, extrapolate to the ceiling, and
