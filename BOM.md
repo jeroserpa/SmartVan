@@ -44,16 +44,16 @@ Phase 1; D1's "item 20" was ambiguous as a result.)
 | # | Item | Qty | ~€ | Notes |
 |---|---|---|---|---|
 | 22 | **ESP32-C3 SuperMini** — already owned | 1 | 0 | Replaces the WROOM-32 devkit. D0 rules the SuperMinis out for `van-core` but clears them "as sensor nodes" — no BLE here, and the load is I²C + three GPIOs. **`VERIFY` RSSI at the installed position first:** the C3 SuperMini's PCB antenna is poorly matched (same radio weakness D0 cites for the C6) and this node holds a SoftAP link across a metal-bodied van. Fall back to a WROOM-32 devkit (€7) if margin is thin |
-| 23 | ADS1115 16-bit ADC module | 1 | 4 | ESP32 internal ADC is too nonlinear for the sender. **One chip serves both tanks** — A0 fresh, A1 grey, A2 excitation-rail sense (ratiometric), A3 spare. See D5 |
+| 23 | ADS1115 16-bit ADC module | 1 | 4 | ESP32 internal ADC is too nonlinear for the sender. **One chip serves both tanks** — A0 fresh, A1 grey, A2/A3 the two excitation rails (ratiometric, and it cancels the driving pin's drop). Single-ended is `CONFIRMED` valid: both senders have their own returns, neither grounds through its tank flange. See D5 |
 | 24 | Divider resistor for sender | **2** | — | One per tank. **Value pending §8.7 measurement, taken on each sender separately.** 220Ω if 0–190Ω. Fresh run **confirmed <1m — no shielding needed**; the grey run is `UNVERIFIED` until the tank location is (§8.8) |
 | 24b | **Resistive level sender — grey tank** | 1 | 0 | **Already owned** — the second of the two senders in §2. See D5 |
 | 24c | 2-core cable + IP67 inline connector, grey sender run | 1 | 4 | Only if the grey tank is underslung (§8.8). Internal tank: offcuts of item 30 |
-| 25 | Logic-level MOSFET (AO3400 / 2N7000) | 1 | 1 | Gates sender excitation for **both** senders — one burst, one gate. Continuous DC corrodes a submerged wiper, and grey water is the better electrolyte of the two |
+| 25 | ~~Logic-level MOSFET (AO3400 / 2N7000)~~ | — | 0 | **Deleted 2026-08-25 — not needed.** Excitation is 15 mA worst case (3.3V, 220Ω divider, sender at 0Ω), which an ESP32-C3 pin sources directly. One pin per sender, excited in sequence, idle pin driven **low** not high-Z. The pin's drop under load cancels in the ratiometric A2/A3 reading. See CLAUDE.md §9 Phase 2 |
 | 26 | **Athom ESPHome-preflashed smart plug, 16A EU** | 1 | 15 | **Chosen — see D1e.** Heater switching + power metering. Ships with ESPHome: no flashing, no cloud, no router. Uses the existing wall socket and heater plug; nothing in the 230V install is modified. `VERIFY` 16A rating and that metering is exposed. Fallback: hardwired Shelly Plus 1PM (~€25) |
 | 27 | Buck 12V→5V 3A + fuse holder + fuses | 1 | 7 | |
 | 28 | ABS enclosure IP65 + glands | 1 | 7 | |
 | 29 | Automotive relay 30A + socket (future pump) | 1 | 4 | Phase 2b. **12V DC contacts — never repurpose one for the 230V heater** |
-| | **Subtotal** | | **~52** | Includes the €4 grey run; ~48 if the grey tank is internal |
+| | **Subtotal** | | **~51** | Includes the €4 grey run; ~47 if the grey tank is internal |
 
 Cabin temperature is **not** listed here — it lives on `van-core` (item 2's
 ambient probe). See D1d for what that implies for the estimator.
@@ -299,9 +299,10 @@ all.**
 | Water-temp estimator | `van-core` — commands the heater, has `T_cabin`, reads `P_heater` |
 | Tank level senders (fresh + grey) | `van-water` |
 
-So `van-water` reduces to SuperMini + ADS1115 + sender excitation — now for
-two senders rather than one (D5), which changes nothing structural. Its heater
-GPIO, the coil driver and the separate cabin probe are all deleted.
+So `van-water` reduces to SuperMini + ADS1115 + two divider resistors — now
+for two senders rather than one (D5), which changes nothing structural, and
+with excitation driven straight off two GPIOs (item 25). Its heater GPIO, the
+coil driver and the separate cabin probe are all deleted.
 
 The estimator having all three inputs on one node is worth more than it looks:
 no cross-node staleness to reason about, and it runs on the node that owns the

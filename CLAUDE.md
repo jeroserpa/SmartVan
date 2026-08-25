@@ -883,27 +883,58 @@ doing it now rather than "later".
 |---|---|---|
 | A0 | Fresh sender | |
 | A1 | Grey sender | |
-| A2 | **Excitation rail sense** | Makes the reading *ratiometric* — level comes from `V_sender / V_excite`, so supply droop and the 3.3V regulator's tolerance cancel instead of appearing as a level change |
-| A3 | spare | |
+| A2 | **Fresh excitation rail sense** | Makes the reading *ratiometric* — level comes from `V_sender / V_excite`, so supply droop, regulator tolerance and the driving pin's own drop cancel instead of appearing as a level change |
+| A3 | **Grey excitation rail sense** | Each sender is excited by its own pin, so each needs its own rail reference |
 
 A0/A1 single-ended is right **only if both senders get their own return wire
-back to the node's ground star point.** If either grounds through its tank
-flange to the chassis, use the two differential pairs (A0–A1, A2–A3) instead:
-Phase 4 puts up to 100A of alternator current through that chassis, and tens of
-mV of ground drop is ~3% of tank on a 0–190Ω sender. Differential costs the
-ratiometric channel; a chassis-grounded sender is worth more to fix at the
-sender than to compensate in the ADC. `VERIFY` at install.
+back to the node's ground star point.** `CONFIRMED 2026-08-25` — both senders
+have return lines, neither grounds through its tank flange, so single-ended it
+is and all four channels are used as above.
+
+Recorded because it was a live question and the answer could change on a
+re-fit: had either sender grounded through its flange to the chassis, the two
+differential pairs (A0–A1, A2–A3) would be required instead — Phase 4 puts up
+to 100A of alternator current through that chassis, and tens of mV of ground
+drop is ~3% of tank on a 0–190Ω sender. That route costs the ratiometric
+channels, which is why fixing it at the sender beats compensating in the ADC.
 
 At 3.3V excitation through a 220Ω divider, a 0–190Ω sender spans 0–1.53V. PGA
 `±2.048V` → 62.5 µV/LSB, i.e. ~0.004% of tank per count. **The sender is the
 error term, not the ADC** — which is why the calibration is poured litres and
 not arithmetic.
 
-**One MOSFET gates both senders.** Readings are taken in the same burst —
-excite, let it settle, sweep the mux, de-excite — so a second gate buys
-nothing. Grey water is a *better* electrolyte than fresh (dissolved soap,
-salts, organics), so wiper corrosion is worse on that channel, not better:
-the gating is more load-bearing on grey than on the tank it was specified for.
+**Excitation is switched by a GPIO per sender — no MOSFET.** `REVISED
+2026-08-25.` This section previously specified one logic-level MOSFET gating
+both senders. **The MOSFET is not needed:** at 3.3V through a 220Ω divider the
+excitation current is **15 mA worst case** (sender at 0Ω; 13 mA for a 240–33Ω
+part at full), which an ESP32-C3 pin sources directly — ~20 mA is comfortable,
+40 mA the absolute maximum. The MOSFET was buying neither isolation nor current
+capability, and at 3.3V there is no level shift to do.
+
+- **One pin per sender, excited in sequence**, not one pin gating both. Keeps
+  pin current at 15 mA rather than 30, and each sender is read with the other
+  de-energised, so there is no crosstalk through the shared ground return.
+- **The pin's own drop under load is cancelled by A2/A3.** A GPIO high is not a
+  clean 3.3V at 15 mA, which would matter if the level came from an assumed
+  rail voltage. It comes from `V_sender / V_excite`, so the drop divides out —
+  this is the ratiometric channel earning its place a second time.
+- **Drive the idle pin LOW, never high-Z.** Low leaves the ADC node defined at
+  ~0V through the divider and 0V across the sender. An input-mode pin lets the
+  ADC node float and the reading becomes noise.
+
+**What the gating is actually for**, since it survives the MOSFET going away:
+continuous DC through a wetted wiper in an electrolyte erodes it. A ~0.5s
+excitation burst per 60s reading is **<1% duty**, so the charge through the
+sender drops by two orders of magnitude. Grey water is the *better* electrolyte
+(dissolved soap, salts, organics), so this is more load-bearing on grey than on
+the tank it was specified for.
+
+**`VERIFY` — the kit's analogue gauges must come off the senders.** A gauge is
+a coil in series with the sender across 12V, i.e. exactly the continuous DC
+this gating exists to avoid, and it will hold the sender energised whatever the
+ESP32 does. Keeping the gauges is a legitimate choice — they work with the node
+dead — but then the gating is decorative and should not be claimed as
+protection.
 
 #### What actually differs from the fresh tank
 
