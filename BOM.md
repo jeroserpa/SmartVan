@@ -50,10 +50,13 @@ Phase 1; D1's "item 20" was ambiguous as a result.)
 | 24c | 2-core cable + IP67 inline connector, grey sender run | 1 | 4 | Only if the grey tank is underslung (§8.8). Internal tank: offcuts of item 30 |
 | 25 | ~~Logic-level MOSFET (AO3400 / 2N7000)~~ | — | 0 | **Deleted 2026-08-25 — not needed.** Excitation is 15 mA worst case (3.3V, 220Ω divider, sender at 0Ω), which an ESP32-C3 pin sources directly. One pin per sender, excited in sequence, idle pin driven **low** not high-Z. The pin's drop under load cancels in the ratiometric A2/A3 reading. The gating itself now survives only as housekeeping — a sealed reed ladder has no wetted contact to corrode. See CLAUDE.md §9 Phase 2 |
 | 26 | **Athom ESPHome-preflashed smart plug, 16A EU** | 1 | 15 | **Chosen — see D1e.** Heater switching + power metering. Ships with ESPHome: no flashing, no cloud, no router. Uses the existing wall socket and heater plug; nothing in the 230V install is modified. `VERIFY` 16A rating and that metering is exposed. Fallback: hardwired Shelly Plus 1PM (~€25) |
+| 26b | **Digital tank gauge, button-powered** | 1 | 0 | **Already owned**, bought with the senders. Kept as a backup readout that works with the node dead, and as an independent second opinion during calibration. Momentary button = **zero standby**, so it is not on the §5.4 control budget. **Not simply paralleled** — see items 26c/26d and CLAUDE.md §9 Phase 2 |
+| 26c | 10kΩ series resistors + BAT54 Schottky + 100nF, per shared channel | 2 sets | 2 | **Protects the ADS1115 inputs from the gauge's 12V.** A reed ladder is open circuit between steps, so pressing the gauge button with the float mid-step puts 12V on the ADC node — over 3× the absolute maximum. 10k limits the fault to 1.2 mA; the Schottky clamps rather than relying on internal ESD diodes for a condition that recurs on every press |
+| 26d | DPDT momentary button (replaces the gauge's existing SPST) | 1 | 3 | One pole powers the gauge, the other flags a GPIO so firmware drops excitation and invalidates the channel for the window. Hardware protects the chip, firmware protects the data — neither carries the other's job |
 | 27 | Buck 12V→5V 3A + fuse holder + fuses | 1 | 7 | |
 | 28 | ABS enclosure IP65 + glands | 1 | 7 | |
 | 29 | Automotive relay 30A + socket (future pump) | 1 | 4 | Phase 2b. **12V DC contacts — never repurpose one for the 230V heater** |
-| | **Subtotal** | | **~51** | Includes the €4 grey run; ~47 if the grey tank is internal |
+| | **Subtotal** | | **~56** | Includes the €4 grey run and €5 of gauge interfacing; ~52 if the grey tank is internal |
 
 Cabin temperature is **not** listed here — it lives on `van-core` (item 2's
 ambient probe). See D1d for what that implies for the estimator.

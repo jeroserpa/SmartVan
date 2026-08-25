@@ -752,15 +752,22 @@ Ordered by how much they'd change the design.
    internal or underslung — see §9 Phase 2. Decides the cable run, whether
    freezing is in scope, and how nonlinear the sender curve is near the ends.
    `VERIFY` before ordering cable.
-9. **Grey sender fouling rate.** The one genuinely new failure mode the grey
+9. **The kit gauge's off-state input impedance.** Go/no-go for wiring it in
+   parallel with the ADC as a backup readout (§9 Phase 2). Meter its sender
+   terminal with the button released: megohms means it is invisible when off
+   and only the button window needs handling; a low resistance means it sits
+   permanently across the sender and the idea needs re-thinking rather than
+   protecting. Five minutes on the bench, before any of the protection parts
+   are fitted.
+10. **Grey sender fouling rate.** The one genuinely new failure mode the grey
    tank adds (§9 Phase 2). Not answerable up front — it is a "re-read the
    cross-check log after a month of use" question, and the answer decides
    whether the capacitive-strip retrofit is ever bought.
-10. **E2-WR internals** — single-chip or Tuya-module-plus-MCU (see §7C).
-11. **E2-WR idle power**, unprovisioned.
-12. **2.4GHz link quality with the inverter under load** — decides whether the
+11. **E2-WR internals** — single-chip or Tuya-module-plus-MCU (see §7C).
+12. **E2-WR idle power**, unprovisioned.
+13. **2.4GHz link quality with the inverter under load** — decides whether the
     RS485 escape hatch gets pulled forward.
-13. **van-core's own standby draw in parked mode.** With AC off, the only loads
+14. **van-core's own standby draw in parked mode.** With AC off, the only loads
     left are the node and the station's own base consumption — and the
     station's share is precisely what `tools/fbot_probe.py idle-test` exists to
     separate out (§8.2). Until both numbers exist, how long a van can sit
@@ -997,12 +1004,71 @@ senders are wiper types after all and the corrosion argument comes straight
 back — at which point the gating is protection again and the analogue gauges
 below stop being optional.
 
-**The kit's analogue gauges are now a free choice.** A gauge holds its sender
-energised from 12V continuously, which under the old wiper assumption defeated
-the gating entirely. With a sealed ladder it costs only the standing current in
-a circuit that is not on the control budget. Keep them if a level readout that
-works with the node dead is worth the wiring — that is a real benefit, and it
-no longer trades against sender life.
+#### The kit's gauge, in parallel — `YES, with three conditions`
+
+`ADDED 2026-08-25.` The kit's gauge is **digital and wired behind a momentary
+button**, so it is powered only when someone asks for a reading. That settles
+the standing-current objection outright: **zero draw when not pressed**, so it
+never appears on the §5.4 control budget, and the earlier worry about a gauge
+holding its sender energised from 12V continuously does not apply to this one.
+
+Keeping it is worth more than a spare readout:
+
+- **It works with the node dead**, which is the whole point of a backup, and it
+  needs neither the SoftAP nor a phone.
+- **It is an independent second opinion on the same sender.** During the
+  poured-litres calibration it interprets the identical resistance through
+  completely different hardware, which is exactly what catches a wrong step map
+  — an error no amount of self-consistency in the ESP32's own reading can
+  reveal.
+
+**But it must not simply be paralleled onto the ADC node.** Both the gauge and
+the divider land on the same sender terminal, and the gauge drives its own
+current from 12V:
+
+| Gauge state | Node voltage the ADS1115 sees |
+|---|---|
+| Off | Whatever its input presents unpowered — **`UNVERIFIED`, condition 1** |
+| On, sender at 190Ω | ~3.4V against a 3.6V absolute maximum. Marginal |
+| **On, sender open between reeds** | **12V. Over 3× the absolute maximum** |
+
+That last row is the one that matters, because on a reed ladder an open circuit
+between steps is a **normal state, not a fault** (§2). Left unprotected the
+input dies silently on some ordinary button press, and the sender gets blamed.
+
+**Condition 1 — measure the gauge's off-state input impedance before anything
+else.** With the button released, meter its sender terminal to ground and to
+its own supply. High impedance (megohms) means it is invisible to the ADC when
+off and only the button window needs handling. If it presents a low resistance
+instead, it sits permanently across the sender, shifts every reading, and the
+whole idea needs re-thinking rather than protecting. This is a five-minute
+go/no-go and it comes before the two below.
+
+**Condition 2 — protect the ADC input in hardware.** **10k in series** between
+the sender node and the ADS1115 pin limits a 12V fault to 1.2 mA, well inside
+the ±10 mA input limit, and it is negligible against the ADC's megohm-class
+input. Add an explicit **Schottky clamp to the 3.3V rail** rather than leaning
+on the ADS1115's internal ESD diodes: those exist for one-off events, and this
+condition recurs on every button press. A **100nF at the pin** is free while
+the resistor is there — with 10k it settles in 1 ms against a ~500 ms
+excitation burst, so it costs nothing and helps.
+
+**Condition 3 — the button switches both, and firmware is told.** Use a
+**DPDT** button: one pole powers the gauge, the other pulls a GPIO. Firmware
+then drops its own excitation and marks the channel invalid for the duration,
+so the window is a *known gap* rather than a corrupted sample.
+
+The split of responsibility is deliberate and matches §5: **the hardware
+protects the chip, the firmware protects the data.** Neither is load-bearing
+for the other's job — a firmware bug must never be able to destroy an input,
+and a stuck button must never be able to inject a plausible wrong level.
+
+**Worth noting how well this composes with the quantisation rules above.** With
+the ESP32's excitation off, its node sits at whatever the gauge is doing, which
+is out of band by construction — and out-of-band readings are already rejected
+rather than clamped. So the failure mode of forgetting condition 3 entirely is
+a rejected reading, not a believed one. That is not a reason to skip it, but it
+is the right direction to fail in.
 
 #### What actually differs from the fresh tank
 
