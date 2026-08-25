@@ -74,8 +74,8 @@ class AcArbiter : public PollingComponent {
   // Guarded: returns false if the interlock says this still looks like a
   // loaded, running fridge. The YAML caller is responsible for putting its
   // switch back OFF and telling the user why.
-  bool park_request(bool force = false) {
-    const bool ok = core_.park_request(millis(), force);
+  bool park_request() {
+    const bool ok = core_.park_request(millis());
     update();
     return ok;
   }
@@ -91,7 +91,7 @@ class AcArbiter : public PollingComponent {
   bool surplus_req() const { return core_.outputs().surplus_req; }
   bool manual_warning() const { return core_.outputs().manual_warning; }
   bool parked() const { return core_.outputs().parked; }
-  bool park_refused() const { return core_.outputs().park_refused; }
+  bool park_pending() const { return core_.outputs().park_pending; }
   uint32_t parked_for_s() const { return core_.outputs().parked_for_s; }
   uint32_t manual_remaining_s() const { return core_.outputs().manual_remaining_s; }
   const char *reason() const { return van::ac_reason_str(core_.outputs().reason); }

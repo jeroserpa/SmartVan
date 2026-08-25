@@ -394,13 +394,8 @@ table.raw td:first-child{color:var(--muted);padding-right:10px;word-break:break-
               data-confirm-on="Parked mode holds the inverter OFF and DISARMS the fail-safe: BLE loss, a dead probe and the 10 C override will all resolve to AC OFF. Only do this with the fridge emptied. Continue?"></button>
     </div>
     <div class="note" id="park_note">For the van standing at home with the fridge
-      emptied. This is the only mode that overrides the fail-safe, so arming is
-      refused while the cabinet still reads colder than the cabin.</div>
-    <div class="btnrow">
-      <button class="btn danger" id="btn_park_force">Park (force)</button>
-    </div>
-    <div class="note">Force bypasses the interlock. Needed when a probe is
-      unplugged, and wrong every other time.</div>
+      emptied. This is the only mode that overrides the fail-safe, so it asks
+      twice and never arms itself.</div>
   </div>
 </section>
 
@@ -442,7 +437,6 @@ table.raw td:first-child{color:var(--muted);padding-right:10px;word-break:break-
   <div class="card">
     <h2>Storage</h2>
     <div class="row" data-num="park_soc"><div class="lbl"><b>Parked charge max</b><small>calendar ageing vs reserve; solar-only here</small></div></div>
-    <div class="row" data-num="park_delta"><div class="lbl"><b>Arming interlock</b><small>refuse to park while the cabinet is this far below cabin</small></div></div>
   </div>
 
   <div class="card">
@@ -541,7 +535,6 @@ const E = {
   btn_man:        "button-manual_ac_start",
   btn_man_ext:    "button-manual_ac_extend",
   btn_man_cancel: "button-manual_ac_cancel",
-  btn_park_force: "button-park_force",
   btn_restart:    "button-van_core_restart",
 };
 
@@ -564,7 +557,6 @@ const NUMS = {
   sur_w:         ["number-surplus_margin",            50,  "W",   0],
   sur_soc:       ["number-surplus_minimum_soc",       5,   "%",   0],
   park_soc:      ["number-parked_charge_max",         5,   "%",   0],
-  park_delta:    ["number-parked_arm_delta",          0.5, "°C", 1],
 };
 
 /* --- state ------------------------------------------------------------- */
@@ -664,6 +656,13 @@ $$("[data-sw]").forEach(function (el) {
     if (el.dataset.confirm && next === false && !confirm(el.dataset.confirm)) return;
     if (el.dataset.confirmOn && next === true && !confirm(el.dataset.confirmOn)) return;
     cmd.sw(id, next);
+    // Parking is two-step in the arbiter (D-14): one request arms, a second
+    // inside the window commits. On the bezel that is two long presses. Here
+    // the modal above is the second human confirmation, so send the second
+    // request behind it rather than making the user flip the switch twice -
+    // three confirmations for one decision is how people learn to click
+    // through them without reading.
+    if (el.dataset.sw === "parked" && next === true) setTimeout(function () { cmd.sw(id, true); }, 250);
     el.setAttribute("aria-checked", String(next));  // optimistic; SSE corrects it
   };
 });
@@ -695,12 +694,6 @@ $$("[data-num]").forEach(function (row) {
 $("#btn_man").onclick        = function () { cmd.btn(E.btn_man); };
 $("#btn_man_ext").onclick    = function () { cmd.btn(E.btn_man_ext); };
 $("#btn_man_cancel").onclick = function () { cmd.btn(E.btn_man_cancel); };
-$("#btn_park_force").onclick = function () {
-  if (!confirm("Force parked mode, bypassing the empty-fridge interlock? " +
-               "The inverter will be held OFF with no fail-safe until cleared."))
-    return;
-  cmd.btn(E.btn_park_force);
-};
 $("#btn_restart").onclick    = function () {
   if (confirm("Restart van-core? The inverter is forced ON through the reboot."))
     cmd.btn(E.btn_restart);
@@ -819,14 +812,12 @@ function render() {
   $("#park_sub").textContent = parked
     ? "AC held off" + (pdays === null ? "" : " for " + pdays.toFixed(1) + " days")
     : "normal operation";
-  // Say what was actually refused, not a generic "cannot". The two numbers are
-  // the whole argument, and the user is standing next to both sensors.
+  // Nothing is inferred from the probes any more (D-14) - whether the fridge is
+  // empty is a fact only the owner has. What the note still owes them is the
+  // consequence, stated in full, at the moment it applies.
   $("#park_note").textContent = parked
     ? "Fail-safe DISARMED. BLE loss, a dead probe and the 10 C override all resolve to AC OFF until this is cleared."
-    : (ft !== null && ct !== null && ct - ft > (num("number-parked_arm_delta") || 3))
-      ? "Arming would be refused: cabinet " + ft.toFixed(1) + " C against cabin " +
-        ct.toFixed(1) + " C - that is a working fridge, so empty it first."
-      : "For the van standing at home with the fridge emptied. Arming is refused while the cabinet still reads colder than the cabin.";
+    : "For the van standing at home with the fridge emptied. Asks twice, and never arms itself - but it cannot tell whether the fridge is empty, so that part is on you.";
 
   var sleeping = bool("sw_sleep") === true;
   var ceil = num("number-sleep_ceiling");

@@ -467,3 +467,67 @@ a 12V compressor fridge instead.
 
 **Reopen if:** `idle-test` puts inverter idle under ~11W (see P6, the reopened
 12V fridge decision), or the A/B test puts the pulldown penalty far above 30%.
+
+---
+
+## 2026-08-25 — D-14: parked mode is confirmed twice, not inferred from temperatures
+
+**Supersedes the arming interlock of D-09.** The decision that parked mode
+inverts the fail-safe stands unchanged; what changes is the gate in front of
+it.
+
+**The interlock, and why it goes.** D-09 refused to arm while the cabinet read
+more than `parked_arm_delta` (3 °C) below cabin, on the theory that an emptied
+fridge equilibrates to ambient and a loaded one does not. Two problems, and the
+second is the one that decides it:
+
+1. **It inferred a fact only the owner has.** A cold cabinet is not evidence of
+   food. A fridge emptied an hour ago is still cold and would be refused; one
+   loaded with warm shopping reads near ambient and would be permitted. The
+   test correlates with the thing it wants to know far more weakly than its
+   confident phrasing implied.
+2. **It refused whenever either probe was missing** — and the remedy shipped in
+   the same commit was `Park (force)`, a button that bypassed the entire gate.
+   A guard with a documented bypass, needed often enough to be documented, is a
+   guard people learn to route through without reading. That is worse than no
+   guard, because it looks like protection in the design doc.
+
+**Decision.** `park_request()` is two-step: the first call arms, a second
+within `park_confirm_ms` (30s) commits. No temperature test, no probe
+requirement, no force button.
+
+- An unconfirmed arm **lapses**, and a lapsed arm can never be completed — the
+  next press arms afresh. A half-pressed button that an unrelated press an hour
+  later could finish is exactly the accident this is meant to prevent.
+- While armed, nothing has changed: AC arbitrates normally and the fail-safe is
+  still armed. The chirp and the `PARK? confirm to disarm fail-safe` line say
+  so, because this is the moment to change your mind.
+- **One decision gets at most two confirmations.** On the bezel that is two long
+  presses. In the web UI the modal spelling out the consequence *is* the second
+  confirmation, so the page sends the confirming request behind it rather than
+  demanding a third act — three dialogs for one decision is how people learn to
+  click through them.
+
+**What is genuinely lost, stated plainly.** Arming with a loaded, working
+fridge is no longer blocked. That was the interlock's one real catch. It is now
+carried by deliberateness — two acts, with the consequence stated in full — on
+the argument that a human who has just read "this DISARMS the fail-safe" and
+confirmed anyway knows something the thermometer does not.
+
+**Unchanged, and still the hazard that matters.** Park correctly, then load the
+van for a trip a week later and drive off. No entry gate has ever covered this,
+the interlock included. Phase 4 remains the real mitigation: `van-vehicle` runs
+on switched ignition, so key-on should clear parked mode.
+
+**One thing the removal quietly nearly broke.** D-09's persistence note said a
+switch `restore_mode` must not be used because it would re-run the interlock at
+boot against probes that have not reported, refuse, and silently un-park the
+van. The interlock is gone but the failure survives with a new mechanism: a
+boot-time `turn_on_action` now runs `park_request()`, which would merely *arm*
+and then lapse. Same silent un-park, different cause. The restore path stays
+separate (`set_parked()`, single-step and unconfirmed) for exactly this reason.
+
+**The 80% charge cap is unchanged and was already in place** — `Parked charge
+max`, default 80%, applied on entry and restored to 100% on exit. With the
+interlock removed it now applies on every successful park rather than only on
+one that passed the gate, which is a small strengthening rather than a change.

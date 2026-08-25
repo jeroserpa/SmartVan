@@ -608,21 +608,43 @@ dead probe, a starved loop and the 10 °C hard override all resolve to OFF.**
 arbiter is not protecting anything and cannot be argued out of it — so the only
 question that matters is whether the mode can be entered by mistake.
 
-#### Arming interlock
-An emptied fridge with its door propped open equilibrates to cabin ambient; a
-loaded, working one does not. **Refuse to arm while the cabinet reads more than
-`parked_arm_delta` (default 3 °C) below cabin.** Refuse equally when either
-probe is missing — *"I cannot tell whether there is food in there"* is a
-refusal, not a shrug. This is the whole reason the cabin DS18B20 stopped being
-a nice-to-have.
+#### Arming: manual, confirmed twice — `REVISED 2026-08-25`
 
-The refusal is audible (double chirp) and logged with both temperatures,
-because the screen is likely blank and the user is about to walk away believing
-the van is parked.
+**Parking is a human decision, and the arbiter does not second-guess it.** The
+gate is a **second, deliberate request within 30s**; the first only arms.
 
-`Park (force)` exists as a separate deliberate entity for when the interlock is
-wrong — an unplugged probe, a fridge already at room temperature for other
-reasons. It is not a flag on the switch: forcing it must always be a decision.
+- **Bezel:** two long presses. The switch reads its state from the arbiter, so
+  an armed-but-unconfirmed request still shows *off* and the second press lands
+  on the same gesture — nothing new to remember.
+- **Web UI:** the modal that spells out the consequence *is* the second
+  confirmation, so the page sends the confirming request behind it. One flip
+  plus one dialog, never three steps for one decision.
+- An arm that is not confirmed **lapses**, and a lapsed arm can never be
+  completed later — the next press arms afresh. A half-pressed button must not
+  be finishable by an unrelated press an hour on.
+- While armed: one chirp, the display wakes and says `PARK? confirm to disarm
+  fail-safe`, and **nothing has changed yet** — AC still arbitrates normally
+  and the fail-safe is still armed.
+
+**The temperature interlock is gone, and so is `Park (force)`.** The interlock
+refused to arm while the cabinet read more than 3 °C below cabin, inferring
+"there is food in there" from a cold cabinet. Two reasons it is not worth
+keeping — see `docs/decisions.md` D-14:
+
+1. **It guessed at a fact only the owner has.** A cold cabinet is not evidence
+   of food; a fridge emptied an hour ago is still cold, and one loaded with
+   warm shopping is not. It refused the correct action and permitted the
+   dangerous one about equally often.
+2. **It refused whenever either probe was missing**, which made a storage
+   feature depend on two sensors it does not otherwise need — and the fix for
+   that was `Park (force)`, an escape hatch that bypassed the whole gate. A
+   guard everybody learns to route around is not a guard.
+
+What is genuinely lost: arming with a loaded, working fridge is no longer
+blocked. That was the interlock's one real catch, and it is now carried by the
+double confirmation and by the consequence being stated in full at the moment
+of asking. **The residual hazard below — park correctly, then load food a week
+later — was never covered by the interlock and is unchanged.**
 
 #### Entering
 - **Gesture:** bezel sleep button, ≥5s (1–4s is still sleep mode). Or the
@@ -660,11 +682,14 @@ reasons. It is not a flag on the switch: forcing it must always be a decision.
 
 #### Persistence, and why it is not a `restore_mode`
 Parked state lives in a `restore_value` global, restored explicitly at
-`on_boot` priority −100. A switch's own `restore_mode` would fire its
-`turn_on`/`turn_off` action at boot — running the arming interlock against
-probes that have not reported yet, which refuses, and so **silently un-parks a
-van that is meant to stay parked for three weeks** on any brownout. That is the
-subtle failure this design exists to avoid; do not "simplify" it back.
+`on_boot` priority −100 via `set_parked()`, which is single-step and
+unconfirmed. A switch's own `restore_mode` would instead fire its
+`turn_on`/`turn_off` action at boot — which now runs `park_request()`, so the
+reboot would merely *arm* and then lapse, **silently un-parking a van that is
+meant to stay parked for three weeks** on any brownout. The failure mode
+survived the interlock's removal with a different mechanism, which is exactly
+why the restore path stays separate from the request path. Do not "simplify"
+it back.
 
 A reboot while parked therefore pulses AC on for the fraction of a second
 before the global is read. Accepted, and visible in the log as `ON` immediately
@@ -672,9 +697,10 @@ followed by `OFF (parked)`. The alternative is holding AC off until a flash
 read completes, which puts a storage feature on the fridge's critical path.
 
 #### The real hazard: parking, then loading food
-The interlock catches "arm it with food inside". It cannot catch "arm it
-correctly, then load the van for a trip a week later and drive off". That is
-the two-days-of-spoiled-food failure of §5.2 arriving through a side door.
+Nothing at the entry gate can catch "arm it correctly, then load the van for a
+trip a week later and drive off" — the old interlock could not either, since by
+then it has long since passed. That is the two-days-of-spoiled-food failure of
+§5.2 arriving through a side door, and it is the hazard that actually matters.
 
 Mitigations available today: the blue LED, the display page, and the pre-trip
 checklist in §11. **The proper mitigation is Phase 4** — `van-vehicle` runs on

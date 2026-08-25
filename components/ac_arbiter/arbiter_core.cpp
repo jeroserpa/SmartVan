@@ -71,6 +71,7 @@ const ArbiterOutputs &ArbiterCore::tick(uint32_t now_ms, const ArbiterInputs &in
     out_.manual_remaining_s = 0;
     out_.ac_on = false;
     out_.parked = true;
+    out_.park_pending = false;
     out_.reason = AcReason::PARKED;
     out_.parked_for_s = static_cast<uint32_t>(now_ms - parked_since_ms_) / 1000u;
 
@@ -87,6 +88,12 @@ const ArbiterOutputs &ArbiterCore::tick(uint32_t now_ms, const ArbiterInputs &in
   }
   out_.parked = false;
   out_.parked_for_s = 0;
+
+  // An arm that is never confirmed lapses here rather than lingering as a
+  // half-pressed button until some unrelated press hours later completes it.
+  if (park_armed_ && elapsed(now_ms, park_armed_ms_, cfg_.park_confirm_ms))
+    park_armed_ = false;
+  out_.park_pending = park_armed_;
 
   if (in.temp_valid)
     temp_fresh_ms_ = now_ms;
@@ -364,33 +371,29 @@ void ArbiterCore::manual_cancel(uint32_t now_ms) {
 
 // --- parked mode -----------------------------------------------------------
 
-bool ArbiterCore::park_request(uint32_t now_ms, bool force) {
-  out_.park_refused = false;
+bool ArbiterCore::park_request(uint32_t now_ms) {
   if (parked_)
     return true;
 
-  if (!force) {
-    // Both probes must be readable. "I cannot tell whether there is food in
-    // there" is a refusal, not a shrug: this gate is the only thing standing
-    // between a mis-press and two days of spoiled food.
-    if (!last_in_.temp_valid || !last_in_.cabin_valid) {
-      out_.park_refused = true;
-      return false;
-    }
-    // A cabinet well below cabin ambient is a fridge that is working, which
-    // means it is loaded and cooling, which means this is not a parked van.
-    if (last_in_.cabin_temp_c - last_in_.fridge_temp_c > cfg_.parked_arm_delta_c) {
-      out_.park_refused = true;
-      return false;
-    }
+  // Second request inside the window: commit.
+  if (park_armed_ && !elapsed(now_ms, park_armed_ms_, cfg_.park_confirm_ms)) {
+    park_armed_ = false;
+    out_.park_pending = false;
+    parked_ = true;
+    parked_since_ms_ = now_ms;
+    // Publish immediately rather than waiting for the next tick: the caller is
+    // a button handler, and the UI reads outputs() the instant it returns.
+    out_.parked = true;
+    return true;
   }
 
-  parked_ = true;
-  parked_since_ms_ = now_ms;
-  // Publish immediately rather than waiting for the next tick: the caller is a
-  // button handler, and the UI reads outputs() the instant it returns.
-  out_.parked = true;
-  return true;
+  // First request, or one arriving after a previous arm lapsed: arm and wait.
+  // Re-arming rather than committing is the whole point - a stale arm from an
+  // hour ago must never be completed by an unrelated press.
+  park_armed_ = true;
+  park_armed_ms_ = now_ms;
+  out_.park_pending = true;
+  return false;
 }
 
 void ArbiterCore::set_parked(uint32_t now_ms, bool on) {
@@ -400,7 +403,8 @@ void ArbiterCore::set_parked(uint32_t now_ms, bool on) {
       parked_since_ms_ = now_ms;
     }
     out_.parked = true;
-    out_.park_refused = false;
+    park_armed_ = false;
+    out_.park_pending = false;
   } else {
     park_exit(now_ms);
   }
@@ -412,7 +416,10 @@ void ArbiterCore::park_exit(uint32_t now_ms) {
   parked_ = false;
   out_.parked = false;
   out_.parked_for_s = 0;
-  out_.park_refused = false;
+  // A pending arm does not survive leaving the mode: the next single press
+  // must arm afresh, not complete a confirmation from before the exit.
+  park_armed_ = false;
+  out_.park_pending = false;
   // Re-arm the boot force-on window. Coming out of parked mode is exactly the
   // moment food gets loaded, and the normal thermostat would sit idle at cabin
   // temperature waiting for a threshold it is already past. Power it now and

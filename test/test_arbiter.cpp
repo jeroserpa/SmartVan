@@ -66,6 +66,13 @@ struct Sim {
 
   // Get past the post-boot force_on window into normal operation.
   const ArbiterOutputs &settle() { return run(2 * MIN); }
+
+  // Parking is two-step by design (D-14). Tests that simply want the van
+  // parked say so once and let this do the confirming press.
+  bool park() {
+    core.park_request(t);
+    return core.park_request(t);
+  }
 };
 
 // ---------------------------------------------------------------------------
@@ -598,53 +605,74 @@ static void test_millis_rollover() {
 // suspicious tests in the file.
 // ---------------------------------------------------------------------------
 static void test_parked() {
-  CASE("parking is refused while the cabinet still looks like a working fridge");
+  // The arming interlock is gone (D-14). It inferred "there is food in there"
+  // from a cabinet colder than cabin, which is a guess about a fact only the
+  // owner knows - and it refused whenever a probe was missing, making a
+  // storage feature depend on two sensors it does not otherwise need. A
+  // deliberate second press is the guard now.
+  CASE("one request only arms; it does not park");
   {
     Sim s;
     s.settle();
-    s.in.fridge_temp_c = 3.0f;   // cold
-    s.in.cabin_temp_c = 20.0f;   // cabin warm => it is running, with food in it
-    s.tick();
     CHECK(!s.core.park_request(s.t));
-    CHECK(s.core.outputs().park_refused);
+    CHECK(s.core.outputs().park_pending);
     CHECK(!s.core.outputs().parked);
+    // Still an ordinary van: arbitrating normally, fail-safe armed.
+    const ArbiterOutputs &o = s.run(1 * MIN);
+    CHECK(!o.parked);
+    CHECK(o.reason != AcReason::PARKED);
+    s.in.ble_connected = false;
+    CHECK(s.run(10 * SEC).ac_on);  // the fail-safe is NOT disarmed
   }
 
-  CASE("parking is refused when either probe is missing");
+  CASE("a second request inside the window parks");
   {
     Sim s;
     s.settle();
-    s.in.fridge_temp_c = 19.0f;
-    s.in.cabin_valid = false;
-    s.tick();
     CHECK(!s.core.park_request(s.t));
-    CHECK(s.core.outputs().park_refused);
-  }
-
-  CASE("an emptied fridge sitting at cabin temperature may be parked");
-  {
-    Sim s;
-    s.settle();
-    s.in.fridge_temp_c = 19.0f;
-    s.in.cabin_temp_c = 20.0f;
-    s.tick();
-    CHECK(s.core.park_request(s.t));
-    CHECK(!s.core.outputs().park_refused);
+    s.t += 5 * SEC;
+    CHECK(s.park());
     const ArbiterOutputs &o = s.run(1 * MIN);
     CHECK(o.parked);
+    CHECK(!o.park_pending);
     CHECK(!o.ac_on);
     CHECK(o.reason == AcReason::PARKED);
   }
 
-  CASE("the interlock can be forced, for the case where it is wrong");
+  CASE("an arm that is not confirmed lapses, and the next press re-arms");
   {
     Sim s;
     s.settle();
-    s.in.fridge_temp_c = 2.0f;
-    s.tick();
     CHECK(!s.core.park_request(s.t));
-    CHECK(s.core.park_request(s.t, /*force=*/true));
+    CHECK(!s.run(2 * MIN).park_pending);  // window is 30s
+    // The stale arm must not be completable: this press arms afresh.
+    CHECK(!s.core.park_request(s.t));
+    CHECK(s.core.outputs().park_pending);
+    CHECK(!s.core.outputs().parked);
+  }
+
+  CASE("a cold, loaded, working fridge is no longer an obstacle to parking");
+  {
+    Sim s;
+    s.settle();
+    s.in.fridge_temp_c = 3.0f;   // cold
+    s.in.cabin_temp_c = 20.0f;   // the old interlock refused exactly this
+    s.tick();
+    CHECK(s.park());
     CHECK(s.core.outputs().parked);
+  }
+
+  CASE("missing probes do not block parking");
+  {
+    Sim s;
+    s.settle();
+    s.in.temp_valid = false;
+    s.in.cabin_valid = false;
+    s.tick();
+    CHECK(s.park());
+    CHECK(s.core.outputs().parked);
+    // And the disarmed fail-safe still holds with no probe at all.
+    CHECK(!s.run(10 * MIN).ac_on);
   }
 
   CASE("parked, the fail-safe is inverted: BLE loss must NOT power the inverter");
@@ -653,7 +681,7 @@ static void test_parked() {
     s.settle();
     s.in.fridge_temp_c = 19.0f;
     s.tick();
-    CHECK(s.core.park_request(s.t));
+    CHECK(s.park());
     s.in.ble_connected = false;
     s.run(10 * MIN);
     CHECK(!s.core.outputs().ac_on);
@@ -667,7 +695,7 @@ static void test_parked() {
     s.settle();
     s.in.fridge_temp_c = 19.0f;
     s.tick();
-    CHECK(s.core.park_request(s.t));
+    CHECK(s.park());
     s.in.temp_valid = false;
     s.run(30 * MIN);          // well past temp_stale_ms
     CHECK(!s.core.outputs().ac_on);
@@ -684,7 +712,7 @@ static void test_parked() {
     s.settle();
     s.in.fridge_temp_c = 19.0f;
     s.tick();
-    CHECK(s.core.park_request(s.t));
+    CHECK(s.park());
     s.in.input_power_w = 700.0f;
     s.in.soc_pct = 99.0f;
     s.run(30 * MIN);
@@ -708,7 +736,7 @@ static void test_parked() {
     s.settle();
     s.in.fridge_temp_c = 19.0f;
     s.tick();
-    CHECK(s.core.park_request(s.t));
+    CHECK(s.park());
     s.run(2 * MIN);
     s.core.manual_press(s.t);
     const ArbiterOutputs &o = s.tick();
@@ -723,7 +751,7 @@ static void test_parked() {
     s.settle();
     s.in.fridge_temp_c = 19.0f;
     s.tick();
-    CHECK(s.core.park_request(s.t));
+    CHECK(s.park());
     s.run(3 * 24 * 60 * MIN);   // three days of storage
     CHECK(s.core.outputs().parked_for_s > 3u * 24u * 3600u - 60u);
     s.core.park_exit(s.t);
@@ -745,7 +773,7 @@ static void test_parked() {
     s.settle();
     s.in.fridge_temp_c = 19.0f;
     s.tick();
-    CHECK(s.core.park_request(s.t));
+    CHECK(s.park());
     s.run(60 * MIN);            // straight through the wrap
     CHECK(s.core.outputs().parked);
     CHECK(!s.core.outputs().ac_on);

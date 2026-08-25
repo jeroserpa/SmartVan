@@ -84,11 +84,17 @@ struct ArbiterConfig {
   uint32_t inhibit_max_ms = 4u * 60u * 60u * 1000u; // stuck-true must expire
 
   // --- parked mode (van left at home, fridge emptied, AC hard off) ---
-  // The arming interlock. An empty fridge with the door ajar equilibrates to
-  // cabin ambient; a loaded, running one does not. Refuse to arm while the
-  // cabinet is more than this far below cabin, because parking with food
-  // inside is the one way this mode spoils anything.
-  float parked_arm_delta_c = 3.0f;
+  // `REVISED 2026-08-25`: parking is a manual decision confirmed twice, not an
+  // inference from temperatures. The old interlock refused to arm while the
+  // cabinet read more than 3 C below cabin, on the theory that a cold cabinet
+  // means a loaded fridge. It also refused whenever either probe was missing,
+  // which made a storage feature depend on two sensors it does not otherwise
+  // need. See decisions.md D-14.
+  //
+  // The window for the second, confirming request. Long enough for two bezel
+  // long-presses or two taps in a web UI; short enough that an arm left
+  // hanging cannot commit hours later.
+  uint32_t park_confirm_ms = 30u * 1000u;
 };
 
 // Everything the arbiter is allowed to know about the outside world.
@@ -145,7 +151,7 @@ struct ArbiterOutputs {
   bool manual_warning = false; // within manual_warn_ms of auto-release
   uint32_t manual_remaining_s = 0;
   bool parked = false;         // long-term storage: AC held off, fail-safe disarmed
-  bool park_refused = false;   // last park_request() was rejected by the interlock
+  bool park_pending = false;   // armed by one request, waiting for the confirming one
   uint32_t parked_for_s = 0;   // since entry, or since the last reboot while parked
   AcReason reason = AcReason::BOOT;
 };
@@ -167,15 +173,16 @@ class ArbiterCore {
   void manual_cancel(uint32_t now_ms); // long press: drop immediately
 
   // --- parked mode ---
-  // Guarded entry, for anything a person can press. Returns false and sets
-  // out_.park_refused if the cabinet still looks like a working fridge, or if
-  // the temperatures needed to tell are missing. `force` bypasses the
-  // interlock and must only be reachable from a deliberate two-step gesture.
-  bool park_request(uint32_t now_ms, bool force = false);
+  // Two-step, and deliberately so. The first call arms; a second call within
+  // park_confirm_ms commits and returns true. An arm that is not confirmed
+  // lapses on its own. There is no temperature interlock and no probe
+  // requirement: whether the fridge is empty is a fact only the human knows,
+  // and asking twice is a better guard than inferring it (D-14).
+  bool park_request(uint32_t now_ms);
 
-  // Unguarded. This is the reboot-restore path only: at boot no probe has
-  // reported yet, so the interlock would refuse and silently un-park a van
-  // that is meant to stay parked for weeks. Never wire a button to it.
+  // Single-step, no confirmation. This is the reboot-restore path only: a van
+  // meant to stay parked for three weeks must not need a human to re-confirm
+  // after every brownout. Never wire a button to it.
   void set_parked(uint32_t now_ms, bool on);
 
   void park_exit(uint32_t now_ms);
@@ -217,6 +224,8 @@ class ArbiterCore {
   // parked mode
   bool parked_ = false;
   uint32_t parked_since_ms_ = 0;
+  bool park_armed_ = false;
+  uint32_t park_armed_ms_ = 0;
   ArbiterInputs last_in_;  // snapshot for the arming interlock
 };
 
