@@ -1,0 +1,125 @@
+# van-core-bringup - bench smoke test for a bare Waveshare ESP32-S3-LCD-1.47.
+#
+# Not part of the system. It exists to answer one question that van-core.yaml
+# cannot answer on a bare board: are the display pins, the backlight pin and the
+# SoftAP right? van-core blanks the screen after 60s and the only wake button is
+# on a screw terminal that is not wired yet, so on the bench a working display
+# and a dead one look identical after one minute.
+#
+# So this config: backlight hard ON, never blanked. A test pattern that says
+# which way up the panel is and whether the 34px offset lands on the right axis.
+# The onboard WS2812 blinking, as a "the loop is running" heartbeat that needs
+# no external wiring. AP only, no BLE, no arbiter, nothing that can write to the
+# P310.
+
+substitutions:
+  node_name: van-core-bringup
+  friendly_name: Van core bringup
+  pin_lcd_sclk: GPIO40
+  pin_lcd_mosi: GPIO45
+  pin_lcd_cs: GPIO42
+  pin_lcd_dc: GPIO41
+  pin_lcd_rst: GPIO39
+  pin_lcd_bl: GPIO46  # 1.47B schematic: LCD_BL, NOT 48 (48 = IMU SDA)
+  # `VERIFY`: onboard WS2812 on this board. If nothing lights, this pin is wrong
+  # and the display result above is still valid on its own.
+  pin_rgb: GPIO38
+
+esphome:
+  name: ${node_name}
+  friendly_name: ${friendly_name}
+  min_version: 2025.7.0
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  framework:
+    type: esp-idf
+  flash_size: 16MB
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  level: DEBUG
+  baud_rate: 115200
+
+web_server:
+  port: 80
+  version: 3
+  local: true
+
+wifi:
+  ap:
+    ssid: !secret wifi_ssid
+    password: !secret wifi_password
+
+# captive_portal is DELIBERATELY ABSENT, and that is half of what this config
+# tests. esphome/components/wifi/wifi_component.cpp:722-731: on an AP-ONLY node
+# with captive_portal enabled, ESPHome puts the radio into AP+STA and calls
+# start_scanning() - and that STA_SCANNING state overwrites the AP state set a
+# few lines earlier. The node then scans across channels forever while trying
+# to hold an AP on one, which is what a phone sees as "saved, connection
+# failure": the WPA2 4-way handshake never gets a stable channel.
+#
+# `MEASURED 2026-08-30`: exactly one "Starting scan" in the log and no
+# completion, on a config with no station mode configured at all.
+
+# Backlight: driven as a raw square wave, not a light entity. If the pin is
+# right and active-high, the panel blinks. If it is right and ACTIVE-LOW, the
+# panel still blinks - just in antiphase to the LED. Either way the polarity
+# question answers itself, which a steady "always on" cannot do.
+
+# Backlight. `MEASURED 2026-08-30` from the 1.47B schematic (scratchpad copy;
+# files.waveshare.com/wiki/ESP32-S3-LCD-1.47B/): LCD_BL is GPIO46, driving an
+# SI2302 NMOS low-side on LEDK - ACTIVE HIGH. Not GPIO48: on this board IO47
+# and IO48 are the QMI8658 IMU's I2C bus, so the previous configs were
+# initialising the panel correctly and then toggling the IMU's SDA line to
+# light it. GPIO46 is a strapping pin, hence the override - fine as an output
+# after boot.
+switch:
+  - platform: gpio
+    pin:
+      number: GPIO46
+      ignore_strapping_warning: true
+    name: "Backlight (GPIO46)"
+    id: sw_backlight
+    restore_mode: ALWAYS_ON
+
+spi:
+  clk_pin: ${pin_lcd_sclk}
+  mosi_pin: ${pin_lcd_mosi}
+
+font:
+  - file: "gfonts://Roboto"
+    id: font_med
+    size: 20
+  - file: "gfonts://Roboto"
+    id: font_small
+    size: 14
+
+display:
+  # mipi_spi, not the deprecated st7789v. The C6 model preset is the SAME PANEL
+  # as this board's - 172x320, offset_width 34, invert_colors - so it brings a
+  # vetted init sequence; only the pins differ, and those are overridden below.
+  # ST7789 panels need INVON: without it a correct image renders as its own
+  # negative, which is a thing worth ruling out while chasing a dark screen.
+  - platform: mipi_spi
+    model: WAVESHARE-ESP32-C6-LCD-1.47
+    id: van_display
+    cs_pin: ${pin_lcd_cs}
+    dc_pin: ${pin_lcd_dc}
+    reset_pin: ${pin_lcd_rst}
+    rotation: 90
+    update_interval: 1s
+    lambda: |-
+      it.fill(Color(255, 255, 255));
+      it.rectangle(0, 0, it.get_width(), it.get_height(), Color(0, 0, 0));
+      it.filled_rectangle(2, 2, 20, 20, Color(255, 0, 0));
+      it.filled_rectangle(it.get_width() - 22, 2, 20, 20, Color(0, 255, 0));
+      it.filled_rectangle(2, it.get_height() - 22, 20, 20, Color(0, 0, 255));
+      it.printf(30, 30, id(font_med), Color(0, 0, 0), "BRINGUP OK");
+      it.printf(30, 56, id(font_small), Color(0, 0, 0), "%ux%u  up=%us",
+                (unsigned) it.get_width(), (unsigned) it.get_height(),
+                (unsigned) (millis() / 1000));

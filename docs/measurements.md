@@ -213,3 +213,39 @@ keep - delete it once this is resolved.
 - [ ] Manual switch temperature after 10min charging
 - [ ] Confirm 1200W/800W alternator charging figure with clamp meter
 - [ ] AC output N-E bonding (floating vs bonded) — RCD implications
+
+## M10 — 2026-08-30 — van-core board bring-up: it is the 1.47B, and two config bugs
+
+Board received is the **ESP32-S3-LCD-1.47B**, not the plain 1.47 the BOM named
+(same price, same panel, same chip). Pinout `VERIFIED` against the vendor
+schematic, not a board-support header this time.
+
+**Bug 1 — captive_portal broke the SoftAP entirely.** Phone saw the AP, every
+join died in "saved, connection failure" (WPA2 handshake never completed) —
+even with BLE removed. Cause is in ESPHome 2026.8.0's wifi component
+(`wifi_component.cpp:722-731`): captive_portal on an AP-only node forces
+AP+STA and starts a station scan that never ends, and the scan state
+overwrites the AP state. Removing captive_portal fixed the join instantly,
+nothing else changed. It is now deliberately absent from every node config —
+`van_ui`'s `captive_landing` answers the phone's connectivity probe instead.
+(Second, older reason from M-2026-08-24: it also steals "/" from the UI.)
+
+**Bug 2 — the backlight pin belongs to a different peripheral.** All 1.47
+sources say LCD_BL = GPIO48. On the 1.47B, **LCD_BL = GPIO46** (active high
+into an SI2302 low-side switch); GPIO47/GPIO48 are the I2C bus of an onboard
+QMI8658 IMU the non-B board does not have. So the ST7789 initialised and drew
+into a panel whose backlight was never powered, while the config toggled the
+IMU's SDA line. The display itself was proven good by the vendor demo firmware.
+
+Also reproduced M9 on this board along the way: ESPHome 2026.8.0 defaults the
+BLE tracker to a 100% duty scan (320ms/320ms window=interval); with the P310
+out of range this alone kept the AP invisible. `scan_parameters.window: 30ms`
+is now set explicitly in van-core.yaml and van-core-soak.yaml, as it already
+was in the ttgo rig.
+
+Standing corrections from this session:
+- BOM item 1 and D0 should read **1.47B**.
+- The 1.47B adds a battery charger (ETA6098, BAT_ADC on IO1) — irrelevant to
+  the van install (USB-powered), but the header pins differ from the non-B.
+- ESPHome on this laptop must run from PowerShell, not MSYS/Git-Bash: the
+  IDF 5.5.5 installer refuses MSYS environments.

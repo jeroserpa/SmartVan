@@ -75,11 +75,54 @@ wifi:
     ssid: !secret wifi_ssid
     password: !secret wifi_password
 
-captive_portal:
+# captive_portal is DELIBERATELY ABSENT. Two independent reasons, both measured:
+#
+# 1. `MEASURED 2026-08-30`: with it enabled, a phone could see this AP and
+#    never complete the WPA2 4-way handshake - "saved, connection failure".
+#    esphome/components/wifi/wifi_component.cpp:722-731: on an AP-ONLY node
+#    with captive_portal present, ESPHome puts the radio into AP+STA and calls
+#    start_scanning(), and that STA_SCANNING state overwrites the AP state set
+#    a few lines earlier. The node then scans channels forever while trying to
+#    hold an AP on one. Removing it, with nothing else changed, made the phone
+#    join first time and the web UI load.
+# 2. `MEASURED 2026-08-24` (van-core-ttgo.yaml): it registers a catch-all
+#    handler and wins "/", serving a wifi-provisioning scan list instead of
+#    the UI - on a node that has no station mode and no credentials to
+#    provision, i.e. offering an action that must never be taken.
+#
+# van_ui's `captive_landing: true` already answers the phone's connectivity
+# probe with the landing page, which is all captive_portal was wanted for.
 
 # -----------------------------------------------------------------------------
 # Load 1: BLE to the P310
 # -----------------------------------------------------------------------------
+# `scan_parameters.window` is set EXPLICITLY and must stay that way.
+#
+# ESPHome 2026.8.0 raises a *defaulted* scan window to equal the interval
+# whenever software coexistence is compiled in and IDF >= 5.5.5 - see
+# esp32_ble_tracker/__init__.py, _raise_defaulted_scan_window(). The default
+# build therefore compiles to 320ms/320ms: a 100% duty-cycle BLE scan, on the
+# theory that "BLE uses the airtime wifi does not claim".
+#
+# That theory does not survive contact with SoftAP. `MEASURED 2026-08-23`
+# (measurements.md M9, on the TTGO rig): with the full-duty scan running, a
+# phone could see the AP but every join ended in "saved, connection failure" -
+# the WPA2 4-way handshake never completed. `REPRODUCED 2026-08-30` on this
+# board, where it was worse: the AP did not even appear in a laptop scan while
+# the P310 was out of range and the tracker was hunting for it continuously.
+#
+# The failure is worst exactly when it hurts most: BLE down is the fault the
+# web UI exists to diagnose, and that is the state in which the tracker scans
+# hardest and the UI disappears.
+#
+# 30ms/320ms is ~9% duty. A user-set window is never touched by the code above,
+# so setting it here opts out of the aggressive default. Do not delete this key
+# to "clean up the config" - it is load-bearing.
+esp32_ble_tracker:
+  scan_parameters:
+    interval: 320ms
+    window: 30ms
+
 ble_client:
   - mac_address: ${p310_mac}
     id: p310_ble
@@ -159,7 +202,10 @@ display:
 # both power and PSRAM/DMA contention, and the point is to fail here, not later.
 output:
   - platform: ledc
-    pin: GPIO48
+    # 1.47B: backlight is GPIO46 (48 is the IMU's SDA) - see van-core.yaml header.
+    pin:
+      number: GPIO46
+      ignore_strapping_warning: true
     id: out_backlight
     frequency: 20000Hz
 

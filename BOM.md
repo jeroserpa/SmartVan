@@ -12,7 +12,7 @@ where a part is trip-critical, buy locally.
 
 | # | Item | Qty | ~€ | Notes |
 |---|---|---|---|---|
-| 1 | **Waveshare ESP32-S3-LCD-1.47** | 1 | 13 | ESP32-S3R8, 8MB PSRAM, 16MB flash, 172×320 **plain SPI ST7789**. See D0 |
+| 1 | **Waveshare ESP32-S3-LCD-1.47B** (`RECEIVED 2026-08-30` — the B variant; LCD_BL on GPIO46 not 48, IO47/48 taken by onboard IMU — measurements.md M10) | 1 | 13 | ESP32-S3R8, 8MB PSRAM, 16MB flash, 172×320 **plain SPI ST7789**. See D0 |
 | 2 | DS18B20 waterproof probe, 1m | 2–3 | 6–9 | Fridge wall + ambient. Optional 3rd in free air for door-opening detection — same 1-Wire bus, no extra wiring |
 | 3 | 4.7kΩ resistor | 1 | — | 1-Wire pull-up, at the ESP end |
 | 4 | Flat 3-core ribbon cable, ~0.5mm thick | 0.5m | 3 | **Gasket crossing only.** Or 30AWG PTFE strands taped flat |
@@ -97,7 +97,7 @@ alone pays for itself in one summer of not running the generator equivalent.
 
 ## Open decisions
 
-### D0 — `van-core` board — `DECIDED: Waveshare ESP32-S3-LCD-1.47 (€13)`
+### D0 — `van-core` board — `DECIDED: Waveshare ESP32-S3-LCD-1.47 (€13)` — `RECEIVED: the 1.47B variant, see measurements.md M10`
 
 Earlier revisions of this document said "classic ESP32, not S3" (overstated — it
 rested only on the ESP-FBot example targeting `esp32dev`) and then assumed the

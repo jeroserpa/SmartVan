@@ -4,10 +4,13 @@
 # cooking button and the SoftAP everything else joins. Fridge control is
 # entirely local to this node and never reads the network (CLAUDE.md section 5.1).
 #
-# Board: Waveshare ESP32-S3-LCD-1.47 (ESP32-S3R8, 8MB PSRAM, 16MB flash).
-# Pinout below is taken from the espp board-support header for this board
-# (esp-cpp/espp, components/ws-s3-lcd-1-47) - `VERIFY` against the Waveshare
-# schematic before soldering the carrier board.
+# Board: Waveshare ESP32-S3-LCD-1.47B (ESP32-S3R8, 8MB PSRAM, 16MB flash).
+# THE B VARIANT - `VERIFIED 2026-08-30` against the vendor schematic
+# (files.waveshare.com/wiki/ESP32-S3-LCD-1.47B/). Almost the non-B pinout, with
+# three differences that cost half a day of black screen:
+#   - LCD_BL is GPIO46 (active high, SI2302 low-side on LEDK), NOT GPIO48
+#   - IO47/IO48 are the onboard QMI8658 IMU's I2C bus - do not repurpose
+#   - there is a battery charger (ETA6098) and BAT_ADC on IO1
 #
 # BEFORE THIS GOES IN THE VAN: run nodes/van-core-soak.yaml for 24h.
 # BEFORE EVERY TRIP: pull the BLE antenna, unplug the probe, confirm AC ends ON.
@@ -24,7 +27,8 @@ substitutions:
   pin_lcd_cs: GPIO42
   pin_lcd_dc: GPIO41
   pin_lcd_rst: GPIO39
-  pin_lcd_bl: GPIO48
+  # GPIO46 is a strapping pin; fine as an output after boot, override below.
+  pin_lcd_bl: GPIO46
 
   # --- pins: external wiring, all on 3.5mm pluggable screw terminals ---
   # Connectors are keyed by pin count so they cannot be mis-plugged at 11pm in
@@ -110,11 +114,54 @@ wifi:
   # component. With phone + water + heater + vehicle the default is already met.
   # Settle this before adding the fourth client, not after.
 
-captive_portal:
+# captive_portal is DELIBERATELY ABSENT. Two independent reasons, both measured:
+#
+# 1. `MEASURED 2026-08-30`: with it enabled, a phone could see this AP and
+#    never complete the WPA2 4-way handshake - "saved, connection failure".
+#    esphome/components/wifi/wifi_component.cpp:722-731: on an AP-ONLY node
+#    with captive_portal present, ESPHome puts the radio into AP+STA and calls
+#    start_scanning(), and that STA_SCANNING state overwrites the AP state set
+#    a few lines earlier. The node then scans channels forever while trying to
+#    hold an AP on one. Removing it, with nothing else changed, made the phone
+#    join first time and the web UI load.
+# 2. `MEASURED 2026-08-24` (van-core-ttgo.yaml): it registers a catch-all
+#    handler and wins "/", serving a wifi-provisioning scan list instead of
+#    the UI - on a node that has no station mode and no credentials to
+#    provision, i.e. offering an action that must never be taken.
+#
+# van_ui's `captive_landing: true` already answers the phone's connectivity
+# probe with the landing page, which is all captive_portal was wanted for.
 
 # -----------------------------------------------------------------------------
 # P310 over BLE
 # -----------------------------------------------------------------------------
+# `scan_parameters.window` is set EXPLICITLY and must stay that way.
+#
+# ESPHome 2026.8.0 raises a *defaulted* scan window to equal the interval
+# whenever software coexistence is compiled in and IDF >= 5.5.5 - see
+# esp32_ble_tracker/__init__.py, _raise_defaulted_scan_window(). The default
+# build therefore compiles to 320ms/320ms: a 100% duty-cycle BLE scan, on the
+# theory that "BLE uses the airtime wifi does not claim".
+#
+# That theory does not survive contact with SoftAP. `MEASURED 2026-08-23`
+# (measurements.md M9, on the TTGO rig): with the full-duty scan running, a
+# phone could see the AP but every join ended in "saved, connection failure" -
+# the WPA2 4-way handshake never completed. `REPRODUCED 2026-08-30` on this
+# board, where it was worse: the AP did not even appear in a laptop scan while
+# the P310 was out of range and the tracker was hunting for it continuously.
+#
+# The failure is worst exactly when it hurts most: BLE down is the fault the
+# web UI exists to diagnose, and that is the state in which the tracker scans
+# hardest and the UI disappears.
+#
+# 30ms/320ms is ~9% duty. A user-set window is never touched by the code above,
+# so setting it here opts out of the aggressive default. Do not delete this key
+# to "clean up the config" - it is load-bearing.
+esp32_ble_tracker:
+  scan_parameters:
+    interval: 320ms
+    window: 30ms
+
 ble_client:
   - mac_address: ${p310_mac}
     id: p310_ble
@@ -811,7 +858,9 @@ output:
     id: out_buzzer
     frequency: 2700Hz
   - platform: ledc
-    pin: ${pin_lcd_bl}
+    pin:
+      number: ${pin_lcd_bl}
+      ignore_strapping_warning: true
     id: out_backlight
     frequency: 20000Hz
 
