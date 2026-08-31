@@ -13,52 +13,62 @@ and no internet in the van**.
 The van's fridge is a 230V domestic unit. Running it means the AFERIY P310's
 3300W inverter is on 24/7.
 
-### Measured / stated figures
+### Measured / stated figures — `REVISED 2026-08-20`, see `docs/ANALYSIS-2026-08-20.md`
+
+The fridge is an **ESSENTIELB ERT85-55mib6 with a variable-speed inverter
+compressor.** Everything this section used to say assumed a cycling fixed-speed
+one, and was wrong in the direction that matters.
 
 | Quantity | Value | Confidence |
 |---|---|---|
-| Inverter idle draw | **35W** | manufacturer figure, `UNVERIFIED` in situ |
-| Fridge draw **while compressor runs** | **35W AC** | stated |
-| Fridge duty cycle | **UNKNOWN** | *the critical unknown — see §8.3* |
-| Usable capacity | ~3500Wh of 3840Wh | assumed reserve |
+| Compressor type | **Variable-speed inverter** | `CONFIRMED` from model spec |
+| Station overhead, AC on | **~48W** | `MEASURED` 2026-08-18, M2 |
+| — of which inverter idle | **UNKNOWN** | `ac` was never commanded off; `tools/fbot_probe.py idle-test` splits it |
+| Fridge draw, continuous | **24W @ 27 °C, 32–34W earlier** | `MEASURED`, M6 |
+| Fridge duty cycle | **100% — it does not cycle** | `CONFIRMED`, M6 |
+| Rated consumption | 114 kWh/yr = 13W avg | manufacturer, EU test cycle |
+| Power-failure autonomy | 9 h | manufacturer |
+| Usable capacity | **~3900 Wh** | `MEASURED` via energy balance, M2 |
 | Observed autonomy | 1.5–2 days with cooking | includes cooking + other loads |
 
-### Battery-side power states
+**The station overhead is nearly twice the load it supports.** ~48W of overhead
+to deliver ~27W battery-side of refrigeration. That is a *stronger* case for
+this project than the original "the idle equals the useful load" framing, not a
+weaker one — and it is measured rather than quoted from a datasheet.
 
-| State | DC draw |
-|---|---|
-| Inverter ON, compressor running | ~74W (35 idle + 35/0.9 conversion) |
-| Inverter ON, compressor off | 35W |
-| Inverter OFF | ~0W |
+### What this changed
 
-**The idle equals the useful load.** The fridge subsystem spends 35W of pure
-overhead to deliver 35W of refrigeration. The cheaper the compressor, the more
-completely the fixed idle dominates — which is what makes this project worth
-doing.
+The compressor does not cycle, so there is no duty cycle to follow and nothing
+to switch off between cycles. **The supervisor has to impose the cycles itself**
+— see §6 `fridge_req`, rewritten as a block scheduler, and ANALYSIS §4.
 
 ### The saving
 
-```
-saving = 35W × (fraction of time the inverter is OFF)
-```
+Imposed cycling, all ~50W assumed to be inverter idle, 20% pulldown penalty:
 
-At an assumed 35% duty cycle:
+| Inverter duty | Daily |
+|---|---|
+| Continuous (now) | 1.59 kWh |
+| 50% | 1.07 kWh |
+| 33% | 0.87 kWh |
 
-| | Now | Supervised |
-|---|---|---|
-| Fridge subsystem | ~49W → 1.17 kWh/day | ~28W → 0.66 kWh/day |
+**The `UNVERIFIED` number the whole saving rests on is the pulldown penalty of
+imposed cycling** — estimated 15–30%, never measured. Break-even against the
+full ~50W overhead is an **89% penalty**, so the margin is enormous; but
+break-even against *inverter idle alone* at 50% duty and a 20% penalty is
+**~11W**. If `idle-test` returns an idle below that, imposed cycling is not
+worth doing and the answer is a 12V compressor fridge instead (ANALYSIS §4.3,
+§5, and the reopened decision in `docs/decisions.md`).
 
-**~43% cut on the fridge subsystem.** Overall autonomy gain is smaller
-(~35–40%) because cooking is a large share of the remaining budget.
+**Measure the penalty before tuning block lengths.** Everything downstream is
+arithmetic on a number nobody has yet.
 
-Duty cycle scales this directly. In a van at 35 °C in August, duty could be
-50–60% rather than 35%, shrinking the saving proportionally. **Measure it before
-tuning anything.**
+The fridge is **not** being replaced — pending the pulldown measurement, which
+could reopen that (ANALYSIS §5). The fix is to duty-cycle the inverter.
 
-The fridge is **not** being replaced. The fix is to duty-cycle the inverter.
-
-**Target:** inverter duty ≈ fridge duty + <10% overhead, control-system standby
-under 2W total.
+**Target:** the lowest inverter duty the cabinet's coast will carry, with
+control-system standby under 2W total. Note this is no longer "fridge duty plus
+overhead": there is no fridge duty to add to.
 
 ---
 
@@ -89,8 +99,22 @@ under 2W total.
 - **MiBoxer E2-WR** LED controllers (dual-white/CCT, WiFi+BLE+2.4G RF, Tuya).
   Tuya WiFi side requires internet to provision → unusable in the van as-is.
   The 2.4GHz RF side works standalone. See §7 for the three routes.
-- **Resistive water level sender** with analogue gauge (AliExpress kit).
-  Resistance range **unverified** — see §8.
+- **Two resistive water level senders** with analogue gauges (AliExpress kit) —
+  one for the **fresh** tank, one for the **grey** tank. Both fit on the single
+  ADS1115 already budgeted, so the second tank costs one resistor: see §9
+  Phase 2 and BOM D5.
+  **Construction: almost certainly a reed-switch ladder** — a sealed stem
+  holding a chain of reed switches with resistors between them, and a doughnut
+  float carrying a ring magnet that slides over it. `STRONGLY SUSPECTED
+  2026-08-25`, from three observations that only this design explains together:
+  nothing conductive is exposed to the water, the float has no wires, and the
+  spec is still quoted in ohms. Not capacitive (needs no float) and not
+  magnetostrictive (4–20 mA or digital output, and 20× the price).
+  **Two consequences run through the whole water design: there is no wetted
+  contact to corrode, and the output is quantised into one step per reed, not
+  continuous.** Confirm with the bench test in §8.7 before building anything.
+  Resistance ranges **unverified, and must be measured separately** — nominally
+  identical senders are not necessarily identical parts. See §8.7.
 
 ### To acquire
 - ESP32-WROOM devkits (classic ESP32, *not* C3 — the ESP-FBot BLE component is
@@ -145,6 +169,8 @@ under 2W total.
     reference thermometer, settle for a few hours, record the offset to the wall
     sensor. That single number is what makes the food-safety ceiling meaningful.
 - ADS1115 (water level ADC — the ESP32 internal ADC is too nonlinear/noisy).
+  **One chip covers both tanks**: fresh, grey and an excitation-rail sense on
+  three of its four channels.
 - **Athom ESPHome-preflashed smart plug (16A EU)** for the water heater — see BOM
   D1e. Ships with ESPHome, so no flashing, no cloud, no router. Uses the wall
   socket and heater plug already in place; the 230V install is not modified.
@@ -189,7 +215,8 @@ actually breaks out. Needed: SPI (display), SDMMC (card), I2C (RTC), 1-Wire,
 plus three buttons. The S3 has plenty of pins in principle; the header may not
 expose them all.
 
-Display pages: SOC/power → fridge temp + arbiter state → water → diagnostics.
+Display pages: SOC/power → fridge temp + arbiter state → water (fresh + grey,
+binding constraint first — §9 Phase 2) → diagnostics.
 Blank after 60s of no input.
 
 **Risk:** BLE client + SoftAP + web server + display on one ESP32 can starve the
@@ -232,7 +259,7 @@ No router. `van-core` runs SoftAP; other nodes join it as WiFi clients with
 |---|---|---|
 | `van-core` | beside fridge / P310 | BLE→P310, fridge + cabin DS18B20, manual AC button + LED, AC arbiter, heater permit rules, water-temp estimator, SoftAP, web UI |
 | `van-heater` | wall socket by the heater | ESPHome-preflashed plug: relay + power metering. **Only powered while the inverter is on** — expected, see BOM D1e |
-| `van-water` | beside tank | level sender (ADS1115), future pump control |
+| `van-water` | between the tanks | fresh + grey level senders (one ADS1115), tank cross-check, future pump control |
 | `van-vehicle` | engine bay / dash | ignition + D+ sense, alternator charge limiting (future) |
 
 Static addressing: `192.168.4.1` (core AP), `.10` water, `.11` vehicle,
@@ -284,11 +311,51 @@ swap stays cheap.
    the network. Fridge control lives entirely on `van-core` and never reads the
    network. `van-water` that loses core for 5 min holds the heater OFF and keeps
    reporting tank level locally.
-2. **Fail toward powered — for loads.** Any fault — BLE dropped, DS18B20 stale,
-   reboot, watchdog — must resolve to *inverter ON*. Use `on_boot` priority and
-   `filters: - timeout:` on every sensor feeding a control decision. A bug that
-   silently kills the fridge for two days while nobody is in the van is the one
-   failure mode that actually costs money.
+2. **Fail toward powered — for loads, and only as far as the link allows.**
+   Any fault — BLE dropped, DS18B20 stale, reboot, watchdog — must resolve to
+   *inverter ON*. Use `on_boot` priority and `filters: - timeout:` on every
+   sensor feeding a control decision. A bug that silently kills the fridge for
+   two days while nobody is in the van is the one failure mode that actually
+   costs money.
+
+   **`CORRECTED 2026-08-25` — this rule was overstated, and the correction
+   matters more than the rule.** A fail-safe direction is only real if reaching
+   it needs **no successful communication**. The inverter state is latched in
+   the P310; `van-core` does not hold it up, it *commands* it. So:
+
+   | Link state when the fault hits | What actually happens |
+   |---|---|
+   | AC already ON | Station latches ON. Fail-safe achieved **by inaction** — free, and genuinely safe |
+   | AC OFF, link still alive | An ON command gets through. **This is the only case the fail-safe can act in** |
+   | AC OFF, link gone | The write goes nowhere. **The fridge stays off, and no amount of firmware changes that** |
+
+   The third row is the honest residual risk. In a duty-cycling design the
+   inverter is off most of the time, so the exposed window is most of the time
+   — not an edge case. Two consequences run through the whole design:
+
+   - **Act on link *degradation*, not on link loss.** By the time
+     `ble_connected` goes false there is nothing left to send the command over.
+     The arbiter therefore forces ON when station data stops arriving while the
+     stack still claims a connection (`LINK_STALE`, `link_stale: 60s`), which
+     is the last moment an ON command can still work. `BLE_LOST` is
+     *recovery-on-reconnect*, not a fail-safe, and is labelled as such in the
+     code and the tests.
+   - **Never enter a state you cannot leave.** OFF is a lease that a healthy
+     link renews. That is why the reconnect edge re-writes the switch
+     immediately instead of waiting for the next re-assert.
+
+   **What remains unmitigated, stated rather than papered over:** a permanent
+   BLE failure or a dead node, arriving during an OFF block, leaves the fridge
+   off until a human intervenes. The tools left are alerting (buzzer, LED,
+   display) and the P310's own physical AC button — see §11. A node that is
+   merely *crashed* is fine: the watchdog reboots it and boot force-on covers
+   the gap. A node with no power is not, though it correlates with the 12V bus
+   being down, which nobody fails to notice.
+
+   **This is a structural argument for the 12V compressor fridge** already on
+   the table in `docs/ANALYSIS-2026-08-20.md` §4.3/§5. On the DC bus there is
+   no inverter to cycle and no remote command in the safety path, so this
+   entire failure class stops existing rather than being managed.
    **Exception 1 — the alternator charging path fails toward DISCONNECTED.** A
    stuck-closed 100A path drains the starter battery and strands the van. See
    §9 Phase 4.
@@ -310,11 +377,13 @@ swap stays cheap.
 
 ## 6. AC inverter arbiter — specification
 
-> **`PARTIALLY SUPERSEDED 2026-08-20.` Read `docs/ANALYSIS-2026-08-20.md`
-> before implementing anything in this section.** `fridge_req` below has been
-> rewritten; `P3` in `docs/PATCHES.md` (sleep mode) is specified but **not yet
-> applied**, and the thermal-budget table further down still assumes a cycling
-> fixed-speed compressor that this appliance does not have.
+> **`RECONCILED 2026-08-25.` `docs/ANALYSIS-2026-08-20.md` is still the
+> reasoning behind this section, but the patches it called for are now applied
+> here and in `components/ac_arbiter/`.** `fridge_req` is a block scheduler
+> (P2), sleep mode is the scheduler with its schedule switched off (P3), and
+> the thermal-budget table premised on a cycling compressor is gone rather than
+> restated. What remains outstanding is measurement, not specification: the
+> block lengths are `UNVERIFIED` defaults.
 
 Three independent request flags, ORed by a single 5s interval, with a fail-safe
 override on top.
@@ -346,10 +415,23 @@ ac_on = parked ? false
 ```
 
 ### `force_on` (fail-safe override)
-True if any of: node just booted; BLE `connected` false; fridge temperature
-sensor stale > 5 min; arbiter watchdog expired.
+True if any of: node just booted; BLE `connected` false; **station data stale
+> 60s while the link still claims to be connected**; fridge temperature sensor
+stale > 5 min; arbiter watchdog expired.
 
-### `fridge_req` — `REWRITTEN 2026-08-20`, see `docs/ANALYSIS-2026-08-20.md` §4
+**Read §5.2 for what these can and cannot do.** They are not equivalent. The
+BLE-lost branch cannot power anything — with the link down the write goes
+nowhere — so it is recovery-on-reconnect: it holds the request true so AC
+returns the instant the link does. The **station-stale branch is the one real
+fail-safe**, because it fires while there is still a link to carry the command.
+A wedged-but-open link was previously invisible here: the local probe kept the
+thermostat running happily and it went on commanding a switch nobody was
+listening to.
+
+### `fridge_req` — `REWRITTEN 2026-08-20, IMPLEMENTED 2026-08-25`
+
+See `docs/ANALYSIS-2026-08-20.md` §4 for the reasoning and
+`components/ac_arbiter/arbiter_core.cpp` for the state machine.
 
 **This section previously specified `fridge_req` as a follower of the
 compressor. There is nothing to follow.** The fridge is an
@@ -392,14 +474,24 @@ signature of cooling state, cabinet temperature is the arbiter's *only*
 feedback channel. The two primary probes are required; the optional third
 (free-air, door detection) stays optional.
 
-**`BLOCKED` on two measurements before any of this is implemented:**
+**The state machine is implemented; the *numbers* are still blocked.** Both
+block lengths ship as `UNVERIFIED` defaults (30 min each) and the two
+measurements below are what turn them into engineering rather than guesses:
 1. **`tools/fbot_probe.py idle-test`** — splits the measured ~50 W station
    overhead into inverter idle and station base load. Below ~11 W of inverter
    idle, imposed cycling stops paying and the answer is a 12 V compressor
    fridge instead (ANALYSIS §4.3, §5).
-2. **Overnight log** — how long the fridge stays off once it stops, which
-   decides Strategy A (follow the compressor's own stops, which do occur at
-   low ambient) versus Strategy B (impose blocks).
+2. **Overnight log** — how long the fridge stays off once it stops. This no
+   longer decides Strategy A *versus* Strategy B: the implementation takes both,
+   because there was never a reason to choose. A block ends on **any** of cold,
+   the block timer, or the compressor genuinely stopping — so a night where the
+   compressor does stop is harvested for free, and a day where it never stops
+   is still cycled. The measurement now tunes rest-block length rather than
+   selecting an architecture.
+
+   **The old spec required the compressor to stop, and that was the bug.**
+   Requiring it on an appliance that never stops meant `fridge_req` latched
+   true forever and the inverter ran 24/7. `OR`, not `AND`.
 
 The **pulldown penalty of imposed cycling is `UNVERIFIED`** and the entire
 Strategy B saving rests on it. Estimated 15–30 %; measure it with the A/B test
@@ -432,35 +524,39 @@ water heater. **Suppressed entirely during sleep mode.**
 ### Sleep mode
 
 The P310 lives under the bed. Its fan cycles because of heat generated by the
-**35W idle**, which runs all night regardless of whether the compressor ever
-starts. Sleep mode is therefore not primarily about suppressing compressor
-cycles — it is about removing the continuous idle heat source. This is likely
-the single biggest quality-of-life win in the project.
+**~48W station overhead** (`MEASURED`, §1), which runs all night regardless of
+what the fridge is doing. Sleep mode is therefore not primarily about
+suppressing compressor cycles — it is about removing the continuous idle heat
+source. This is likely the single biggest quality-of-life win in the project.
 
-**Goal: at most one compressor cycle between roughly 23:00 and 06:00.**
-Zero is not achievable without added thermal mass, which is **rejected — the
-volume is needed for food.** The food itself is the thermal mass.
+**`SIMPLIFIED 2026-08-20` — see `docs/PATCHES.md` P3. Sleep mode got easier,
+not harder.** It used to be an attempt to suppress cycles the appliance chose.
+The appliance chooses nothing now (§6 `fridge_req`): the supervisor picks the
+blocks, so sleep mode is just **a pre-cool block, then no scheduled blocks
+until morning.** No new machinery — it is the ordinary scheduler with its
+schedule switched off and its ceiling raised.
 
 Sequence:
-1. **Pre-cool** in the hour before sleep, while noise is irrelevant: drive the
-   fridge to 1 °C.
-2. **Coast** through the night with a raised ceiling (6–8 °C, configurable).
-3. **If the ceiling is reached**, run a full cycle back down to 1 °C — not to the
-   normal 4 °C setpoint. Same single run, maximum remaining coast; often turns
-   two cycles into one.
-4. **Exit** on schedule or button press; normal thresholds resume.
+1. **Pre-cool** in the hour before sleep, while noise is irrelevant: run a
+   block down to 1 °C.
+2. **Coast** through the night. No scheduled blocks at all; only the raised
+   ceiling (6–8 °C, configurable) can start one.
+3. **If the ceiling is reached**, the run goes all the way back to 1 °C — not to
+   the normal 4 °C setpoint. Maximum remaining coast from a single run.
+4. **Exit** on schedule or button press; the normal schedule resumes.
 
-Thermal budget (order-of-magnitude, verify by test — §8.5). Coast length varies
-with how full the fridge is:
+The old "at most one compressor cycle" goal is retired: it was framed around an
+appliance that cycles on its own. The goal now is simply **no scheduled block
+between roughly 23:00 and 06:00**, which the supervisor controls outright. The
+only thing that can break the silence is the ceiling, and that is a food
+decision, not a scheduling one.
 
-| Contents | Heat capacity | 1 → 8 °C | Coast at ~25W leak |
-|---|---|---|---|
-| Well stocked (~20 kg) | ~70 kJ/K | 490 kJ ≈ 136 Wh | ~5.4 h |
-| Half full (~10 kg) | ~35 kJ/K | 245 kJ ≈ 68 Wh | ~2.7 h |
-| Nearly empty | — | — | ~1 h |
-
-**The real comparison is not "one cycle vs zero" but "one 15-minute cycle vs
-35W of continuous idle heat and uncontrolled fan cycling all night."**
+**Coast budget: `UNVERIFIED` pending the dT/dt measurement (§8.5).** The old
+table here assumed a ~25W heat leak and produced coast times of 1–5.4h
+depending on fill. Those numbers were never measured and the assumed leak came
+from the same fixed-speed-compressor model that §1 has now discarded, so they
+are removed rather than restated. The adaptive prediction below measures the
+real figure every night for free — which is the honest way to fill this in.
 
 ### Adaptive prediction
 Measure dT/dt over the first 30 min of coast, extrapolate to the ceiling, and
@@ -512,21 +608,43 @@ dead probe, a starved loop and the 10 °C hard override all resolve to OFF.**
 arbiter is not protecting anything and cannot be argued out of it — so the only
 question that matters is whether the mode can be entered by mistake.
 
-#### Arming interlock
-An emptied fridge with its door propped open equilibrates to cabin ambient; a
-loaded, working one does not. **Refuse to arm while the cabinet reads more than
-`parked_arm_delta` (default 3 °C) below cabin.** Refuse equally when either
-probe is missing — *"I cannot tell whether there is food in there"* is a
-refusal, not a shrug. This is the whole reason the cabin DS18B20 stopped being
-a nice-to-have.
+#### Arming: manual, confirmed twice — `REVISED 2026-08-25`
 
-The refusal is audible (double chirp) and logged with both temperatures,
-because the screen is likely blank and the user is about to walk away believing
-the van is parked.
+**Parking is a human decision, and the arbiter does not second-guess it.** The
+gate is a **second, deliberate request within 30s**; the first only arms.
 
-`Park (force)` exists as a separate deliberate entity for when the interlock is
-wrong — an unplugged probe, a fridge already at room temperature for other
-reasons. It is not a flag on the switch: forcing it must always be a decision.
+- **Bezel:** two long presses. The switch reads its state from the arbiter, so
+  an armed-but-unconfirmed request still shows *off* and the second press lands
+  on the same gesture — nothing new to remember.
+- **Web UI:** the modal that spells out the consequence *is* the second
+  confirmation, so the page sends the confirming request behind it. One flip
+  plus one dialog, never three steps for one decision.
+- An arm that is not confirmed **lapses**, and a lapsed arm can never be
+  completed later — the next press arms afresh. A half-pressed button must not
+  be finishable by an unrelated press an hour on.
+- While armed: one chirp, the display wakes and says `PARK? confirm to disarm
+  fail-safe`, and **nothing has changed yet** — AC still arbitrates normally
+  and the fail-safe is still armed.
+
+**The temperature interlock is gone, and so is `Park (force)`.** The interlock
+refused to arm while the cabinet read more than 3 °C below cabin, inferring
+"there is food in there" from a cold cabinet. Two reasons it is not worth
+keeping — see `docs/decisions.md` D-14:
+
+1. **It guessed at a fact only the owner has.** A cold cabinet is not evidence
+   of food; a fridge emptied an hour ago is still cold, and one loaded with
+   warm shopping is not. It refused the correct action and permitted the
+   dangerous one about equally often.
+2. **It refused whenever either probe was missing**, which made a storage
+   feature depend on two sensors it does not otherwise need — and the fix for
+   that was `Park (force)`, an escape hatch that bypassed the whole gate. A
+   guard everybody learns to route around is not a guard.
+
+What is genuinely lost: arming with a loaded, working fridge is no longer
+blocked. That was the interlock's one real catch, and it is now carried by the
+double confirmation and by the consequence being stated in full at the moment
+of asking. **The residual hazard below — park correctly, then load food a week
+later — was never covered by the interlock and is unchanged.**
 
 #### Entering
 - **Gesture:** bezel sleep button, ≥5s (1–4s is still sleep mode). Or the
@@ -564,11 +682,14 @@ reasons. It is not a flag on the switch: forcing it must always be a decision.
 
 #### Persistence, and why it is not a `restore_mode`
 Parked state lives in a `restore_value` global, restored explicitly at
-`on_boot` priority −100. A switch's own `restore_mode` would fire its
-`turn_on`/`turn_off` action at boot — running the arming interlock against
-probes that have not reported yet, which refuses, and so **silently un-parks a
-van that is meant to stay parked for three weeks** on any brownout. That is the
-subtle failure this design exists to avoid; do not "simplify" it back.
+`on_boot` priority −100 via `set_parked()`, which is single-step and
+unconfirmed. A switch's own `restore_mode` would instead fire its
+`turn_on`/`turn_off` action at boot — which now runs `park_request()`, so the
+reboot would merely *arm* and then lapse, **silently un-parking a van that is
+meant to stay parked for three weeks** on any brownout. The failure mode
+survived the interlock's removal with a different mechanism, which is exactly
+why the restore path stays separate from the request path. Do not "simplify"
+it back.
 
 A reboot while parked therefore pulses AC on for the fraction of a second
 before the global is read. Accepted, and visible in the log as `ON` immediately
@@ -576,9 +697,10 @@ followed by `OFF (parked)`. The alternative is holding AC off until a flash
 read completes, which puts a storage feature on the fridge's critical path.
 
 #### The real hazard: parking, then loading food
-The interlock catches "arm it with food inside". It cannot catch "arm it
-correctly, then load the van for a trip a week later and drive off". That is
-the two-days-of-spoiled-food failure of §5.2 arriving through a side door.
+Nothing at the entry gate can catch "arm it correctly, then load the van for a
+trip a week later and drive off" — the old interlock could not either, since by
+then it has long since passed. That is the two-days-of-spoiled-food failure of
+§5.2 arriving through a side door, and it is the hazard that actually matters.
 
 Mitigations available today: the blue LED, the display page, and the pre-trip
 checklist in §11. **The proper mitigation is Phase 4** — `van-vehicle` runs on
@@ -703,14 +825,54 @@ Ordered by how much they'd change the design.
    lever in this project is downstream of it.** If measured duty cycle exceeds
    ~45% in mild weather, poor condenser airflow is the first suspect, not the
    fridge.
-7. **Water sender resistance range.** Measure at empty and full. Almost
-   certainly either **0–190Ω (European/VDO)** or **240–33Ω (US/GM)**. Determines
-   the divider resistor (220Ω for the 0–190Ω type).
-8. **E2-WR internals** — single-chip or Tuya-module-plus-MCU (see §7C).
-9. **E2-WR idle power**, unprovisioned.
-10. **2.4GHz link quality with the inverter under load** — decides whether the
+7. **Sender step map — bench both senders, in air, before either is fitted.**
+   Supersedes "measure at empty and full": if these are reed ladders (§2) there
+   is no continuous curve to measure, only a set of plateaus, and endpoints
+   alone would hide how many there are.
+
+   **Procedure — five minutes, a multimeter, no water.** Hold the stem
+   vertical, slide the float slowly from bottom to top by hand, and record
+   every resistance the meter settles on plus roughly where on the stem the
+   float was when it changed. Repeat downward.
+
+   It answers four questions at once:
+   - **Construction.** Discrete plateaus that snap between values confirm the
+     reed ladder. A smooth continuous sweep means it is a wiper sender after
+     all — in which case the corrosion argument retired in §9 Phase 2 comes
+     back and the excitation gating is protection again, not just housekeeping.
+   - **Step count**, which *is* the resolution of the whole channel. Nothing
+     downstream can improve on it.
+   - **Direction and range.** Either **0–190Ω (European/VDO)** or **240–33Ω
+     (US/GM)** — the second falls with level. A 240–33Ω sender read with a
+     0–190Ω map reads *backwards*, which the §9 cross-check would report as a
+     tank swap.
+   - **Hysteresis.** Up and down sweeps rarely switch at the same point. If the
+     gap is a large fraction of a step, the level display needs the deadband or
+     it will flicker between two values on a parked van.
+
+   Two senders out of the same bag can still be different parts. Bench them
+   **separately**, and record both maps in `docs/measurements.md` against the
+   tank each is fitted to.
+8. **Grey tank: capacity, geometry and location.** Litres, and whether it is
+   internal or underslung — see §9 Phase 2. Decides the cable run, whether
+   freezing is in scope, and how nonlinear the sender curve is near the ends.
+   `VERIFY` before ordering cable.
+9. **The kit gauge's off-state input impedance.** Go/no-go for wiring it in
+   parallel with the ADC as a backup readout (§9 Phase 2). Meter its sender
+   terminal with the button released: megohms means it is invisible when off
+   and only the button window needs handling; a low resistance means it sits
+   permanently across the sender and the idea needs re-thinking rather than
+   protecting. Five minutes on the bench, before any of the protection parts
+   are fitted.
+10. **Grey sender fouling rate.** The one genuinely new failure mode the grey
+   tank adds (§9 Phase 2). Not answerable up front — it is a "re-read the
+   cross-check log after a month of use" question, and the answer decides
+   whether the capacitive-strip retrofit is ever bought.
+11. **E2-WR internals** — single-chip or Tuya-module-plus-MCU (see §7C).
+12. **E2-WR idle power**, unprovisioned.
+13. **2.4GHz link quality with the inverter under load** — decides whether the
     RS485 escape hatch gets pulled forward.
-11. **van-core's own standby draw in parked mode.** With AC off, the only loads
+14. **van-core's own standby draw in parked mode.** With AC off, the only loads
     left are the node and the station's own base consumption — and the
     station's share is precisely what `tools/fbot_probe.py idle-test` exists to
     separate out (§8.2). Until both numbers exist, how long a van can sit
@@ -841,13 +1003,250 @@ no crimp tool for field repairs.
   > 85% **and** charging or strong sun — keep heating to times when someone is
   present. **That constraint now does safety work as well as energy work: do not
   relax it, and never heat during sleep mode.**
-- `van-water`: level sender via ADS1115. **No heater involvement** — it reduces
-  to the tank sender alone.
-- Sender conditioning: excite through a MOSFET/GPIO only during a reading (DC
-  through a submerged sender corrodes the wiper), median filter ~30 samples,
-  `throttle_average: 60s` (sloshing while driving makes raw readings useless),
-  calibrate with `calibrate_linear` against **actual litres poured**, not the
-  nominal curve — these senders are rarely linear near the ends.
+- `van-water`: **two** level senders — **fresh and grey** — on one ADS1115.
+  **No heater involvement** — it reduces to the two tank senders alone.
+- Sender conditioning, identical on both channels: excite from a GPIO only
+  during a reading, median filter ~30 samples, and a 60s window (sloshing while
+  driving makes raw readings useless) reduced by **median, not mean** — see the
+  quantisation note below. Calibrate against **actual litres poured**, not the
+  nominal curve. For grey, "poured" means measured litres down the sink with
+  the dump valve shut; the procedure is the same.
+
+### Grey water tank — `ADDED 2026-08-25`
+
+Two senders are owned, so both tanks get instrumented. **The second tank costs
+one resistor**, because the ADC, the node, the enclosure and the excitation
+gate are all already there for the first — which is the whole argument for
+doing it now rather than "later".
+
+**Channel map on the single ADS1115** (address 0x48, single-ended):
+
+| Ch | Signal | Why |
+|---|---|---|
+| A0 | Fresh sender | |
+| A1 | Grey sender | |
+| A2 | **Fresh excitation rail sense** | Makes the reading *ratiometric* — level comes from `V_sender / V_excite`, so supply droop, regulator tolerance and the driving pin's own drop cancel instead of appearing as a level change |
+| A3 | **Grey excitation rail sense** | Each sender is excited by its own pin, so each needs its own rail reference |
+
+A0/A1 single-ended is right **only if both senders get their own return wire
+back to the node's ground star point.** `CONFIRMED 2026-08-25` — both senders
+have return lines, neither grounds through its tank flange, so single-ended it
+is and all four channels are used as above.
+
+Recorded because it was a live question and the answer could change on a
+re-fit: had either sender grounded through its flange to the chassis, the two
+differential pairs (A0–A1, A2–A3) would be required instead — Phase 4 puts up
+to 100A of alternator current through that chassis, and tens of mV of ground
+drop is ~3% of tank on a 0–190Ω sender. That route costs the ratiometric
+channels, which is why fixing it at the sender beats compensating in the ADC.
+
+At 3.3V excitation through a 220Ω divider, a 0–190Ω sender spans 0–1.53V. PGA
+`±2.048V` → 62.5 µV/LSB, i.e. ~0.004% of tank per count. **The sender is the
+error term, not the ADC.**
+
+**And with a reed ladder (§2) that error is quantisation, not analogue
+inaccuracy.** One step per reed switch — typically 6 to 12 over the stem — is
+the resolution of the entire channel, and no amount of ADC bits or averaging
+improves it. Three things follow, and they are not what an analogue sender
+would want:
+
+- **The 16-bit ADC is now overkill for resolution — keep it for
+  discrimination.** Its job changes from resolving a smooth curve to confirming
+  that each reading lands *exactly* on a known plateau. A value between
+  plateaus is then unambiguous evidence of a fault rather than a plausible
+  intermediate level, which is worth more here than fine resolution ever was.
+- **A reading above the top plateau means "between reeds", not "empty".** Where
+  the magnet sits in a gap the ladder can go open circuit, and the ADC then
+  sees the full excitation rail — indistinguishable from a disconnected sender
+  and easily mistaken for a tank endpoint. Reject out-of-band readings
+  explicitly; never clamp them into range.
+- **Median, not mean, across the throttle window.** Sloshing moves the float
+  between adjacent plateaus, and the mean of two plateaus is a voltage the
+  sender can never produce. The median of a quantised signal is always a real
+  plateau; the mean is an artefact. This matters more than it sounds — a
+  fictitious value defeats the plateau check above.
+
+**Calibration is therefore a step map, not `calibrate_linear`.** Bench each
+sender in air first (§8.7) to get its plateaus, then pour measured litres to
+find the volume at which each transition happens. Interpolating between
+plateaus would assert a precision the sender does not have: between two
+transitions the level genuinely is unknown, and the display should show the
+step's range rather than invent a midpoint.
+
+**Excitation is switched by a GPIO per sender — no MOSFET.** `REVISED
+2026-08-25.` This section previously specified one logic-level MOSFET gating
+both senders. **The MOSFET is not needed:** at 3.3V through a 220Ω divider the
+excitation current is **15 mA worst case** (sender at 0Ω; 13 mA for a 240–33Ω
+part at full), which an ESP32-C3 pin sources directly — ~20 mA is comfortable,
+40 mA the absolute maximum. The MOSFET was buying neither isolation nor current
+capability, and at 3.3V there is no level shift to do.
+
+- **One pin per sender, excited in sequence**, not one pin gating both. Keeps
+  pin current at 15 mA rather than 30, and each sender is read with the other
+  de-energised, so there is no crosstalk through the shared ground return.
+- **The pin's own drop under load is cancelled by A2/A3.** A GPIO high is not a
+  clean 3.3V at 15 mA, which would matter if the level came from an assumed
+  rail voltage. It comes from `V_sender / V_excite`, so the drop divides out —
+  this is the ratiometric channel earning its place a second time.
+- **Drive the idle pin LOW, never high-Z.** Low leaves the ADC node defined at
+  ~0V through the divider and 0V across the sender. An input-mode pin lets the
+  ADC node float and the reading becomes noise.
+
+**Why the gating survives anyway — but on a much weaker argument.** `REVISED
+2026-08-25.` Its original justification was that continuous DC through a wetted
+wiper in an electrolyte erodes it, and that grey water being the better
+electrolyte made the gating more load-bearing on that channel. **A reed ladder
+(§2) has no wetted contact at all — the resistor chain is sealed dry inside the
+stem — so that argument is retired in full, not softened.**
+
+What is left is housekeeping: 15 mA at 3.3V is 50 mW per sender, 100 mW for
+both, or ~2.4 Wh/day held on continuously. Against the §5.4 two-watt control
+budget that is 5% spent on nothing, and gating it away costs one pin state.
+Keep it, but **do not describe it as protecting the sender.**
+
+If the §8.7 bench test shows a continuous sweep rather than plateaus, the
+senders are wiper types after all and the corrosion argument comes straight
+back — at which point the gating is protection again and the analogue gauges
+below stop being optional.
+
+#### The kit's gauge, in parallel — `YES, with three conditions`
+
+`ADDED 2026-08-25.` The kit's gauge is **digital and wired behind a momentary
+button**, so it is powered only when someone asks for a reading. That settles
+the standing-current objection outright: **zero draw when not pressed**, so it
+never appears on the §5.4 control budget, and the earlier worry about a gauge
+holding its sender energised from 12V continuously does not apply to this one.
+
+Keeping it is worth more than a spare readout:
+
+- **It works with the node dead**, which is the whole point of a backup, and it
+  needs neither the SoftAP nor a phone.
+- **It is an independent second opinion on the same sender.** During the
+  poured-litres calibration it interprets the identical resistance through
+  completely different hardware, which is exactly what catches a wrong step map
+  — an error no amount of self-consistency in the ESP32's own reading can
+  reveal.
+
+**But it must not simply be paralleled onto the ADC node.** Both the gauge and
+the divider land on the same sender terminal, and the gauge drives its own
+current from 12V:
+
+| Gauge state | Node voltage the ADS1115 sees |
+|---|---|
+| Off | Whatever its input presents unpowered — **`UNVERIFIED`, condition 1** |
+| On, sender at 190Ω | ~3.4V against a 3.6V absolute maximum. Marginal |
+| **On, sender open between reeds** | **12V. Over 3× the absolute maximum** |
+
+That last row is the one that matters, because on a reed ladder an open circuit
+between steps is a **normal state, not a fault** (§2). Left unprotected the
+input dies silently on some ordinary button press, and the sender gets blamed.
+
+**Condition 1 — measure the gauge's off-state input impedance before anything
+else.** With the button released, meter its sender terminal to ground and to
+its own supply. High impedance (megohms) means it is invisible to the ADC when
+off and only the button window needs handling. If it presents a low resistance
+instead, it sits permanently across the sender, shifts every reading, and the
+whole idea needs re-thinking rather than protecting. This is a five-minute
+go/no-go and it comes before the two below.
+
+**Condition 2 — protect the ADC input in hardware.** **10k in series** between
+the sender node and the ADS1115 pin limits a 12V fault to 1.2 mA, well inside
+the ±10 mA input limit, and it is negligible against the ADC's megohm-class
+input. Add an explicit **Schottky clamp to the 3.3V rail** rather than leaning
+on the ADS1115's internal ESD diodes: those exist for one-off events, and this
+condition recurs on every button press. A **100nF at the pin** is free while
+the resistor is there — with 10k it settles in 1 ms against a ~500 ms
+excitation burst, so it costs nothing and helps.
+
+**Condition 3 — the button switches both, and firmware is told.** Use a
+**DPDT** button: one pole powers the gauge, the other pulls a GPIO. Firmware
+then drops its own excitation and marks the channel invalid for the duration,
+so the window is a *known gap* rather than a corrupted sample.
+
+The split of responsibility is deliberate and matches §5: **the hardware
+protects the chip, the firmware protects the data.** Neither is load-bearing
+for the other's job — a firmware bug must never be able to destroy an input,
+and a stuck button must never be able to inject a plausible wrong level.
+
+**Worth noting how well this composes with the quantisation rules above.** With
+the ESP32's excitation off, its node sits at whatever the gauge is doing, which
+is out of band by construction — and out-of-band readings are already rejected
+rather than clamped. So the failure mode of forgetting condition 3 entirely is
+a rejected reading, not a believed one. That is not a reason to skip it, but it
+is the right direction to fail in.
+
+#### What actually differs from the fresh tank
+
+1. **The semantics invert, and that is a UI problem before it is a firmware
+   problem.** Fresh: low is bad. Grey: high is bad. Two independent bars invite
+   the user to read the reassuring one and get surprised by the other, so the
+   display leads with the **binding constraint**:
+   `usable = min(fresh remaining, grey headroom)`, in litres, with which tank
+   is binding named next to it. The two raw levels stay available underneath.
+2. **Fouling is the one genuinely new failure mode — and with a reed ladder
+   it is mechanical, not electrical.** `REVISED 2026-08-25.` There is no track
+   to erode (§2); what fouls is the sliding fit. Soap scum and grease build up
+   on the stem and in the float bore, hair and fibres wrap the stem, and the
+   float binds — reading whatever level it stuck at, typically full or parked
+   mid-scale. This is *the* known failure of grey level sensing in RVs whatever
+   the sensing principle, and it is a when, not an if.
+   **Better news than a wiper sender, though:** a bound float usually frees
+   with a flush and a wipe, where an eroded resistance track is permanent. So
+   the recovery is maintenance rather than a replacement part — worth knowing
+   before the capacitive-strip retrofit (BOM D5) gets bought on the first stuck
+   reading.
+   The response is still **detection, not avoidance** — see the cross-check
+   below. Mount the sender away from the drain inlet so it is not sitting under
+   the splash, and where the float can actually be reached to clean it.
+3. **A stuck sender must not be able to take the water away.** See the pump
+   interlock below.
+4. **Location decides the rest.** Underslung: longer run, wet and salty
+   environment, and freezing is in scope; internal: neither. Currently
+   `UNVERIFIED` — §8.8. The fresh sender's "<1m run, no shielding needed"
+   finding does **not** transfer to the grey channel until that is known.
+
+#### The cross-check — free, and it earns its keep
+
+Between dumps, grey should rise by roughly what fresh falls, minus what is
+drunk, cooked with, or drained outside. So `van-water` integrates both and
+flags divergence:
+
+| Symptom | Reading |
+|---|---|
+| Fresh falls, grey flat | Fresh leak, or **grey sender stuck** — the fouling failure above |
+| Grey rises, fresh flat | Inflow (rain into an open vent), or **fresh sender stuck** |
+| Fresh rises while grey falls | **The two plugs are swapped**, or one sender is a 240–33Ω part read with a 0–190Ω curve (§8.7) |
+
+That last row is why no keying scheme is specified for the two sender
+connectors: both are 2-wire, so BOM item 18's "key by pin count" trick cannot
+separate them, and the cross-check catches a swap on the first use of the sink
+— loudly, and without extra hardware. Colour the two plugs anyway; do not rely
+on it.
+
+**State the limits honestly:** two ±5%-class senders averaged over 60s detect
+gross divergence over hours. This finds a stuck float and a swapped plug. It
+does **not** find a slow drip, and must not be described on the display as leak
+detection.
+
+#### Pump interlock (Phase 2b) — fails toward **PERMITTING** the pump
+
+The RV convention is to inhibit the fresh pump when grey is full. **Rejected as
+a hard cut here**, and per §5.2 the direction is stated rather than assumed:
+
+- Overflowing grey is a nuisance and possibly a fine.
+- No water in a van is a real problem, at an unknown hour, possibly nowhere.
+- A fouled or disconnected grey sender reading full is **likely**, not
+  hypothetical (point 2 above).
+
+So a grey sender that is high, stale, or missing raises a **warning** — display
+plus buzzer — and never opens the pump circuit. If a hard cut is ever wanted it
+needs two independent conditions to agree, and it still expires on a timeout,
+like the drive inhibit in Phase 4.
+
+#### Node autonomy (§5.1) is unchanged
+Both levels, the cross-check and the warnings are computed on `van-water` from
+its own two ADC channels. Nothing here reads the network; core is told, not
+asked.
 - **Future: estimated water temperature on the display.** The heater tank is a
   sealed, isolated 230V unit — no draw-off during heating, so no unmodeled
   disturbance. Lumped thermal-capacitance model:
@@ -1085,7 +1484,7 @@ but charge decisions use voltage sensing, not key position (see above).
      until the battery is flat two days later.
   2. **"Manual AC still on" warning** — leaving the inverter armed after cooking
      and driving off is exactly the failure a cabin display can catch.
-  3. SOC, fridge state, water level.
+  3. SOC, fridge state, water — the binding tank, not two bars (§9 Phase 2).
 - **Graceful degradation:** values come from polling `van-core` across several
   metres of van build. Show stale readings greyed out with an age indicator
   rather than blanking, and never let a missing reading stall the node's own
@@ -1193,6 +1592,16 @@ custom firmware justified.
   measured get marked `UNVERIFIED` in the config comments too.
 - Test the fail-safe path deliberately before each trip: pull the BLE antenna,
   unplug the probe, and confirm the inverter ends up ON.
+  **Test it from AC OFF, not AC ON** — starting from ON proves nothing, because
+  the station latches and the inverter would stay on with the node unplugged
+  entirely. Wait for a fridge OFF block, then break the link. What that
+  actually tests is the reconnect, which is the recoverable half of §5.2.
+- **Know the manual override.** If `van-core` wedges while AC is off, the
+  fridge stays off and the phone app cannot take over — `van-core` is holding
+  the P310's single BLE connection. The recovery is the **station's own
+  physical AC button**, which always works. It is the last resort in the one
+  failure §5.2 cannot engineer away, so it belongs in the pre-trip check, not
+  in a panic at midnight.
 - **And confirm parked mode is OFF before loading food.** It is the one state
   in which the previous check is expected to fail: parked, all three faults
   resolve to AC OFF by design (§6 "Parked mode"). Blue blink on the kitchen

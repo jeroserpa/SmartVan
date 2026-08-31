@@ -31,15 +31,16 @@ cd test && make
 (On Windows with MSYS2/mingw the binary is `mingw32-make`; the Makefile itself
 is plain and portable.)
 
-Builds with `g++ -Wall -Wextra -Werror` and runs ~50 assertions in under a
-second: fail-safe paths, thermostat hysteresis, anti-short-cycle, sleep-mode
-coasting, the manual timer, surplus hysteresis, the Phase 4 drive inhibit,
-parked mode and its arming interlock, and
-the 49.7-day `millis()` rollover.
+Builds with `g++ -Wall -Wextra -Werror` and runs ~150 assertions across 46 cases in under a
+second: fail-safe paths, the fridge block scheduler, anti-short-cycle,
+sleep-mode coasting, the manual timer, surplus hysteresis, the Phase 4 drive
+inhibit, parked mode and its two-step confirmation, and the 49.7-day
+`millis()` rollover.
 
-Two real bugs have already been caught here rather than in a van — see
-`docs/decisions.md` D-04 and D-05. Every change to the state machine gets a test
-in the same commit.
+Real bugs have been caught here rather than in a van — see `docs/decisions.md`
+D-04, D-05 and D-13, the last of which would have left the inverter running
+24/7 and the project saving nothing. Every change to the state machine gets a
+test in the same commit.
 
 ## Build the firmware
 

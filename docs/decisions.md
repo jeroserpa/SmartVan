@@ -286,3 +286,248 @@ sees whatever hostname the probe asked for, so a relative link would bookmark
 - Whether the standalone iOS app keeps the SSE connection alive across a
   backgrounding, or reconnects cleanly. If it does not, the page needs a
   `visibilitychange` reconnect.
+
+---
+
+## 2026-08-25 — D-11: the grey tank is a second channel, and its sender is trusted only as far as the cross-check allows
+
+**Decision.** `van-water` reads **two** senders — fresh and grey — on the one
+ADS1115. Both levels are computed and published locally; neither can inhibit
+anything. What the grey channel *does* drive is a warning and a running
+plausibility check against the fresh channel.
+
+**Why the second tank was not deferred.** Every expensive part of tank sensing
+is a fixed cost already paid by the first tank: the node, the ADC, the buck,
+the enclosure, the gland, and the poured-litres calibration ritual. The grey
+tank adds one divider resistor and one cable run. Deferring it saves nothing
+and guarantees the enclosure is opened twice. Both senders are already owned.
+
+**Why the reading is treated as suspect.** A float in grey water fouls — soap,
+grease, food solids, hair on the stem — and the characteristic failure is a
+stuck reading, not a missing one. `FreshValue`-style staleness detection (D-02)
+does not catch it: the ADC keeps returning a perfectly fresh, perfectly wrong
+number. So freshness is not sufficient here and a second, independent argument
+is needed.
+
+`AMENDED 2026-08-25` — the senders turn out to be **sealed reed ladders**, not
+wiper types (CLAUDE.md §2), which changes the mechanism without weakening the
+argument. Nothing conductive touches the water, so there is no track to erode;
+what sticks is the float binding on its stem. The failure still presents as a
+fresh, plausible, wrong number, so the cross-check is needed exactly as
+written. Two smaller consequences do follow: the recovery is a flush and a wipe
+rather than a replacement part, and the output is **quantised** — one step per
+reed — so a reading between plateaus is itself evidence of a fault, giving the
+plausibility check a second and much faster input than the mass balance.
+
+**The cross-check is that argument.** Between dumps, grey should rise by
+roughly what fresh falls. Divergence separates the three failures that all look
+identical on a single bar:
+
+| Symptom | Reading |
+|---|---|
+| Fresh falls, grey flat | Fresh leak, or grey float stuck |
+| Grey rises, fresh flat | Inflow, or fresh float stuck |
+| Fresh rises, grey falls | Plugs swapped, or one sender is a 240–33Ω part read with a 0–190Ω curve |
+
+The third row is why no connector keying is specified for the senders: both are
+2-wire, so BOM's key-by-pin-count rule cannot express the difference, and the
+cross-check catches a swap on the first use of the sink. This is the same
+preference as D-09 — an engineered detection beats a procedural instruction —
+but applied one level down: the error is not prevented, it is made loud.
+
+**What it explicitly does not claim.** Two ±5%-class senders averaged over 60s
+resolve gross divergence over hours. That finds a stuck float and a swapped
+plug. It does not find a slow drip, and the display must not call it leak
+detection.
+
+**Fail-safe direction — opposite to the RV convention.** The usual rule is to
+cut the fresh pump when grey reads full. Here a grey sender that is high,
+stale, or missing **warns and never opens the pump circuit**: overflowing grey
+is a nuisance, no water in a van at an unknown hour is not, and a fouled grey
+sender is the expected failure rather than a hypothetical one. §5.2's "fail
+toward powered" happens to give the right answer for this path too, but for its
+own reason, which is why it is written down rather than inherited.
+
+**Reopen if:** the cross-check log shows the float sticking often enough to be
+noise rather than signal. The fix is an external capacitive strip on the grey
+tank — a different voltage source into the same ADC channel, so no design
+change, only a recalibration. Buy it then, not now (BOM D5).
+
+---
+
+## 2026-08-25 — D-12: "fail toward powered" is only real while the link is alive
+
+**The observation that forced this.** A fail-safe that defaults AC on when the
+connection is lost cannot act: with the link down there is nothing to send the
+command over. The rule in §5.2 was written as though `van-core` holds the
+inverter up, when in fact the state is latched in the P310 and `van-core` only
+*commands* it.
+
+**The general form, which is worth more than the fix.** A fail-safe direction
+is real only if reaching it requires **no successful communication**. Failing
+to the state the system is already in is free; failing to the opposite state is
+a wish. That single test explains why the two directions in this project are
+not symmetric:
+
+| Path | Direction | Real? |
+|---|---|---|
+| Fridge, AC currently ON | fail to ON | **Yes** — the station latches; inaction is the fail-safe |
+| Fridge, AC currently OFF | fail to ON | **No** — needs a working link, which is exactly what failed |
+| Parked mode | fail to OFF | **Yes** — already off, and re-asserting needs no reply |
+| Pump interlock (§9 Phase 2b) | fail to permitting | **Yes** — local relay, NC contacts |
+
+Parked mode's inverted fail-safe (D-09) was never in doubt for this reason,
+though the reason was not written down at the time.
+
+**Decision.** Keep the direction, correct the claim, and add the one mechanism
+that can still act.
+
+- `BLE_LOST` is renamed in intent, not in name: it is **recovery-on-reconnect**,
+  holding the request true so AC returns the moment the link does. The test
+  asserting it is renamed to say so — it was called "BLE loss forces AC on"
+  while asserting the *request*, which is precisely the conflation that let the
+  overstatement survive review.
+- **`LINK_STALE` is the actual fail-safe.** Station-sourced sensors going quiet
+  while `ble_connected` still reads true means a wedged-but-open link, and that
+  is the last moment an ON command can still get through. Previously invisible:
+  the local DS18B20 kept the thermostat running, and it went on commanding a
+  switch nobody was listening to.
+- **The reconnect edge re-writes the switch.** A write attempted with the link
+  down still updated `last_written_`, so on reconnect the arbiter believed AC
+  was already as requested and the re-assert would not go out for up to 60s.
+  A minute of fridge-off immediately after recovery, in the exact scenario the
+  fail-safe exists for.
+
+**Why `link_stale` trails `sensor_max_age` rather than leading it.** 60s against
+45s. Leading it would trip on ordinary late data and force the inverter on
+permanently — the same failure mode D-02 records for `sensor_max_age` itself.
+
+**What is left unmitigated, and must stay written down.** A permanent BLE
+failure or an unpowered node, arriving during an OFF block, leaves the fridge
+off until a human intervenes. Alerting and the P310's physical AC button are
+the only remaining tools, and the button matters more than it looks: a wedged
+`van-core` holds the station's single BLE connection, so the phone app cannot
+take over either. Added to the §11 pre-trip check, along with the note that the
+fail-safe test must start from AC **off** — starting from on proves nothing,
+since the station would hold the inverter up with the node unplugged entirely.
+
+**Reopen if:** the fridge moves to 12V DC (ANALYSIS §4.3/§5). There is no
+inverter to cycle and no remote command in the safety path, so this whole
+failure class stops existing rather than being managed — which is a point in
+that option's favour that the energy comparison alone does not capture.
+
+---
+
+## 2026-08-25 — D-13: the fridge block scheduler, and why the release is OR not AND
+
+**The defect.** `fridge_req` released only when `cold && quiet && settled`,
+where `quiet` meant `output_power` under 15W for 90s. The fridge is an
+ESSENTIELB ERT85-55mib6 with a **variable-speed inverter compressor**: it
+modulates against accumulated heat for hours and at high ambient does not stop
+at all (measurements.md M6, duty cycle `CONFIRMED` 100%). So `quiet` could never
+become true, `fridge_req` latched on permanently, and the inverter would have
+run 24/7 — **the project's entire saving, silently zero.** Specified in
+PATCHES P2 as "the big one" and unapplied in code until now.
+
+**Why the test suite did not catch it.** The rig's baseline is
+`output_power_w = 0.0f`, i.e. a fridge drawing nothing, which makes `quiet`
+permanently true. Every fridge test passed against a fixed-speed appliance that
+stops — the one the project does not own. Two of the new tests now set a
+realistic continuous draw, and one is named for the failure directly.
+
+**Decision.** `fridge_req` is a run/rest block scheduler with temperature as an
+override ceiling. The supervisor picks the cycles; the appliance no longer does.
+
+- A block **starts** on either the ceiling (safety net) or the schedule (normal
+  path). The schedule additionally requires the cabinet to be above the floor —
+  without that, every rest period would burn `min_on_ms` of inverter cooling a
+  cabinet already at target.
+- A block **ends** on **any** of: cold, the block timer, or the compressor
+  genuinely stopping. The last of these is ANALYSIS's "Strategy A" kept as an
+  opportunistic win rather than a requirement.
+- `min_off_ms` moves 5 → 20 min, sized to the block. An inverter compressor
+  dislikes restarts and the equalisation penalty scales with cycle *count*.
+  The 10 °C hard override is what makes a 20 min lockout safe: it beats the
+  anti-short-cycle timer outright, and has a test saying so.
+
+**Strategy A vs B was a false choice.** ANALYSIS §4.2 framed them as
+alternatives to be decided by the overnight log. They compose: with an `OR`
+release, a night where the compressor does stop is harvested for free, and a
+day where it never stops is still cycled. The overnight measurement now tunes
+rest-block length instead of selecting an architecture — which also means the
+implementation was never actually blocked on it, only the numbers were.
+
+**What stays unmeasured, and it is the number that matters.** The **pulldown
+penalty of imposed cycling**, estimated 15–30%, never measured. Both block
+lengths ship as `UNVERIFIED` 30 min defaults and are exposed as `number`
+entities. Break-even against the full ~48W station overhead is an 89% penalty
+so the margin is large; break-even against *inverter idle alone* at 50% duty
+and a 20% penalty is ~11W, and if `idle-test` returns below that the answer is
+a 12V compressor fridge instead.
+
+**Reopen if:** `idle-test` puts inverter idle under ~11W (see P6, the reopened
+12V fridge decision), or the A/B test puts the pulldown penalty far above 30%.
+
+---
+
+## 2026-08-25 — D-14: parked mode is confirmed twice, not inferred from temperatures
+
+**Supersedes the arming interlock of D-09.** The decision that parked mode
+inverts the fail-safe stands unchanged; what changes is the gate in front of
+it.
+
+**The interlock, and why it goes.** D-09 refused to arm while the cabinet read
+more than `parked_arm_delta` (3 °C) below cabin, on the theory that an emptied
+fridge equilibrates to ambient and a loaded one does not. Two problems, and the
+second is the one that decides it:
+
+1. **It inferred a fact only the owner has.** A cold cabinet is not evidence of
+   food. A fridge emptied an hour ago is still cold and would be refused; one
+   loaded with warm shopping reads near ambient and would be permitted. The
+   test correlates with the thing it wants to know far more weakly than its
+   confident phrasing implied.
+2. **It refused whenever either probe was missing** — and the remedy shipped in
+   the same commit was `Park (force)`, a button that bypassed the entire gate.
+   A guard with a documented bypass, needed often enough to be documented, is a
+   guard people learn to route through without reading. That is worse than no
+   guard, because it looks like protection in the design doc.
+
+**Decision.** `park_request()` is two-step: the first call arms, a second
+within `park_confirm_ms` (30s) commits. No temperature test, no probe
+requirement, no force button.
+
+- An unconfirmed arm **lapses**, and a lapsed arm can never be completed — the
+  next press arms afresh. A half-pressed button that an unrelated press an hour
+  later could finish is exactly the accident this is meant to prevent.
+- While armed, nothing has changed: AC arbitrates normally and the fail-safe is
+  still armed. The chirp and the `PARK? confirm to disarm fail-safe` line say
+  so, because this is the moment to change your mind.
+- **One decision gets at most two confirmations.** On the bezel that is two long
+  presses. In the web UI the modal spelling out the consequence *is* the second
+  confirmation, so the page sends the confirming request behind it rather than
+  demanding a third act — three dialogs for one decision is how people learn to
+  click through them.
+
+**What is genuinely lost, stated plainly.** Arming with a loaded, working
+fridge is no longer blocked. That was the interlock's one real catch. It is now
+carried by deliberateness — two acts, with the consequence stated in full — on
+the argument that a human who has just read "this DISARMS the fail-safe" and
+confirmed anyway knows something the thermometer does not.
+
+**Unchanged, and still the hazard that matters.** Park correctly, then load the
+van for a trip a week later and drive off. No entry gate has ever covered this,
+the interlock included. Phase 4 remains the real mitigation: `van-vehicle` runs
+on switched ignition, so key-on should clear parked mode.
+
+**One thing the removal quietly nearly broke.** D-09's persistence note said a
+switch `restore_mode` must not be used because it would re-run the interlock at
+boot against probes that have not reported, refuse, and silently un-park the
+van. The interlock is gone but the failure survives with a new mechanism: a
+boot-time `turn_on_action` now runs `park_request()`, which would merely *arm*
+and then lapse. Same silent un-park, different cause. The restore path stays
+separate (`set_parked()`, single-step and unconfirmed) for exactly this reason.
+
+**The 80% charge cap is unchanged and was already in place** — `Parked charge
+max`, default 80%, applied on entry and restored to 100% on exit. With the
+interlock removed it now applies on every successful park rather than only on
+one that passed the gate, which is a small strengthening rather than a change.

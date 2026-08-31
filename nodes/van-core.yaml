@@ -258,6 +258,10 @@ binary_sensor:
         max_length: 4s
         then:
           - switch.toggle: sw_sleep_mode
+      # Twice: the first long press arms, the second within 30s commits. The
+      # switch reads its state from the arbiter, so an armed request still
+      # reads "off" and the toggle lands on turn_on again - no separate
+      # confirm gesture to remember.
       - min_length: 5s
         max_length: 20s
         then:
@@ -452,8 +456,13 @@ switch:
     # every brownout. Persistence lives in the global, not here.
     restore_mode: DISABLED
     lambda: return id(arbiter)->parked();
+    # Two flips, not one. The first arms and the switch springs back to off -
+    # its state is read from the arbiter, so an armed-but-unconfirmed request
+    # simply does not show as parked, which is the feedback. The second flip
+    # inside the confirm window commits. Same call from the bezel gesture, so
+    # both entry paths get the identical guard (D-14).
     turn_on_action:
-      - lambda: id(arbiter)->park_request(false);
+      - lambda: id(arbiter)->park_request();
       - if:
           condition:
             lambda: return id(arbiter)->parked();
@@ -475,17 +484,15 @@ switch:
                 format: "PARKED: AC off, fail-safe disarmed, charge capped at %.0f%%"
                 args: [id(num_parked_charge_max).state]
           else:
-            # Refused. Say why in the log and chirp twice: the screen is
-            # probably already blank and the user is about to walk away
-            # believing the van is parked.
+            # Armed, not parked. One chirp and a prompt - the user is about to
+            # walk away, and must not believe the van is parked when it is one
+            # press short of it. Nothing has changed yet: AC still arbitrates
+            # normally and the fail-safe is still armed.
             - logger.log:
                 level: WARN
-                format: "Parked mode REFUSED: cabinet %.1f C vs cabin %.1f C - empty the fridge, or use Park (force)"
-                args: [id(fridge_temp).state, id(cabin_temp).state]
-            - lambda: id(out_buzzer)->set_level(0.5f);
-            - delay: 120ms
-            - lambda: id(out_buzzer)->set_level(0.0f);
-            - delay: 120ms
+                format: "PARK ARMED - confirm within %us to park, or it lapses"
+                args: ["(unsigned) 30"]
+            - lambda: id(display_awake) = true;
             - lambda: id(out_buzzer)->set_level(0.5f);
             - delay: 120ms
             - lambda: id(out_buzzer)->set_level(0.0f);
@@ -532,18 +539,6 @@ button:
     # "Start" and "+30 min" are different intentions to a person holding a pan.
     on_press:
       - lambda: id(arbiter)->manual_press();
-
-  - platform: template
-    name: "Park (force)"
-    id: btn_park_force
-    entity_category: config
-    # The interlock refuses whenever it cannot prove the fridge is empty -
-    # including when a probe is unplugged. This is the escape hatch for when it
-    # is wrong, kept as a separate deliberate entity rather than a flag on the
-    # switch, so that forcing it is always a decision and never a default.
-    on_press:
-      - lambda: id(arbiter)->park_request(true);
-      - switch.turn_on: sw_parked
 
   - platform: template
     name: "Manual AC cancel"
@@ -597,6 +592,12 @@ ac_arbiter:
   # 5s BLE poll). Anything older than this counts as missing, and missing never
   # argues for OFF.
   sensor_max_age: 45s
+  # Station silence while the BLE stack still claims a connection. Trails
+  # sensor_max_age so it fires after the station-sourced sensors go invalid,
+  # not while they are merely late. This is the *only* fail-safe that can still
+  # reach the P310 - once ble_connected drops there is no link left to carry an
+  # ON command, so BLE_LOST is recovery-on-reconnect and this is the real thing.
+  link_stale: 60s
 
 # -----------------------------------------------------------------------------
 # Tunables. Every threshold is a number entity so field tuning never needs a
@@ -690,6 +691,9 @@ number:
     on_value:
       - lambda: id(arbiter)->config().sleep_target_c = x;
 
+  # Opportunistic early release only (ANALYSIS 4.2 Strategy A). This fridge's
+  # inverter compressor modulates rather than stopping, so this will rarely
+  # fire - and it must never be the only way a block ends. See PATCHES P2.
   - platform: template
     name: "Compressor idle threshold"
     id: num_compressor_idle_w
@@ -742,12 +746,48 @@ number:
     min_value: 1
     max_value: 60
     step: 1
-    initial_value: 5
+    # Sized to the block, not the old 5 min. An inverter compressor dislikes
+    # frequent restarts and the equalisation penalty scales with cycle count.
+    # The 10 C hard override is what makes a 20 min lockout safe - it beats
+    # this timer outright.
+    initial_value: 20
     optimistic: true
     restore_value: true
     entity_category: config
     on_value:
       - lambda: id(arbiter)->config().min_off_ms = (uint32_t)(x * 60000);
+
+  # --- block schedule. The two numbers the whole saving turns on, and both
+  # are UNVERIFIED: they follow from the coast rate (section 8.5) and the
+  # pulldown penalty, neither of which is measured. Tune these first once the
+  # A/B test exists. ---
+  - platform: template
+    name: "Fridge run block"
+    id: num_run_block_min
+    unit_of_measurement: "min"
+    min_value: 10
+    max_value: 120
+    step: 5
+    initial_value: 30
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value:
+      - lambda: id(arbiter)->config().run_block_ms = (uint32_t)(x * 60000);
+
+  - platform: template
+    name: "Fridge rest block"
+    id: num_rest_block_min
+    unit_of_measurement: "min"
+    min_value: 10
+    max_value: 240
+    step: 5
+    initial_value: 30
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value:
+      - lambda: id(arbiter)->config().rest_block_ms = (uint32_t)(x * 60000);
 
   - platform: template
     name: "Manual AC duration"
@@ -794,20 +834,6 @@ number:
     optimistic: true
     restore_value: true
     entity_category: config
-
-  - platform: template
-    name: "Parked arm delta"
-    id: num_parked_arm_delta
-    unit_of_measurement: "°C"
-    min_value: 1.0
-    max_value: 10.0
-    step: 0.5
-    initial_value: 3.0
-    optimistic: true
-    restore_value: true
-    entity_category: config
-    on_value:
-      - lambda: id(arbiter)->config().parked_arm_delta_c = x;
 
   - platform: template
     name: "Surplus margin"
@@ -1013,8 +1039,16 @@ display:
           if (id(arbiter)->parked())
             it.printf(4, 122, id(font_med), "PARKED %.1f d - FRIDGE OFF",
                       id(arbiter)->parked_for_s() / 86400.0f);
+          // Armed but not yet parked. Says what is about to happen and what is
+          // still true, because this is the moment to change your mind.
+          else if (id(arbiter)->park_pending())
+            it.printf(4, 122, id(font_med), "PARK? confirm to disarm fail-safe");
 
       # --- page 3: water (van-water, Phase 2) ---
+      # Two tanks, fresh and grey. When this page is filled in it leads with the
+      # binding constraint - min(fresh remaining, grey headroom) - and names
+      # which tank is binding, because two independent bars invite reading the
+      # reassuring one. Raw levels go underneath. See CLAUDE.md 9 Phase 2.
       - id: page_water
         lambda: |-
           it.printf(4, 0, id(font_small), "WATER");

@@ -1,7 +1,7 @@
 # Bill of materials — Phases 1 & 2
 
-Scope: `van-core` (fridge supervision) and `van-water` (heater, tank level,
-future pump). **`van-vehicle` deliberately excluded** — deferred.
+Scope: `van-core` (fridge supervision) and `van-water` (fresh + grey tank
+level, future pump). **`van-vehicle` deliberately excluded** — deferred.
 
 Prices are indicative EU retail, Aug 2026. AliExpress lead times ~2–4 weeks;
 where a part is trip-critical, buy locally.
@@ -44,14 +44,19 @@ Phase 1; D1's "item 20" was ambiguous as a result.)
 | # | Item | Qty | ~€ | Notes |
 |---|---|---|---|---|
 | 22 | **ESP32-C3 SuperMini** — already owned | 1 | 0 | Replaces the WROOM-32 devkit. D0 rules the SuperMinis out for `van-core` but clears them "as sensor nodes" — no BLE here, and the load is I²C + three GPIOs. **`VERIFY` RSSI at the installed position first:** the C3 SuperMini's PCB antenna is poorly matched (same radio weakness D0 cites for the C6) and this node holds a SoftAP link across a metal-bodied van. Fall back to a WROOM-32 devkit (€7) if margin is thin |
-| 23 | ADS1115 16-bit ADC module | 1 | 4 | ESP32 internal ADC is too nonlinear for the sender |
-| 24 | Divider resistor for sender | 1 | — | **Value pending §8.7 measurement.** 220Ω if 0–190Ω sender. Sender run **confirmed <1m — no shielding needed** |
-| 25 | Logic-level MOSFET (AO3400 / 2N7000) | 1 | 1 | Gates sender excitation — continuous DC corrodes a submerged wiper |
+| 23 | ADS1115 16-bit ADC module | 1 | 4 | ESP32 internal ADC is too nonlinear for the sender. **One chip serves both tanks** — A0 fresh, A1 grey, A2/A3 the two excitation rails (ratiometric, and it cancels the driving pin's drop). Single-ended is `CONFIRMED` valid: both senders have their own returns, neither grounds through its tank flange. See D5 |
+| 24 | Divider resistor for sender | **2** | — | One per tank. **Value pending §8.7 measurement, taken on each sender separately.** 220Ω if 0–190Ω. Fresh run **confirmed <1m — no shielding needed**; the grey run is `UNVERIFIED` until the tank location is (§8.8) |
+| 24b | **Reed-ladder level sender — grey tank** | 1 | 0 | **Already owned** — the second of the two senders in CLAUDE.md §2. Sealed stem, magnet float, no wetted contacts. Bench its step map in air before fitting (§8.7). See D5 |
+| 24c | 2-core cable + IP67 inline connector, grey sender run | 1 | 4 | Only if the grey tank is underslung (§8.8). Internal tank: offcuts of item 30 |
+| 25 | ~~Logic-level MOSFET (AO3400 / 2N7000)~~ | — | 0 | **Deleted 2026-08-25 — not needed.** Excitation is 15 mA worst case (3.3V, 220Ω divider, sender at 0Ω), which an ESP32-C3 pin sources directly. One pin per sender, excited in sequence, idle pin driven **low** not high-Z. The pin's drop under load cancels in the ratiometric A2/A3 reading. The gating itself now survives only as housekeeping — a sealed reed ladder has no wetted contact to corrode. See CLAUDE.md §9 Phase 2 |
 | 26 | **Athom ESPHome-preflashed smart plug, 16A EU** | 1 | 15 | **Chosen — see D1e.** Heater switching + power metering. Ships with ESPHome: no flashing, no cloud, no router. Uses the existing wall socket and heater plug; nothing in the 230V install is modified. `VERIFY` 16A rating and that metering is exposed. Fallback: hardwired Shelly Plus 1PM (~€25) |
+| 26b | **Digital tank gauge, button-powered** | 1 | 0 | **Already owned**, bought with the senders. Kept as a backup readout that works with the node dead, and as an independent second opinion during calibration. Momentary button = **zero standby**, so it is not on the §5.4 control budget. **Not simply paralleled** — see items 26c/26d and CLAUDE.md §9 Phase 2 |
+| 26c | 10kΩ series resistors + BAT54 Schottky + 100nF, per shared channel | 2 sets | 2 | **Protects the ADS1115 inputs from the gauge's 12V.** A reed ladder is open circuit between steps, so pressing the gauge button with the float mid-step puts 12V on the ADC node — over 3× the absolute maximum. 10k limits the fault to 1.2 mA; the Schottky clamps rather than relying on internal ESD diodes for a condition that recurs on every press |
+| 26d | DPDT momentary button (replaces the gauge's existing SPST) | 1 | 3 | One pole powers the gauge, the other flags a GPIO so firmware drops excitation and invalidates the channel for the window. Hardware protects the chip, firmware protects the data — neither carries the other's job |
 | 27 | Buck 12V→5V 3A + fuse holder + fuses | 1 | 7 | |
 | 28 | ABS enclosure IP65 + glands | 1 | 7 | |
 | 29 | Automotive relay 30A + socket (future pump) | 1 | 4 | Phase 2b. **12V DC contacts — never repurpose one for the 230V heater** |
-| | **Subtotal** | | **~48** | |
+| | **Subtotal** | | **~56** | Includes the €4 grey run and €5 of gauge interfacing; ~52 if the grey tank is internal |
 
 Cabin temperature is **not** listed here — it lives on `van-core` (item 2's
 ambient probe). See D1d for what that implies for the estimator.
@@ -295,10 +300,12 @@ all.**
 | Cabin temperature (`T_cabin`) | `van-core` — the ambient DS18B20 of item 2 |
 | Permit rules (SOC / charging, D1b) | `van-core` — it already holds the BLE link |
 | Water-temp estimator | `van-core` — commands the heater, has `T_cabin`, reads `P_heater` |
-| Tank level sender | `van-water` |
+| Tank level senders (fresh + grey) | `van-water` |
 
-So `van-water` reduces to SuperMini + ADS1115 + sender excitation. Its heater
-GPIO, the coil driver and the separate cabin probe are all deleted.
+So `van-water` reduces to SuperMini + ADS1115 + two divider resistors — now
+for two senders rather than one (D5), which changes nothing structural, and
+with excitation driven straight off two GPIOs (item 25). Its heater GPIO, the
+coil driver and the separate cabin probe are all deleted.
 
 The estimator having all three inputs on one node is worth more than it looks:
 no cross-node staleness to reason about, and it runs on the node that owns the
@@ -420,6 +427,53 @@ dropout — the node dies and stays dead until manual intervention.**
 Test before ordering. If the port drops out, a bleed resistor becomes mandatory
 and items 9–11 change.
 
+### D5 — Grey water tank level — `DECIDED: fit the second owned sender`
+
+**Decision.** `van-water` reads **two** resistive senders, fresh and grey, on
+the one ADS1115 already in the BOM. No second ADC, no second node, no second
+excitation gate.
+
+**Why now rather than "Phase 2b".** The marginal cost is **one divider resistor
+and one cable run.** Everything expensive about tank sensing — the node, the
+ADC, the enclosure, the buck, the gland, the calibration procedure — is already
+bought for the fresh tank, and both senders are already owned. Deferring the
+grey tank does not save money; it only guarantees the enclosure gets opened
+twice and the calibration done twice.
+
+**What it buys.** The number that actually bounds a stay off-grid is
+`min(fresh remaining, grey headroom)`, and a van with only the fresh tank
+instrumented reports the wrong half of it roughly half the time.
+
+**What it costs — the honest entry.** A float in grey water fouls: soap,
+grease, food solids, hair on the stem. Expect a stuck reading eventually.
+`REVISED 2026-08-25` — the senders are sealed reed ladders, so the failure is
+the float **binding on the stem**, not a resistance track eroding. That is
+better than it sounds: a bound float usually frees with a flush and a wipe,
+where an eroded track is permanent. So the first stuck reading calls for
+maintenance, not a purchase.
+
+If it sticks repeatedly, the mitigation is an external capacitive strip (~€15,
+never touches the water) — a **retrofit that needs no design change**, being a
+different voltage source into the same channel. Buy it when the cross-check in
+CLAUDE.md §9 Phase 2 says the float is sticking often enough to be noise rather
+than signal, not on the first occurrence.
+
+**Rejected alternatives, for the record:**
+
+| Option | Why not |
+|---|---|
+| Grey tank left uninstrumented | The binding constraint is invisible half the time. And it wastes a sender already owned |
+| Second ADS1115 for the grey channel | The first has four channels and uses two |
+| Second node beside the grey tank | Another SoftAP client (§4 `max_connection`), another buck, another enclosure — to read one resistor |
+| **Capacitive strip on grey from the start** | ~€15 and a fouling problem that has not happened yet — and with a sealed reed ladder the likely failure frees with a wipe. It is the sanctioned upgrade path, not the starting point |
+| Ultrasonic from the top | Soap foam and scum on the transducer give false echoes — swaps a slow, detectable failure for a fast, plausible-looking one |
+| Hard pump lockout on grey full | See CLAUDE.md §9 Phase 2 — a fouled sender must never be able to take the water away |
+
+**Reopen if:** §8.8 finds the grey tank underslung *and* the run exceeds a few
+metres in a wet salted environment — at which point a local sender-to-digital
+conversion at the tank beats dragging an analogue millivolt signal through the
+chassis.
+
 ---
 
 ## Connector policy
@@ -430,6 +484,10 @@ and items 9–11 change.
   wiring.
 - **Key connectors by pin count** (2 = 12V, 3 = 1-Wire, 4 = button) so mis-plugging
   is physically impossible.
+- **The two tank senders defeat that scheme** — both are 2-wire, so pin count
+  cannot separate fresh from grey. Colour the plugs, label both ends, and rely
+  on the firmware cross-check (CLAUDE.md §9 Phase 2) to catch a swap: it shows
+  up as fresh *rising* while grey falls, on the first use of the sink.
 - Inside enclosures: JST-XH where a terminal block is overkill.
 - Crossing a bulkhead or exposed to damp: automotive sealed connectors
   (Superseal / Deutsch DT) or potted glands.

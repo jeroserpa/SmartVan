@@ -66,6 +66,13 @@ struct Sim {
 
   // Get past the post-boot force_on window into normal operation.
   const ArbiterOutputs &settle() { return run(2 * MIN); }
+
+  // Parking is two-step by design (D-14). Tests that simply want the van
+  // parked say so once and let this do the confirming press.
+  bool park() {
+    core.park_request(t);
+    return core.park_request(t);
+  }
 };
 
 // ---------------------------------------------------------------------------
@@ -85,7 +92,10 @@ static void test_failsafe() {
     CHECK(s.core.outputs().reason == AcReason::BOOT);
   }
 
-  CASE("BLE loss forces AC on");
+  // Named for what it actually asserts. The request goes true; the inverter
+  // does NOT come on, because the write has no link to travel over. See
+  // CLAUDE.md 5.2 - this is recovery-on-reconnect, not a fail-safe.
+  CASE("BLE loss holds the request on so the reconnect restores AC");
   {
     Sim s;
     s.settle();
@@ -95,6 +105,52 @@ static void test_failsafe() {
     CHECK(o.ac_on);
     CHECK(o.force_on);
     CHECK(o.reason == AcReason::BLE_LOST);
+  }
+
+  // The distinction this whole group exists to police: BLE_LOST is a recovery
+  // behaviour, LINK_STALE is the fail-safe. Only the second one still has a
+  // link to carry the ON command it asks for.
+  CASE("a wedged-but-connected link forces AC on before the stack notices");
+  {
+    Sim s;
+    s.settle();
+    CHECK(!s.core.outputs().ac_on);
+    // The stack still claims a connection; the station has simply stopped
+    // sending. The local probe keeps reporting, so nothing else trips.
+    s.in.power_valid = false;
+    s.in.soc_valid = false;
+    s.in.input_power_valid = false;
+    CHECK(!s.run(30 * SEC).ac_on);  // not yet - link_stale_ms is 60s
+    const ArbiterOutputs &o = s.run(40 * SEC);
+    CHECK(o.ac_on);
+    CHECK(o.force_on);
+    CHECK(o.reason == AcReason::LINK_STALE);
+  }
+
+  CASE("station data flowing keeps the link fresh even with a dead probe");
+  {
+    Sim s;
+    s.settle();
+    // Probe gone, station fine: this must be TEMP_STALE, never LINK_STALE.
+    s.in.temp_valid = false;
+    const ArbiterOutputs &o = s.run(6 * MIN);
+    CHECK(o.ac_on);
+    CHECK(o.reason == AcReason::TEMP_STALE);
+  }
+
+  CASE("link staleness clears once the station talks again");
+  {
+    Sim s;
+    s.settle();
+    s.in.power_valid = false;
+    s.in.soc_valid = false;
+    s.in.input_power_valid = false;
+    CHECK(s.run(2 * MIN).reason == AcReason::LINK_STALE);
+    s.in.power_valid = true;
+    s.in.soc_valid = true;
+    s.in.input_power_valid = true;
+    const ArbiterOutputs &o = s.run(10 * SEC);
+    CHECK(!o.force_on);
   }
 
   CASE("stale fridge probe forces AC on after the stale timeout, not before");
@@ -123,17 +179,22 @@ static void test_failsafe() {
     CHECK(!s.tick().ac_on);
   }
 
-  CASE("unreadable power sensor never releases the inverter early");
+  // D-03 still holds, but it is now about the *early* release only: with the
+  // block scheduler, temperature releases on its own authority and does not
+  // consult the power register at all.
+  CASE("unreadable power never triggers the compressor-stopped early release");
   {
     Sim s;
     s.settle();
     s.in.fridge_temp_c = 9.0f;
     s.run(10 * SEC);
     CHECK(s.core.outputs().fridge_req);
-    s.in.fridge_temp_c = 2.0f;
+    // Still above the floor, so nothing but a stopped compressor could end the
+    // block this early - and unknown power must not be read as stopped.
+    s.in.fridge_temp_c = 6.0f;
     s.in.power_valid = false;  // BLE up but the power register is not arriving
-    s.run(30 * MIN);
-    CHECK(s.core.outputs().fridge_req);  // unknown power counts as compressor busy
+    s.run(15 * MIN);
+    CHECK(s.core.outputs().fridge_req);
   }
 }
 
@@ -164,27 +225,92 @@ static void test_fridge() {
     CHECK(s.core.outputs().reason == AcReason::FRIDGE);
   }
 
-  CASE("release needs cold AND quiet AND minimum on-time, all three");
+  // THE regression test for PATCHES P2 / ANALYSIS 4.1. This appliance has a
+  // variable-speed inverter compressor: it modulates for hours and at high
+  // ambient never stops, so output_power never falls quiet. The old release
+  // required quiet, so fridge_req latched true forever and the inverter ran
+  // 24/7 - the project's entire saving, silently zero. The block timer must end
+  // the block with the compressor still drawing and the cabinet still warm.
+  CASE("an inverter compressor that never stops still gets its block ended");
   {
     Sim s;
     s.settle();
     s.in.fridge_temp_c = 8.0f;
+    s.in.output_power_w = 30.0f;  // and it stays there. It always stays there.
     s.run(10 * SEC);
     CHECK(s.core.outputs().fridge_req);
 
-    // Compressor running, pulling the temperature down.
-    s.in.output_power_w = 35.0f;
-    s.run(9 * MIN);
-    s.in.fridge_temp_c = 3.0f;
-    s.run(1 * MIN);
-    CHECK(s.core.outputs().fridge_req);  // cold and settled, but still drawing
+    // Modulating away, cabinet coming down but not to the floor.
+    s.in.fridge_temp_c = 5.0f;
+    CHECK(s.run(20 * MIN).fridge_req);  // run_block_ms is 30 min
+    const ArbiterOutputs &o = s.run(11 * MIN);
+    CHECK(!o.fridge_req);
+    CHECK(!o.ac_on);
+  }
 
-    s.in.output_power_w = 5.0f;  // compressor stops
-    s.run(60 * SEC);
-    CHECK(s.core.outputs().fridge_req);  // 90s debounce not yet elapsed
-    s.run(45 * SEC);
-    CHECK(!s.core.outputs().fridge_req);
-    CHECK(!s.core.outputs().ac_on);
+  CASE("a run block ends on any of cold, the block timer, or a stopped compressor");
+  {
+    // (a) cold, while still drawing: temperature releases on its own authority.
+    Sim a;
+    a.settle();
+    a.in.fridge_temp_c = 8.0f;
+    a.run(10 * SEC);
+    a.in.output_power_w = 35.0f;
+    a.run(9 * MIN);
+    a.in.fridge_temp_c = 3.0f;
+    CHECK(!a.run(2 * MIN).fridge_req);
+
+    // (b) the compressor genuinely stopping, cabinet still above the floor.
+    // Strategy A, salvaged - taken when available, never required.
+    Sim b;
+    b.settle();
+    b.in.fridge_temp_c = 8.0f;
+    b.run(10 * SEC);
+    b.in.output_power_w = 35.0f;
+    b.run(11 * MIN);
+    b.in.fridge_temp_c = 6.0f;
+    CHECK(b.run(1 * MIN).fridge_req);
+    b.in.output_power_w = 5.0f;
+    CHECK(b.run(60 * SEC).fridge_req);  // 90s debounce not yet elapsed
+    CHECK(!b.run(45 * SEC).fridge_req);
+  }
+
+  CASE("the schedule starts a block with the cabinet inside the deadband");
+  {
+    Sim s;
+    s.settle();  // t = 2 min
+    // 5 C: below the 7 C ceiling, above the 4 C floor. The old thermostat would
+    // sit here indefinitely; the scheduler banks cold on its own initiative.
+    s.in.fridge_temp_c = 5.0f;
+    // A real draw, not the rig's 0 W default - at 0 W the compressor reads as
+    // permanently stopped and the early release pre-empts the schedule. This
+    // appliance draws ~30 W continuously (measurements.md M6).
+    s.in.output_power_w = 30.0f;
+    // begin() back-dates fridge_since_ms_ by min_off (D-04), so the rest block
+    // is measured from t = -20 min and expires at t = 10 min.
+    CHECK(!s.run(5 * MIN).fridge_req);  // t = 7 min
+    CHECK(s.run(5 * MIN).fridge_req);   // t = 12 min
+  }
+
+  CASE("coasting has no schedule, so a quiet night stays quiet");
+  {
+    Sim s;
+    s.settle();
+    s.in.sleep_mode = true;
+    s.in.fridge_temp_c = 5.0f;  // under the 6 C sleep ceiling
+    s.in.output_power_w = 30.0f;
+    // Two full rest blocks pass and nothing starts. This is P3: sleep mode is
+    // no longer suppressing cycles the appliance chose, it is simply the
+    // supervisor declining to schedule any.
+    CHECK(!s.run(70 * MIN).fridge_req);
+  }
+
+  CASE("no scheduled block while the cabinet is already at the target");
+  {
+    Sim s;
+    s.settle();
+    s.in.fridge_temp_c = 2.0f;  // below the floor: nothing to gain
+    CHECK(!s.run(90 * MIN).fridge_req);
   }
 
   CASE("minimum on-time holds even if the fridge is already cold");
@@ -211,10 +337,12 @@ static void test_fridge() {
     s.run(12 * MIN);
     CHECK(!s.core.outputs().fridge_req);
     s.in.fridge_temp_c = 8.0f;  // door left open
-    s.run(2 * MIN);
-    CHECK(!s.core.outputs().fridge_req);  // 5 min minimum off
-    s.run(4 * MIN);
+    s.run(15 * MIN);
+    CHECK(!s.core.outputs().fridge_req);  // min_off is 20 min, sized to the block
+    s.run(6 * MIN);
     CHECK(s.core.outputs().fridge_req);
+    // And the 10 C hard override is the safety net that makes a 20 min lockout
+    // acceptable - covered by the next case.
   }
 
   CASE("hard override beats the anti-short-cycle timer");
@@ -477,53 +605,74 @@ static void test_millis_rollover() {
 // suspicious tests in the file.
 // ---------------------------------------------------------------------------
 static void test_parked() {
-  CASE("parking is refused while the cabinet still looks like a working fridge");
+  // The arming interlock is gone (D-14). It inferred "there is food in there"
+  // from a cabinet colder than cabin, which is a guess about a fact only the
+  // owner knows - and it refused whenever a probe was missing, making a
+  // storage feature depend on two sensors it does not otherwise need. A
+  // deliberate second press is the guard now.
+  CASE("one request only arms; it does not park");
   {
     Sim s;
     s.settle();
-    s.in.fridge_temp_c = 3.0f;   // cold
-    s.in.cabin_temp_c = 20.0f;   // cabin warm => it is running, with food in it
-    s.tick();
     CHECK(!s.core.park_request(s.t));
-    CHECK(s.core.outputs().park_refused);
+    CHECK(s.core.outputs().park_pending);
     CHECK(!s.core.outputs().parked);
+    // Still an ordinary van: arbitrating normally, fail-safe armed.
+    const ArbiterOutputs &o = s.run(1 * MIN);
+    CHECK(!o.parked);
+    CHECK(o.reason != AcReason::PARKED);
+    s.in.ble_connected = false;
+    CHECK(s.run(10 * SEC).ac_on);  // the fail-safe is NOT disarmed
   }
 
-  CASE("parking is refused when either probe is missing");
+  CASE("a second request inside the window parks");
   {
     Sim s;
     s.settle();
-    s.in.fridge_temp_c = 19.0f;
-    s.in.cabin_valid = false;
-    s.tick();
     CHECK(!s.core.park_request(s.t));
-    CHECK(s.core.outputs().park_refused);
-  }
-
-  CASE("an emptied fridge sitting at cabin temperature may be parked");
-  {
-    Sim s;
-    s.settle();
-    s.in.fridge_temp_c = 19.0f;
-    s.in.cabin_temp_c = 20.0f;
-    s.tick();
-    CHECK(s.core.park_request(s.t));
-    CHECK(!s.core.outputs().park_refused);
+    s.t += 5 * SEC;
+    CHECK(s.park());
     const ArbiterOutputs &o = s.run(1 * MIN);
     CHECK(o.parked);
+    CHECK(!o.park_pending);
     CHECK(!o.ac_on);
     CHECK(o.reason == AcReason::PARKED);
   }
 
-  CASE("the interlock can be forced, for the case where it is wrong");
+  CASE("an arm that is not confirmed lapses, and the next press re-arms");
   {
     Sim s;
     s.settle();
-    s.in.fridge_temp_c = 2.0f;
-    s.tick();
     CHECK(!s.core.park_request(s.t));
-    CHECK(s.core.park_request(s.t, /*force=*/true));
+    CHECK(!s.run(2 * MIN).park_pending);  // window is 30s
+    // The stale arm must not be completable: this press arms afresh.
+    CHECK(!s.core.park_request(s.t));
+    CHECK(s.core.outputs().park_pending);
+    CHECK(!s.core.outputs().parked);
+  }
+
+  CASE("a cold, loaded, working fridge is no longer an obstacle to parking");
+  {
+    Sim s;
+    s.settle();
+    s.in.fridge_temp_c = 3.0f;   // cold
+    s.in.cabin_temp_c = 20.0f;   // the old interlock refused exactly this
+    s.tick();
+    CHECK(s.park());
     CHECK(s.core.outputs().parked);
+  }
+
+  CASE("missing probes do not block parking");
+  {
+    Sim s;
+    s.settle();
+    s.in.temp_valid = false;
+    s.in.cabin_valid = false;
+    s.tick();
+    CHECK(s.park());
+    CHECK(s.core.outputs().parked);
+    // And the disarmed fail-safe still holds with no probe at all.
+    CHECK(!s.run(10 * MIN).ac_on);
   }
 
   CASE("parked, the fail-safe is inverted: BLE loss must NOT power the inverter");
@@ -532,7 +681,7 @@ static void test_parked() {
     s.settle();
     s.in.fridge_temp_c = 19.0f;
     s.tick();
-    CHECK(s.core.park_request(s.t));
+    CHECK(s.park());
     s.in.ble_connected = false;
     s.run(10 * MIN);
     CHECK(!s.core.outputs().ac_on);
@@ -546,7 +695,7 @@ static void test_parked() {
     s.settle();
     s.in.fridge_temp_c = 19.0f;
     s.tick();
-    CHECK(s.core.park_request(s.t));
+    CHECK(s.park());
     s.in.temp_valid = false;
     s.run(30 * MIN);          // well past temp_stale_ms
     CHECK(!s.core.outputs().ac_on);
@@ -563,7 +712,7 @@ static void test_parked() {
     s.settle();
     s.in.fridge_temp_c = 19.0f;
     s.tick();
-    CHECK(s.core.park_request(s.t));
+    CHECK(s.park());
     s.in.input_power_w = 700.0f;
     s.in.soc_pct = 99.0f;
     s.run(30 * MIN);
@@ -587,7 +736,7 @@ static void test_parked() {
     s.settle();
     s.in.fridge_temp_c = 19.0f;
     s.tick();
-    CHECK(s.core.park_request(s.t));
+    CHECK(s.park());
     s.run(2 * MIN);
     s.core.manual_press(s.t);
     const ArbiterOutputs &o = s.tick();
@@ -602,7 +751,7 @@ static void test_parked() {
     s.settle();
     s.in.fridge_temp_c = 19.0f;
     s.tick();
-    CHECK(s.core.park_request(s.t));
+    CHECK(s.park());
     s.run(3 * 24 * 60 * MIN);   // three days of storage
     CHECK(s.core.outputs().parked_for_s > 3u * 24u * 3600u - 60u);
     s.core.park_exit(s.t);
@@ -624,7 +773,7 @@ static void test_parked() {
     s.settle();
     s.in.fridge_temp_c = 19.0f;
     s.tick();
-    CHECK(s.core.park_request(s.t));
+    CHECK(s.park());
     s.run(60 * MIN);            // straight through the wrap
     CHECK(s.core.outputs().parked);
     CHECK(!s.core.outputs().ac_on);

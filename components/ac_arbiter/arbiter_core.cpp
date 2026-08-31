@@ -8,6 +8,7 @@ const char *ac_reason_str(AcReason r) {
     case AcReason::PARKED: return "parked";
     case AcReason::BOOT: return "boot";
     case AcReason::BLE_LOST: return "ble lost";
+    case AcReason::LINK_STALE: return "link stale";
     case AcReason::TEMP_STALE: return "probe stale";
     case AcReason::WATCHDOG: return "watchdog";
     case AcReason::FRIDGE_HARD: return "fridge (hard)";
@@ -28,6 +29,7 @@ void ArbiterCore::begin(uint32_t now_ms) {
   // Pretend the probe was fresh and the compressor busy at t=0. Both bias
   // toward ON, which is the correct direction while nothing is known yet.
   temp_fresh_ms_ = now_ms;
+  link_fresh_ms_ = now_ms;
   compressor_busy_ms_ = now_ms;
   manual_busy_ms_ = now_ms;
   surplus_since_ms_ = now_ms;
@@ -69,6 +71,7 @@ const ArbiterOutputs &ArbiterCore::tick(uint32_t now_ms, const ArbiterInputs &in
     out_.manual_remaining_s = 0;
     out_.ac_on = false;
     out_.parked = true;
+    out_.park_pending = false;
     out_.reason = AcReason::PARKED;
     out_.parked_for_s = static_cast<uint32_t>(now_ms - parked_since_ms_) / 1000u;
 
@@ -80,13 +83,25 @@ const ArbiterOutputs &ArbiterCore::tick(uint32_t now_ms, const ArbiterInputs &in
     manual_busy_ms_ = now_ms;
     surplus_since_ms_ = now_ms;
     temp_fresh_ms_ = now_ms;
+  link_fresh_ms_ = now_ms;
     return out_;
   }
   out_.parked = false;
   out_.parked_for_s = 0;
 
+  // An arm that is never confirmed lapses here rather than lingering as a
+  // half-pressed button until some unrelated press hours later completes it.
+  if (park_armed_ && elapsed(now_ms, park_armed_ms_, cfg_.park_confirm_ms))
+    park_armed_ = false;
+  out_.park_pending = park_armed_;
+
   if (in.temp_valid)
     temp_fresh_ms_ = now_ms;
+  // Any station-sourced value arriving is proof the BLE link is carrying data.
+  // The temperature probe is local and deliberately excluded - a live DS18B20
+  // says nothing about whether the P310 is still listening.
+  if (in.power_valid || in.soc_valid || in.input_power_valid)
+    link_fresh_ms_ = now_ms;
   // An unreadable power sensor must never be mistaken for "compressor idle" -
   // that would release the inverter early. Unknown counts as busy.
   if (!in.power_valid || in.output_power_w >= cfg_.compressor_idle_w)
@@ -99,9 +114,18 @@ const ArbiterOutputs &ArbiterCore::tick(uint32_t now_ms, const ArbiterInputs &in
   if (!elapsed(now_ms, boot_ms_, cfg_.boot_force_ms)) {
     out_.reason = AcReason::BOOT;
   } else if (!in.ble_connected) {
-    // No BLE means we cannot see output_power and cannot command the switch
-    // anyway; holding the request true means the fridge survives the reconnect.
+    // Honest about what this can and cannot do: with the link down the switch
+    // write goes nowhere, so this does NOT keep the fridge running. It holds
+    // the request true so the reconnect restores AC immediately, and it is a
+    // recovery behaviour, not a fail-safe. The fail-safe that can still act is
+    // LINK_STALE below, which fires while there is a link left to carry it.
     out_.reason = AcReason::BLE_LOST;
+  } else if (elapsed(now_ms, link_fresh_ms_, cfg_.link_stale_ms)) {
+    // Connected by the stack's reckoning, but no station data has arrived.
+    // A wedged-but-open link used to be invisible here: the local probe kept
+    // the thermostat running and it went on commanding a switch nobody was
+    // listening to. Commanding ON now is the last moment that can still work.
+    out_.reason = AcReason::LINK_STALE;
   } else if (elapsed(now_ms, temp_fresh_ms_, cfg_.temp_stale_ms)) {
     out_.reason = AcReason::TEMP_STALE;
   } else if (watchdog_tripped) {
@@ -146,8 +170,16 @@ const ArbiterOutputs &ArbiterCore::tick(uint32_t now_ms, const ArbiterInputs &in
   return out_;
 }
 
-// Fridge thermostat. The only consumer that is allowed to be slow and boring:
-// prefer fewer, longer cycles, and never short-cycle the compressor.
+// Fridge block scheduler. `REWRITTEN 2026-08-25` per docs/PATCHES.md P2 and
+// ANALYSIS section 4 - this was a compressor follower, and there is nothing to
+// follow. The appliance has a variable-speed inverter compressor that modulates
+// against accumulated heat for hours and at high ambient never stops, so the old
+// release condition (output_power quiet for 90s) could never be satisfied and
+// the inverter stayed on permanently, saving nothing.
+//
+// So the supervisor picks the cycles now. Temperature is an override ceiling
+// rather than the primary input - the inversion is the point of the rewrite.
+// Prefer fewer, longer blocks: the restart penalty scales with cycle count.
 void ArbiterCore::update_fridge_(uint32_t now_ms, const ArbiterInputs &in) {
   if (!in.temp_valid)
     return;  // hold the previous request; force_on is already covering this
@@ -172,21 +204,64 @@ void ArbiterCore::update_fridge_(uint32_t now_ms, const ArbiterInputs &in) {
   const float floor_c = coasting ? cfg_.sleep_target_c : cfg_.temp_off_c;
 
   if (!out_.fridge_req) {
-    if (in.fridge_temp_c > ceiling && elapsed(now_ms, fridge_since_ms_, cfg_.min_off_ms)) {
+    // Anti-short-cycle first: nothing starts a block before the rest floor,
+    // except the hard override, which returned above.
+    if (!elapsed(now_ms, fridge_since_ms_, cfg_.min_off_ms))
+      return;
+
+    // Two ways in. The ceiling is the safety net; the schedule is the normal
+    // path and is suppressed while coasting, which is what makes sleep mode
+    // "pre-cool, then nothing until the ceiling" rather than a cycle count.
+    const bool too_warm = in.fridge_temp_c > ceiling;
+    const bool scheduled = !coasting && elapsed(now_ms, fridge_since_ms_, cfg_.rest_block_ms) &&
+                           in.fridge_temp_c > floor_c;
+    // The floor test on `scheduled` matters: starting a block on a cabinet
+    // already at target would burn min_on_ms of inverter for no cooling, every
+    // rest period, forever.
+    if (too_warm || scheduled) {
       out_.fridge_req = true;
       fridge_since_ms_ = now_ms;
     }
     return;
   }
 
-  // Release needs all three: cold enough, compressor quiet long enough, and
-  // the inverter having been up long enough to be worth having started.
-  const bool cold = in.fridge_temp_c < floor_c;
-  const bool quiet = elapsed(now_ms, compressor_busy_ms_, cfg_.compressor_idle_ms);
+  // --- running: when does the block end? ---
   const bool settled = elapsed(now_ms, fridge_since_ms_, cfg_.min_on_ms);
-  if (cold && quiet && settled) {
+  if (!settled)
+    return;
+
+  const bool cold = in.fridge_temp_c < floor_c;
+
+  // A run that started as the hard override runs properly back down to the
+  // floor: once it has been let go that far, ending on a block timer would
+  // leave it barely inside the safe band and straight back at the ceiling.
+  if (out_.fridge_hard) {
+    if (cold) {
+      out_.fridge_req = false;
+      out_.fridge_hard = false;
+      fridge_since_ms_ = now_ms;
+    }
+    return;
+  }
+
+  // Coasting has no block schedule, so its only exit is reaching the target -
+  // and the target is the deep one, to maximise the coast that follows.
+  if (coasting) {
+    if (cold) {
+      out_.fridge_req = false;
+      fridge_since_ms_ = now_ms;
+    }
+    return;
+  }
+
+  // Normal running. Any one of three ends the block - note OR, not AND. The
+  // compressor-stopped term is the salvaged Strategy A: worth taking when this
+  // fridge does stop (it does, at low ambient), but never required, because
+  // requiring it is precisely the bug this rewrite exists to remove.
+  const bool block_done = elapsed(now_ms, fridge_since_ms_, cfg_.run_block_ms);
+  const bool compressor_stopped = elapsed(now_ms, compressor_busy_ms_, cfg_.compressor_idle_ms);
+  if (cold || block_done || compressor_stopped) {
     out_.fridge_req = false;
-    out_.fridge_hard = false;
     fridge_since_ms_ = now_ms;
   }
 }
@@ -296,33 +371,29 @@ void ArbiterCore::manual_cancel(uint32_t now_ms) {
 
 // --- parked mode -----------------------------------------------------------
 
-bool ArbiterCore::park_request(uint32_t now_ms, bool force) {
-  out_.park_refused = false;
+bool ArbiterCore::park_request(uint32_t now_ms) {
   if (parked_)
     return true;
 
-  if (!force) {
-    // Both probes must be readable. "I cannot tell whether there is food in
-    // there" is a refusal, not a shrug: this gate is the only thing standing
-    // between a mis-press and two days of spoiled food.
-    if (!last_in_.temp_valid || !last_in_.cabin_valid) {
-      out_.park_refused = true;
-      return false;
-    }
-    // A cabinet well below cabin ambient is a fridge that is working, which
-    // means it is loaded and cooling, which means this is not a parked van.
-    if (last_in_.cabin_temp_c - last_in_.fridge_temp_c > cfg_.parked_arm_delta_c) {
-      out_.park_refused = true;
-      return false;
-    }
+  // Second request inside the window: commit.
+  if (park_armed_ && !elapsed(now_ms, park_armed_ms_, cfg_.park_confirm_ms)) {
+    park_armed_ = false;
+    out_.park_pending = false;
+    parked_ = true;
+    parked_since_ms_ = now_ms;
+    // Publish immediately rather than waiting for the next tick: the caller is
+    // a button handler, and the UI reads outputs() the instant it returns.
+    out_.parked = true;
+    return true;
   }
 
-  parked_ = true;
-  parked_since_ms_ = now_ms;
-  // Publish immediately rather than waiting for the next tick: the caller is a
-  // button handler, and the UI reads outputs() the instant it returns.
-  out_.parked = true;
-  return true;
+  // First request, or one arriving after a previous arm lapsed: arm and wait.
+  // Re-arming rather than committing is the whole point - a stale arm from an
+  // hour ago must never be completed by an unrelated press.
+  park_armed_ = true;
+  park_armed_ms_ = now_ms;
+  out_.park_pending = true;
+  return false;
 }
 
 void ArbiterCore::set_parked(uint32_t now_ms, bool on) {
@@ -332,7 +403,8 @@ void ArbiterCore::set_parked(uint32_t now_ms, bool on) {
       parked_since_ms_ = now_ms;
     }
     out_.parked = true;
-    out_.park_refused = false;
+    park_armed_ = false;
+    out_.park_pending = false;
   } else {
     park_exit(now_ms);
   }
@@ -344,13 +416,17 @@ void ArbiterCore::park_exit(uint32_t now_ms) {
   parked_ = false;
   out_.parked = false;
   out_.parked_for_s = 0;
-  out_.park_refused = false;
+  // A pending arm does not survive leaving the mode: the next single press
+  // must arm afresh, not complete a confirmation from before the exit.
+  park_armed_ = false;
+  out_.park_pending = false;
   // Re-arm the boot force-on window. Coming out of parked mode is exactly the
   // moment food gets loaded, and the normal thermostat would sit idle at cabin
   // temperature waiting for a threshold it is already past. Power it now and
   // let the arbiter take over once the probes have had their say.
   boot_ms_ = now_ms;
   temp_fresh_ms_ = now_ms;
+  link_fresh_ms_ = now_ms;
   compressor_busy_ms_ = now_ms;
   manual_busy_ms_ = now_ms;
   fridge_since_ms_ = now_ms - cfg_.min_off_ms;

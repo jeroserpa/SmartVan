@@ -69,6 +69,16 @@ void AcArbiter::update() {
 
   const van::ArbiterOutputs &out = this->core_.tick(now, in);
 
+  // A write attempted while the link was down never reached the station, but it
+  // still updated last_written_ - so on reconnect the arbiter believes AC is
+  // already what it asked for and the re-assert would not go out for up to
+  // REASSERT_MS. That is a minute of fridge-off after the link is back, in
+  // exactly the scenario the fail-safe exists for. Treat the down->up edge as
+  // "nothing is known to be written" and re-send on the next tick.
+  if (in.ble_connected && !this->ble_was_connected_)
+    this->written_once_ = false;
+  this->ble_was_connected_ = in.ble_connected;
+
   const bool changed = !this->written_once_ || out.ac_on != this->last_written_;
   const bool due = (now - this->last_write_ms_) >= REASSERT_MS;
   if (this->ac_switch_ != nullptr && (changed || due)) {
@@ -94,8 +104,10 @@ void AcArbiter::dump_config() {
                 c.compressor_idle_ms / 1000u);
   ESP_LOGCONFIG(TAG, "  min on/off: %u / %u s", c.min_on_ms / 1000u, c.min_off_ms / 1000u);
   ESP_LOGCONFIG(TAG, "  sensor max age: %u s", this->sensor_max_age_ms_ / 1000u);
-  ESP_LOGCONFIG(TAG, "  parked arm interlock: cabinet within %.1f C of cabin",
-                c.parked_arm_delta_c);
+  ESP_LOGCONFIG(TAG, "  parked: manual, confirmed twice within %u s",
+                c.park_confirm_ms / 1000u);
+  ESP_LOGCONFIG(TAG, "  run/rest blocks: %u / %u min (UNVERIFIED defaults)",
+                c.run_block_ms / 60000u, c.rest_block_ms / 60000u);
   if (this->core_.parked())
     ESP_LOGW(TAG, "  PARKED: AC held off and the fail-safe is disarmed");
 }

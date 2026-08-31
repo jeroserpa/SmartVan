@@ -28,6 +28,7 @@ CONF_BATTERY_LEVEL = "battery_level"
 CONF_BLE_CONNECTED = "ble_connected"
 CONF_AC_SWITCH = "ac_switch"
 CONF_SENSOR_MAX_AGE = "sensor_max_age"
+CONF_LINK_STALE = "link_stale"
 
 CONFIG_SCHEMA = cv.Schema(
     {
@@ -48,6 +49,10 @@ CONFIG_SCHEMA = cv.Schema(
         # How old a reading may be before it counts as missing. Must comfortably
         # exceed the slowest feeding sensor's update_interval.
         cv.Optional(CONF_SENSOR_MAX_AGE, default="30s"): cv.positive_time_period_milliseconds,
+        # Station silence with the link still nominally up. This is the only
+        # fail-safe that can still reach the P310, so it must trail
+        # sensor_max_age, never lead it.
+        cv.Optional(CONF_LINK_STALE, default="60s"): cv.positive_time_period_milliseconds,
     }
 ).extend(cv.polling_component_schema("5s"))
 
@@ -69,3 +74,4 @@ async def to_code(config):
         cg.add(var.set_battery_level(await cg.get_variable(config[CONF_BATTERY_LEVEL])))
 
     cg.add(var.set_sensor_max_age(config[CONF_SENSOR_MAX_AGE]))
+    cg.add(var.set_link_stale(config[CONF_LINK_STALE]))

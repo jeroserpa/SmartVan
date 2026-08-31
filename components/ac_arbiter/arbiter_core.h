@@ -30,16 +30,28 @@ struct ArbiterConfig {
   float sleep_ceiling_c = 6.0f; // raised ceiling while coasting
   float sleep_target_c = 1.0f;  // when a coast cycle does run, go all the way down
 
-  // --- compressor-satisfied detection ---
-  // The tail between compressor stop and inverter shutdown is pure idle waste,
-  // incurred every cycle; 90s is debounce, not caution. Push it lower once the
-  // 24h log exists.
+  // --- opportunistic early release (ANALYSIS 4.2 "Strategy A") ---
+  // The compressor genuinely stopping is worth acting on, but it is NOT the
+  // release condition. This fridge has a variable-speed inverter compressor: it
+  // modulates for hours and at high ambient never stops at all, so a release
+  // that *required* a quiet compressor could never fire and latched fridge_req
+  // true forever (ANALYSIS 4.1). It is now one of several ways a run block can
+  // end, never the only one.
   float compressor_idle_w = 15.0f;
   uint32_t compressor_idle_ms = 90u * 1000u;
 
+  // --- block schedule (ANALYSIS 4.2 "Strategy B") ---
+  // The supervisor picks the cycles; the appliance no longer does. Both lengths
+  // are `UNVERIFIED` - they follow from the coast rate and the pulldown penalty,
+  // neither of which is measured yet. 30 min is the low end of the 20-30 min
+  // floor in CLAUDE.md section 6: an inverter compressor dislikes restarts, and
+  // the pressure-equalisation penalty scales with cycle *count*, so err long.
+  uint32_t run_block_ms = 30u * 60u * 1000u;
+  uint32_t rest_block_ms = 30u * 60u * 1000u;
+
   // --- cycle shaping ---
-  uint32_t min_on_ms = 10u * 60u * 1000u; // do not release before this
-  uint32_t min_off_ms = 5u * 60u * 1000u; // anti-short-cycle
+  uint32_t min_on_ms = 10u * 60u * 1000u;  // do not release before this
+  uint32_t min_off_ms = 20u * 60u * 1000u; // anti-short-cycle, sized to the block
 
   // --- manual (cooking) button ---
   uint32_t manual_initial_ms = 45u * 60u * 1000u;
@@ -60,15 +72,29 @@ struct ArbiterConfig {
   uint32_t temp_stale_ms = 5u * 60u * 1000u; // stale probe => force on
   uint32_t watchdog_ms = 30u * 1000u;        // tick starvation => force on
 
+  // Station data stalled while the link still claims to be up. This is the
+  // *pre-emptive* fail-safe and the only one that can actually save the fridge:
+  // by the time ble_connected drops there is no link left to carry an ON
+  // command, so the request must go out while the link is merely degrading.
+  // Sized just above sensor_max_age (45s) so it trails the sensors going
+  // invalid rather than racing them.
+  uint32_t link_stale_ms = 60u * 1000u;
+
   // --- drive inhibit (Phase 4, default off; suppressor, never a request) ---
   uint32_t inhibit_max_ms = 4u * 60u * 60u * 1000u; // stuck-true must expire
 
   // --- parked mode (van left at home, fridge emptied, AC hard off) ---
-  // The arming interlock. An empty fridge with the door ajar equilibrates to
-  // cabin ambient; a loaded, running one does not. Refuse to arm while the
-  // cabinet is more than this far below cabin, because parking with food
-  // inside is the one way this mode spoils anything.
-  float parked_arm_delta_c = 3.0f;
+  // `REVISED 2026-08-25`: parking is a manual decision confirmed twice, not an
+  // inference from temperatures. The old interlock refused to arm while the
+  // cabinet read more than 3 C below cabin, on the theory that a cold cabinet
+  // means a loaded fridge. It also refused whenever either probe was missing,
+  // which made a storage feature depend on two sensors it does not otherwise
+  // need. See decisions.md D-14.
+  //
+  // The window for the second, confirming request. Long enough for two bezel
+  // long-presses or two taps in a web UI; short enough that an arm left
+  // hanging cannot commit hours later.
+  uint32_t park_confirm_ms = 30u * 1000u;
 };
 
 // Everything the arbiter is allowed to know about the outside world.
@@ -105,6 +131,7 @@ enum class AcReason : uint8_t {
   PARKED, // off, and deliberately not coming back on
   BOOT,
   BLE_LOST,
+  LINK_STALE, // connected, but the station stopped talking
   TEMP_STALE,
   WATCHDOG,
   FRIDGE_HARD, // temp above the hard override
@@ -124,7 +151,7 @@ struct ArbiterOutputs {
   bool manual_warning = false; // within manual_warn_ms of auto-release
   uint32_t manual_remaining_s = 0;
   bool parked = false;         // long-term storage: AC held off, fail-safe disarmed
-  bool park_refused = false;   // last park_request() was rejected by the interlock
+  bool park_pending = false;   // armed by one request, waiting for the confirming one
   uint32_t parked_for_s = 0;   // since entry, or since the last reboot while parked
   AcReason reason = AcReason::BOOT;
 };
@@ -146,15 +173,16 @@ class ArbiterCore {
   void manual_cancel(uint32_t now_ms); // long press: drop immediately
 
   // --- parked mode ---
-  // Guarded entry, for anything a person can press. Returns false and sets
-  // out_.park_refused if the cabinet still looks like a working fridge, or if
-  // the temperatures needed to tell are missing. `force` bypasses the
-  // interlock and must only be reachable from a deliberate two-step gesture.
-  bool park_request(uint32_t now_ms, bool force = false);
+  // Two-step, and deliberately so. The first call arms; a second call within
+  // park_confirm_ms commits and returns true. An arm that is not confirmed
+  // lapses on its own. There is no temperature interlock and no probe
+  // requirement: whether the fridge is empty is a fact only the human knows,
+  // and asking twice is a better guard than inferring it (D-14).
+  bool park_request(uint32_t now_ms);
 
-  // Unguarded. This is the reboot-restore path only: at boot no probe has
-  // reported yet, so the interlock would refuse and silently un-park a van
-  // that is meant to stay parked for weeks. Never wire a button to it.
+  // Single-step, no confirmation. This is the reboot-restore path only: a van
+  // meant to stay parked for three weeks must not need a human to re-confirm
+  // after every brownout. Never wire a button to it.
   void set_parked(uint32_t now_ms, bool on);
 
   void park_exit(uint32_t now_ms);
@@ -178,6 +206,7 @@ class ArbiterCore {
   // fridge
   uint32_t fridge_since_ms_ = 0;    // last fridge_req transition
   uint32_t temp_fresh_ms_ = 0;      // last time temp_valid was true
+  uint32_t link_fresh_ms_ = 0;      // last time the station sent anything
   uint32_t compressor_busy_ms_ = 0; // last time output_power was above idle
 
   // manual
@@ -195,6 +224,8 @@ class ArbiterCore {
   // parked mode
   bool parked_ = false;
   uint32_t parked_since_ms_ = 0;
+  bool park_armed_ = false;
+  uint32_t park_armed_ms_ = 0;
   ArbiterInputs last_in_;  // snapshot for the arming interlock
 };
 
