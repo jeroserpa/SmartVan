@@ -1,0 +1,254 @@
+# van-heater - the water heater's switch and wattmeter.
+#
+# Hardware: Athom Smart Plug V3 (ESP32-C3, CSE7766 metering), shipped with
+# ESPHome. Nothing in the 230V installation is modified: this plug goes in the
+# wall socket that already exists, and the heater's own plug goes into it
+# (BOM D1e).
+#
+# Derived from athom-tech/esp32-configs/athom-smart-plug.yaml @ v2.0.8, which is
+# the authoritative source for the pin map below. Every deviation from that file
+# is commented with why.
+#
+# THIS NODE IS A DUMB ACTUATOR WITH A WATTMETER. It holds no permit logic. The
+# decision to heat lives on van-core: SOC > 85% AND (alternator charging OR
+# input_power > 400W), hard lockout below 70%, never in sleep or parked mode
+# (BOM D1b, D1c).
+#
+# It is powered only while the inverter is on, so it appears and disappears by
+# design (CLAUDE.md section 4). van-core must treat its absence as normal.
+
+substitutions:
+  node_name: van-heater
+  friendly_name: Van heater
+
+  # --- pins: Athom Smart Plug V3, from the upstream config. Do not guess these ---
+  pin_relay: GPIO5
+  pin_button: GPIO3
+  pin_led: GPIO6
+  pin_cse7766_rx: GPIO20
+
+  # Overcurrent trip, amps. The upstream default is 16 (the plug's rating).
+  # Set lower on purpose: a 2kW element draws 8.7A and nothing else legitimately
+  # shares this socket, so anything above 12A is a fault, not a load. The P310
+  # can deliver ~14A, so the plug's own rating would not be reached first.
+  current_trip_a: "12"
+
+  sensor_update_interval: 10s
+
+esphome:
+  name: ${node_name}
+  friendly_name: ${friendly_name}
+  comment: "Water heater relay + metering"
+  # Matches van-core. Everything upstream needed 2026.8.0 for (the `update:`
+  # component, `area:`) has been removed. `min_version` is a floor, not a pin -
+  # verify van-core still builds on whichever CLI version you actually run.
+  min_version: 2025.7.0
+  # NOT SET: name_add_mac_suffix. Upstream uses it, which is how this device
+  # arrived as athom-smart-plug-v3-8e0fef0. A fixed hostname is worth more here.
+  #
+  # DELIBERATELY ABSENT: upstream's `on_boot` priority-600 block. It read a
+  # restore_value global (default 2 = Always On) and called relay.turn_on(),
+  # which silently defeats `restore_mode: ALWAYS_OFF` below. A 2kW element on a
+  # floating supply (BOM D1c) must never re-energise itself after a brownout.
+  # The `Power On State` select and its global are removed for the same reason.
+  # Do not reinstate any of it when syncing against a newer upstream release.
+  # NOT CARRIED OVER: upstream's `platformio_options` (board_build.mcu/variant/
+  # flash_mode). ESPHome 2026.8 builds esp-idf with the native toolchain and
+  # ignores them, warning on each one. The `esp32:` block below already says
+  # everything they said.
+
+esp32:
+  board: esp32-c3-devkitm-1
+  variant: ESP32C3
+  flash_size: 4MB
+  framework:
+    type: esp-idf
+
+packages:
+  base: !include ../common/base.yaml
+
+# Serial logging is pointless on a sealed mains plug and costs CPU. 0 keeps the
+# web log and drops the UART. Overrides common/base.yaml's 115200.
+logger:
+  level: INFO
+  baud_rate: 0
+
+preferences:
+  flash_write_interval: 5min
+
+# -----------------------------------------------------------------------------
+# Network. Two networks on purpose: the van SoftAP for normal service, and the
+# house SSID so this node can still be reached and reflashed when van-core is
+# not running. A SoftAP-only config makes the only recovery route a power cycle
+# into safe mode on a plug behind a fridge.
+# -----------------------------------------------------------------------------
+wifi:
+  networks:
+    - ssid: !secret wifi_ssid
+      password: !secret wifi_password
+      manual_ip:
+        static_ip: 192.168.4.12
+        gateway: 192.168.4.1
+        subnet: 255.255.255.0
+    - ssid: !secret home_ssid
+      password: !secret home_password
+  # Last-resort fallback if neither is reachable.
+  ap:
+    ssid: "${node_name}-setup"
+    password: !secret wifi_password
+
+captive_portal:
+
+# DELIBERATELY ABSENT: esp32_ble_tracker, bluetooth_proxy, esp32_improv.
+# Upstream enables an active BLE scan. This plug sits a metre from van-core's
+# BLE link to the P310, and that link is the one subsystem whose flakiness
+# presents as "the fridge occasionally did not come back on" (CLAUDE.md
+# section 2 risk note). No BLE radio on this node.
+#
+# DELIBERATELY ABSENT: `api:`, `update:`/`http_request`, `time: sntp`.
+# No Home Assistant in the van, no internet to fetch firmware manifests from,
+# and no NTP server to poll (CLAUDE.md section 5.5).
+
+uart:
+  id: uart_cse7766
+  rx_pin: ${pin_cse7766_rx}
+  baud_rate: 4800
+  data_bits: 8
+  stop_bits: 1
+  parity: EVEN
+
+# -----------------------------------------------------------------------------
+# Runtime limit. Not in the upstream config; added because BOM D1c forbids
+# unattended operation of this load. Even with van-core's permit rules, a
+# van-core that dies mid-heat must not leave the element running. This is the
+# node-autonomy backstop (CLAUDE.md section 5.1): it works with the network
+# down, because it is entirely local.
+# -----------------------------------------------------------------------------
+number:
+  - platform: template
+    name: "${friendly_name} max on time"
+    id: heater_max_on_min
+    optimistic: true
+    restore_value: true
+    initial_value: 45
+    min_value: 5
+    max_value: 120
+    step: 5
+    unit_of_measurement: min
+    icon: mdi:timer-off-outline
+    entity_category: config
+
+script:
+  - id: heater_runtime_limit
+    mode: restart
+    then:
+      - delay: !lambda "return (uint32_t) (id(heater_max_on_min).state * 60000.0f);"
+      - logger.log:
+          level: WARN
+          format: "heater: runtime limit reached, forcing OFF"
+      - switch.turn_off: relay
+
+switch:
+  - platform: gpio
+    name: "${friendly_name} relay"
+    pin: ${pin_relay}
+    id: relay
+    icon: mdi:power-socket-eu
+    # The fail-OFF property, in git rather than in someone's memory. Upstream
+    # ships RESTORE_DEFAULT_ON; see the esphome: block above for why that is not
+    # merely a different default but an actively defeated one.
+    restore_mode: ALWAYS_OFF
+    on_turn_on:
+      - script.execute: heater_runtime_limit
+    on_turn_off:
+      - script.stop: heater_runtime_limit
+
+binary_sensor:
+  # Local manual control, kept working with the network down - the same job the
+  # Meross did by hand. Long-press factory reset is NOT wired up: an accidental
+  # 4s press on a node behind a fridge is not a recoverable mistake in the field.
+  - platform: gpio
+    pin:
+      number: ${pin_button}
+      mode: INPUT_PULLUP
+      inverted: true
+    name: "${friendly_name} button"
+    id: power_button
+    entity_category: diagnostic
+    filters:
+      - delayed_on_off: 20ms
+    on_press:
+      - switch.toggle: relay
+
+sensor:
+  - platform: cse7766
+    id: cse7766_meter
+    current:
+      name: "${friendly_name} current"
+      id: current_sensor
+      filters:
+        - throttle_average: ${sensor_update_interval}
+      # Hardware-independent overcurrent trip. Retained from upstream; the
+      # threshold is lowered - see substitutions.
+      on_value_range:
+        - above: ${current_trip_a}
+          then:
+            - logger.log:
+                level: ERROR
+                format: "heater: overcurrent, forcing OFF"
+            - switch.turn_off: relay
+    voltage:
+      name: "${friendly_name} voltage"
+      filters:
+        - throttle_average: ${sensor_update_interval}
+    power:
+      # P_heater. Feeds van-core's water-temperature estimator, and is the dead
+      # element detector: commanded on, drawing 0W (CLAUDE.md section 9 Phase 2).
+      name: "${friendly_name} power"
+      id: power_sensor
+      filters:
+        - throttle_average: ${sensor_update_interval}
+    power_factor:
+      name: "${friendly_name} power factor"
+      filters:
+        - throttle_average: ${sensor_update_interval}
+      entity_category: diagnostic
+
+  # `integration`, not `total_daily_energy`: the latter needs a time component to
+  # know when midnight is, and there is no clock on this node - no SNTP without
+  # internet, and the DS3231 lives on van-core. This accumulates kWh across
+  # reboots instead, which is what the energy budget actually wants. Daily
+  # figures come from van-core's SD log, which does have a clock.
+  - platform: integration
+    name: "${friendly_name} energy total"
+    id: energy_total
+    sensor: power_sensor
+    time_unit: h
+    unit_of_measurement: kWh
+    accuracy_decimals: 3
+    restore: true
+    filters:
+      - multiply: 0.001
+
+  - platform: wifi_signal
+    name: "${friendly_name} wifi signal"
+    update_interval: 60s
+    entity_category: diagnostic
+
+light:
+  - platform: status_led
+    name: "${friendly_name} status led"
+    id: blue_led
+    disabled_by_default: true
+    pin:
+      number: ${pin_led}
+      inverted: true
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "${friendly_name} ip address"
+      entity_category: diagnostic
+    ssid:
+      name: "${friendly_name} ssid"
+      entity_category: diagnostic
