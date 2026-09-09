@@ -47,6 +47,10 @@ esphome:
   # Pin the toolchain. A routine ESPHome update must not invalidate a working
   # config two days before a trip (CLAUDE.md section 11).
   min_version: 2025.7.0
+  # Palette and the three drawing primitives ESPHome lacks (arc gauge, IEC AC
+  # mark, flag pill). Shared with the bench rig so the two cannot drift.
+  includes:
+    - vc_draw.h
   on_boot:
     # Priority 800 is before almost everything else. The arbiter's own setup()
     # already commands AC ON; this is the belt to that braces.
@@ -185,7 +189,7 @@ binary_sensor:
             // First press wakes; subsequent presses cycle. The screen is dark
             // most of the time, so page-cycling a blank display is never useful.
             if (id(display_awake)) {
-              id(van_display).show_next_page();
+              id(page_idx) = (id(page_idx) + 1) % 4;
             }
             id(display_awake) = true;
             id(display_wake_ms) = millis();
@@ -824,6 +828,12 @@ globals:
     type: uint32_t
     restore_value: false
     initial_value: "0"
+  # Which of the four display pages is showing. A plain index rather than
+  # ESPHome `pages:` so the status strip is drawn in one place.
+  - id: page_idx
+    type: int
+    restore_value: false
+    initial_value: "0"
   # Parked mode across reboots. A switch restore_mode would do this too, but it
   # would fire on_turn_on at boot and run the arming interlock against probes
   # that have not reported yet - which refuses, and so quietly un-parks a van
@@ -887,8 +897,20 @@ interval:
           id(out_backlight)->set_level(id(display_awake) ? 0.8f : 0.0f);
 
 # -----------------------------------------------------------------------------
-# Display. Four pages, cycled by the bezel button. Simple fonts, no animation,
-# 1s refresh: the BLE task must not be starved (CLAUDE.md section 2 risk note).
+# Display. Native 320x172 - the LCD-1.47 turned to landscape - four pages
+# cycled by the bezel button. Same instrument-dark language as the bench rig
+# (nodes/vc_draw.h holds the palette and the three primitives ESPHome lacks),
+# re-laid for the panel the design was drawn for instead of scaled down to it.
+#
+# What survived the small screen:
+#   - one idea per page, and at most two numbers a metre away can read;
+#   - every STATE lives in the 20px top strip, so pages never repeat it;
+#   - colour never carries meaning alone - shape or words back it up, because
+#     this panel washes out in daylight through a printed bezel;
+#   - 1s refresh, no animation: the BLE task must not be starved (section 2).
+#
+# Fonts are 4-bit anti-aliased. On a 1.47" panel that is the single biggest
+# legibility win available and it costs flash only - 16MB here.
 # -----------------------------------------------------------------------------
 spi:
   clk_pin: ${pin_lcd_sclk}
@@ -897,15 +919,43 @@ spi:
 font:
   # Compiled in from Google Fonts at build time. Needs internet ON THE BUILD
   # MACHINE only - compile at home, then join the SoftAP to upload.
-  - file: "gfonts://Roboto"
-    id: font_big
-    size: 40
-  - file: "gfonts://Roboto"
-    id: font_med
+  # The two big faces carry only what a number can contain: a 56px 4-bit font
+  # with the whole Latin range is a lot of flash for glyphs never drawn.
+  - file: "gfonts://Roboto@700"
+    id: f_mega
+    size: 56
+    bpp: 4
+    glyphs: "0123456789.-+°CLW% "
+  - file: "gfonts://Roboto@700"
+    id: f_big
+    size: 42
+    bpp: 4
+    glyphs: "0123456789.-+°CLW% "
+  - file: "gfonts://Roboto@500"
+    id: f_med
     size: 20
+    bpp: 4
   - file: "gfonts://Roboto"
-    id: font_small
-    size: 14
+    id: f_row
+    size: 15
+    bpp: 4
+  - file: "gfonts://Roboto@500"
+    id: f_lbl
+    size: 12
+    bpp: 4
+
+# Real MDI glyphs. 14px for the status strip, 20px where an icon labels a row.
+image:
+  - { id: ico_bt,    file: "mdi:bluetooth",     resize: 14x14, type: BINARY }
+  - { id: ico_btoff, file: "mdi:bluetooth-off", resize: 14x14, type: BINARY }
+  - { id: ico_moon,  file: "mdi:weather-night", resize: 14x14, type: BINARY }
+  - { id: ico_pot,   file: "mdi:pot-steam",     resize: 14x14, type: BINARY }
+  - { id: ico_car,   file: "mdi:car",           resize: 14x14, type: BINARY }
+  - { id: ico_snow,  file: "mdi:snowflake",     resize: 14x14, type: BINARY }
+  - { id: ico_drop,  file: "mdi:water",         resize: 14x14, type: BINARY }
+  - { id: ico_sun,   file: "mdi:weather-sunny", resize: 20x20, type: BINARY }
+  - { id: ico_alt,   file: "mdi:car",           resize: 20x20, type: BINARY }
+  - { id: ico_plug,  file: "mdi:power-plug",    resize: 20x20, type: BINARY }
 
 display:
   - platform: st7789v
@@ -923,68 +973,262 @@ display:
     dc_pin: ${pin_lcd_dc}
     reset_pin: ${pin_lcd_rst}
     update_interval: 1s
-    pages:
-      # --- page 1: the battery ---
-      - id: page_power
-        lambda: |-
-          it.printf(4, 0, id(font_small), "BATTERY");
-          if (id(battery_percent).has_state())
-            it.printf(4, 18, id(font_big), "%.0f%%", id(battery_percent).state);
-          if (id(input_watts).has_state() && id(output_watts).has_state())
-            it.printf(4, 70, id(font_med), "in %.0fW   out %.0fW",
-                      id(input_watts).state, id(output_watts).state);
-          if (id(remaining_minutes).has_state())
-            it.printf(4, 96, id(font_med), "%.1f h remaining",
-                      id(remaining_minutes).state / 60.0f);
-          if (!id(p310_connected).state)
-            it.printf(4, 130, id(font_med), "BLE DOWN - AC FORCED ON");
+    # One lambda rather than `pages:` so the status strip is drawn once, not
+    # pasted into four page bodies. Paging is `page_idx`, bumped by the bezel.
+    lambda: |-
+      using namespace esphome::vc;
+      using display::TextAlign;
+      it.fill(bg());
 
-      # --- page 2: the fridge and why the inverter is doing what it is doing ---
-      - id: page_fridge
-        lambda: |-
-          it.printf(4, 0, id(font_small), "FRIDGE");
-          if (id(fridge_temp).has_state())
-            it.printf(4, 18, id(font_big), "%.1f C", id(fridge_temp).state);
-          else
-            it.printf(4, 18, id(font_big), "-- C");
-          it.printf(4, 70, id(font_med), "AC %s (%s)",
-                    id(arbiter)->ac_on() ? "ON" : "off", id(arbiter)->reason());
-          if (id(arbiter)->manual_req())
-            it.printf(4, 96, id(font_med), "manual %u min left",
-                      (unsigned) (id(arbiter)->manual_remaining_s() / 60));
-          // Surface the configured ceiling: an 8 C overnight ceiling is a food
-          // decision and the automation must never make it silently.
-          if (id(sw_sleep_mode).state)
-            it.printf(4, 122, id(font_med), "SLEEP, ceiling %.1f C",
-                      id(num_sleep_ceiling).state);
-          // Parked is stated in the largest terms this page allows. It is the
-          // screen someone glances at while loading the van, and "the fridge is
-          // off on purpose and will stay off" has to be what they read, not
-          // something they infer from an idle inverter.
-          if (id(arbiter)->parked())
-            it.printf(4, 122, id(font_med), "PARKED %.1f d - FRIDGE OFF",
-                      id(arbiter)->parked_for_s() / 86400.0f);
+      // ---- shared state ----------------------------------------------------
+      const bool ble    = id(p310_connected).state;
+      const bool probe  = id(fridge_temp).has_state() && !std::isnan(id(fridge_temp).state);
+      const bool parked = id(arbiter)->parked();
+      const bool force  = id(arbiter)->force_on() && !parked;
+      const bool manual = id(arbiter)->manual_req();
+      const bool sleep_ = id(sw_sleep_mode).state;
+      const bool drive  = id(sw_drive_inhibit).state;
+      const bool ac_on  = id(arbiter)->ac_on();
 
-      # --- page 3: water (van-water, Phase 2) ---
-      - id: page_water
-        lambda: |-
-          it.printf(4, 0, id(font_small), "WATER");
-          it.printf(4, 18, id(font_med), "van-water not yet installed");
+      const bool  have_soc  = id(battery_percent).has_state();
+      const float soc       = have_soc ? id(battery_percent).state : 0.0f;
+      const bool  have_flow = id(input_watts).has_state() && id(output_watts).has_state();
+      const float win       = have_flow ? id(input_watts).state : 0.0f;
+      const float wout      = have_flow ? id(output_watts).state : 0.0f;
+      const float net       = win - wout;
 
-      # --- page 4: diagnostics ---
-      - id: page_diag
-        lambda: |-
-          it.printf(4, 0, id(font_small), "DIAGNOSTICS");
-          it.printf(4, 20, id(font_small), "BLE: %s",
-                    id(p310_connected).state ? "up" : "DOWN");
-          it.printf(4, 38, id(font_small), "probe: %s",
-                    id(fridge_temp).has_state() ? "ok" : "STALE");
-          if (id(cabin_temp).has_state())
-            it.printf(4, 56, id(font_small), "cabin: %.1f C", id(cabin_temp).state);
-          it.printf(4, 74, id(font_small), "flags: F%d M%d S%d X%d P%d",
-                    id(arbiter)->fridge_req(), id(arbiter)->manual_req(),
-                    id(arbiter)->surplus_req(), id(arbiter)->force_on(),
-                    id(arbiter)->parked());
-          // SoftAP address is fixed by ESPHome; mDNS is unreliable on SoftAP so
-          // this is the address to type, not a hostname.
-          it.printf(4, 92, id(font_small), "AP: 192.168.4.1");
+      // ---- top strip, 20px, identical on every page ------------------------
+      // Anything that is a STATE rather than a value lives here: page name,
+      // fail-safe, the inverter mark, BLE, and one icon per active mode.
+      static const char *PAGES[4] = {"ENERGY", "FRIDGE", "WATER", "DIAG"};
+      const int pg = id(page_idx);
+      it.print(6, 4, id(f_lbl), amber(), PAGES[pg]);
+      if (force)
+        it.print(70, 4, id(f_lbl), bad(), "FAIL-SAFE");
+      for (int i = 0; i < 4; i++)
+        it.filled_circle(148 + 8 * i, 10, 2, i == pg ? amber() : faint());
+
+      int ix = 300;
+      if (parked)     ac_symbol(it, ix, 2, 16, water(), true);
+      else if (ac_on) ac_symbol(it, ix, 2, 16, force ? bad() : amber(), false);
+      else            ac_symbol(it, ix, 2, 16, dim(), true);
+      ix -= 19;
+      it.image(ix, 3, ble ? id(ico_bt) : id(ico_btoff), ble ? good() : bad(), bg());
+      if (sleep_) { ix -= 18; it.image(ix, 3, id(ico_moon), water(), bg()); }
+      if (manual) { ix -= 18; it.image(ix, 3, id(ico_pot),  good(),  bg()); }
+      if (drive)  { ix -= 18; it.image(ix, 3, id(ico_car),  bad(),   bg()); }
+      if (parked) { ix -= 60; pill(it, id(f_lbl), ix, 3, 54, 14, "PARKED", true, water()); }
+      it.line(0, 20, 320, 20, faint());
+
+      // =====================================================================
+      if (pg == 0) {
+        // ---- ENERGY: the battery on the left, the flow on the right --------
+        // SOC decides whether the trip continues; net decides whether it will
+        // still be true tomorrow. The two flows under net are supporting cast.
+        const Color soc_col = !have_soc ? dim()
+                            : soc > 40.0f ? good() : soc > 20.0f ? amber() : bad();
+        arc_gauge(it, 76, 98, 64, 52, have_soc ? soc : 0.0f, soc_col, faint());
+        if (have_soc)
+          it.printf(76, 96, id(f_big), soc_col, TextAlign::CENTER, "%.0f%%", soc);
+        else
+          it.print(76, 96, id(f_big), dim(), TextAlign::CENTER, "--%");
+        // In the gauge's open bottom. The P310's own estimate, so labelled as
+        // time left only while draining - it is meaningless while charging.
+        if (!have_flow || !id(remaining_minutes).has_state())
+          it.print(76, 136, id(f_row), dim(), TextAlign::TOP_CENTER, "--");
+        else if (net > 5.0f)
+          it.print(76, 136, id(f_row), good(), TextAlign::TOP_CENTER, "charging");
+        else
+          it.printf(76, 136, id(f_row), dim(), TextAlign::TOP_CENTER, "%.1f h left",
+                    id(remaining_minutes).state / 60.0f);
+
+        const Color net_col = !have_flow ? dim()
+                            : fabsf(net) < 5.0f ? dim() : net > 0 ? good() : amber();
+        it.print(152, 26, id(f_lbl), dim(), "NET");
+        it.print(316, 26, id(f_lbl), net_col, TextAlign::TOP_RIGHT,
+                 !have_flow ? "NO DATA" : fabsf(net) < 5.0f ? "BALANCED"
+                            : net > 0 ? "CHARGING" : "DRAINING");
+        if (have_flow)
+          it.printf(288, 40, id(f_big), net_col, TextAlign::TOP_RIGHT, "%+.0f", net);
+        else
+          it.print(288, 40, id(f_big), dim(), TextAlign::TOP_RIGHT, "--");
+        it.print(316, 60, id(f_med), net_col, TextAlign::TOP_RIGHT, "W");
+
+        it.line(152, 94, 316, 94, faint());
+        // The input icon says WHERE the power is from: sun, or the alternator
+        // / shore via the AC input. The number is the P310's total input.
+        const bool alt = id(ac_input_watts).has_state() && id(ac_input_watts).state > 50.0f;
+        it.image(152, 102, alt ? id(ico_alt) : id(ico_sun), win > 0 ? good() : faint(), bg());
+        it.print(178, 106, id(f_lbl), dim(), alt ? "AC IN" : "SOLAR");
+        it.image(152, 128, id(ico_plug), wout > 0 ? fg() : faint(), bg());
+        it.print(178, 132, id(f_lbl), dim(), "LOAD");
+        if (have_flow) {
+          it.printf(316, 102, id(f_med), win > 0 ? good() : dim(), TextAlign::TOP_RIGHT, "%.0f W", win);
+          it.printf(316, 128, id(f_med), wout > 0 ? fg() : dim(), TextAlign::TOP_RIGHT, "%.0f W", wout);
+        } else {
+          it.print(316, 102, id(f_med), dim(), TextAlign::TOP_RIGHT, "--");
+          it.print(316, 128, id(f_med), dim(), TextAlign::TOP_RIGHT, "--");
+        }
+
+      } else if (pg == 1) {
+        // ---- FRIDGE: the temperature, the verdict, and the deadband --------
+        const float t      = probe ? id(fridge_temp).state : NAN;
+        const float t_on   = id(num_temp_on).state;
+        const float t_off  = id(num_temp_off).state;
+        const float t_hard = id(num_temp_hard).state;
+        // In sleep mode the ceiling IS the on-threshold, and an 8 C ceiling is
+        // a food decision the automation must never make silently (section 6).
+        const float ceil_c = sleep_ ? id(num_sleep_ceiling).state : t_on;
+
+        it.image(8, 25, id(ico_snow), water(), bg());
+        it.print(26, 26, id(f_lbl), dim(), "FRIDGE");
+        if (id(cabin_temp).has_state())
+          it.printf(312, 26, id(f_lbl), dim(), TextAlign::TOP_RIGHT, "CABIN %.1f°",
+                    id(cabin_temp).state);
+
+        if (probe) {
+          const Color col = t > t_hard ? bad() : t > ceil_c ? amber() : fg();
+          it.printf(6, 36, id(f_mega), col, "%.1f°C", t);
+        } else {
+          it.print(6, 36, id(f_mega), bad(), "--°C");
+        }
+
+        // The verdict block. The fill is the state; being a solid block next
+        // to a hairline strip is what keeps it legible when colour is gone.
+        // Text is blended against the fill, not against black, or 4-bit
+        // glyphs grow a dark fringe on an amber ground.
+        const int bx = 208, by = 36, bw = 104, bh = 58;
+        const Color fill = parked ? water() : ac_on ? (force ? bad() : amber()) : faint();
+        const Color txt  = (ac_on || parked) ? ink() : fg();
+        const Color sub  = (ac_on || parked) ? ink() : dim();
+        it.filled_rectangle(bx, by, bw, bh, fill);
+        it.print(bx + bw / 2, by + 8, id(f_med), txt, TextAlign::TOP_CENTER,
+                 parked ? "PARKED" : ac_on ? "AC ON" : "AC OFF", fill);
+        if (parked)
+          it.printf(bx + bw / 2, by + 34, id(f_row), sub, fill, TextAlign::TOP_CENTER,
+                    "%.1f d", id(arbiter)->parked_for_s() / 86400.0f);
+        else
+          it.print(bx + bw / 2, by + 34, id(f_row), sub, TextAlign::TOP_CENTER,
+                   ac_on ? id(arbiter)->reason() : "idle", fill);
+
+        // The deadband strip: not "4.6 C" but "4.6 C, and this far from the
+        // next run". Zones: satisfied / hysteresis gap / cooling wanted / the
+        // 10 C hard override. Full width, 0-12 C.
+        const int sx = 8, sy = 106, sw = 304, sh = 16;
+        auto pos = [&](float v) {
+          if (v < 0.0f) v = 0.0f;
+          if (v > 12.0f) v = 12.0f;
+          return sx + (int) (v / 12.0f * sw);
+        };
+        const int x_off = pos(t_off), x_hard = pos(t_hard);
+        const int x_on = std::max(pos(ceil_c), x_off);
+        it.filled_rectangle(sx, sy, x_off - sx, sh, Color(0x12, 0x3a, 0x4a));
+        it.filled_rectangle(x_off, sy, x_on - x_off, sh, Color(0x2b, 0x2f, 0x28));
+        it.filled_rectangle(x_on, sy, x_hard - x_on, sh, Color(0x5a, 0x3a, 0x12));
+        it.filled_rectangle(x_hard, sy, sx + sw - x_hard, sh, Color(0x4a, 0x1a, 0x14));
+        it.rectangle(sx, sy, sw, sh, faint());
+        if (probe)
+          it.filled_rectangle(pos(t) - 2, sy - 4, 4, sh + 8, fg());
+        it.printf(x_off, sy + sh + 3, id(f_lbl), dim(), TextAlign::TOP_CENTER, "%.0f", t_off);
+        it.printf(x_on, sy + sh + 3, id(f_lbl), sleep_ ? water() : dim(), TextAlign::TOP_CENTER,
+                  "%.0f", ceil_c);
+        it.printf(x_hard, sy + sh + 3, id(f_lbl), bad(), TextAlign::TOP_CENTER, "%.0f", t_hard);
+
+        // One line of context: which mode owns the fridge right now.
+        const int cy = 148;
+        if (parked) {
+          it.print(8, cy, id(f_row), water(), "Parked: fridge off on purpose");
+        } else if (manual) {
+          it.image(8, cy + 1, id(ico_pot), good(), bg());
+          it.printf(28, cy, id(f_row), good(), "manual - %u min left",
+                    (unsigned) (id(arbiter)->manual_remaining_s() / 60));
+        } else if (sleep_) {
+          it.image(8, cy + 1, id(ico_moon), water(), bg());
+          it.printf(28, cy, id(f_row), water(), "sleep - coasting up to %.1f°", ceil_c);
+        } else if (drive) {
+          it.image(8, cy + 1, id(ico_car), bad(), bg());
+          it.print(28, cy, id(f_row), dim(), "drive inhibit - coasting");
+        } else if (id(arbiter)->fridge_req()) {
+          it.printf(8, cy, id(f_row), amber(), "cooling to %.1f°", t_off);
+        } else {
+          it.printf(8, cy, id(f_row), dim(), "satisfied - cools again above %.1f°", ceil_c);
+        }
+
+      } else if (pg == 2) {
+        // ---- WATER ---------------------------------------------------------
+        // van-water is Phase 2 and has no entity yet. The page is laid out for
+        // the node's ABSENCE, which stays a normal state even once it exists:
+        // a separate box that may simply be unpowered, never a fault.
+        // HOOK: a `water_pct` sensor polled over REST replaces these two.
+        const bool  up  = false;
+        const float pct = 0.0f;
+        const Color col = up ? water() : faint();
+        const int tx = 8, ty = 28, tw = 48, th = 120;
+        it.rectangle(tx, ty, tw, th, col);
+        for (int i = 1; i < 4; i++)
+          it.line(tx, ty + th * i / 4, tx + 7, ty + th * i / 4, faint());
+        if (up) {
+          const int fh = (int) ((th - 4) * pct / 100.0f);
+          it.filled_rectangle(tx + 2, ty + th - 2 - fh, tw - 4, fh, water());
+        }
+        it.image(70, 27, id(ico_drop), col, bg());
+        it.print(88, 28, id(f_lbl), dim(), "FRESH WATER");
+        if (up) {
+          const int litres = (int) (pct * 0.7f);
+          it.printf(70, 42, id(f_mega), fg(), "%d L", litres);
+          it.printf(70, 104, id(f_row), dim(), "of 70 L - %.0f%%", pct);
+          // 12 L/day is an ASSUMPTION; the line says so rather than letting a
+          // bare number imply it was measured.
+          it.printf(70, 124, id(f_row), dim(), "~%.1f days at 12 L/day", litres / 12.0f);
+        } else {
+          it.print(70, 42, id(f_mega), dim(), "-- L");
+          it.print(70, 104, id(f_row), dim(), "van-water not installed");
+          it.print(70, 124, id(f_row), faint(), "Phase 2 - tank sender on ADS1115");
+        }
+
+      } else {
+        // ---- DIAGNOSTICS ---------------------------------------------------
+        // DELIBERATELY DENSE. A walk-up page read at 30cm while debugging, so
+        // distance legibility is not its job and one-idea-per-page is waived.
+        const int y0 = 27, dy = 19;
+        auto row = [&](int col, int r, const char *k, Color vc, const char *v) {
+          const int kx = col ? 168 : 8, vx = col ? 312 : 152;
+          it.print(kx, y0 + r * dy, id(f_row), dim(), k);
+          it.print(vx, y0 + r * dy, id(f_row), vc, TextAlign::TOP_RIGHT, v);
+        };
+        char b[32];
+
+        row(0, 0, "BLE",   ble   ? fg() : bad(), ble   ? "up" : "DOWN");
+        row(0, 1, "probe", probe ? fg() : bad(), probe ? "ok" : "STALE");
+        if (id(fridge_temp_raw).has_state())
+          snprintf(b, sizeof b, "%.2f°", id(fridge_temp_raw).state);
+        else
+          snprintf(b, sizeof b, "--");
+        row(0, 2, "fridge raw", fg(), b);
+        if (id(cabin_temp).has_state())
+          snprintf(b, sizeof b, "%.1f°", id(cabin_temp).state);
+        else
+          snprintf(b, sizeof b, "--");
+        row(0, 3, "cabin", fg(), b);
+        snprintf(b, sizeof b, "%uh %02um", (unsigned) (millis() / 3600000UL),
+                 (unsigned) ((millis() / 60000UL) % 60U));
+        row(0, 4, "uptime", fg(), b);
+        row(0, 5, "reason", fg(), id(arbiter)->reason());
+
+        // SoftAP address is fixed by ESPHome; mDNS is unreliable on SoftAP so
+        // this is the address to type, not a hostname.
+        row(1, 0, "AP", fg(), "192.168.4.1");
+        snprintf(b, sizeof b, "%u kB", (unsigned) (esp_get_free_heap_size() / 1024));
+        row(1, 1, "heap", fg(), b);
+        snprintf(b, sizeof b, "F%d M%d S%d X%d P%d",
+                 id(arbiter)->fridge_req(), id(arbiter)->manual_req(),
+                 id(arbiter)->surplus_req(), id(arbiter)->force_on(), id(arbiter)->parked());
+        row(1, 2, "flags", fg(), b);
+        row(1, 3, "sleep", sleep_ ? water() : dim(), sleep_ ? "on" : "off");
+        row(1, 4, "drive inh.", drive ? bad() : dim(), drive ? "on" : "off");
+        if (id(p310_charge_max).has_state())
+          snprintf(b, sizeof b, "%.0f%%", id(p310_charge_max).state);
+        else
+          snprintf(b, sizeof b, "--");
+        row(1, 5, "charge cap", fg(), b);
+      }
