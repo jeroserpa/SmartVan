@@ -6,8 +6,9 @@
 // pills. They live here as free functions taking only plain values, so the page
 // code in the YAML reads as LAYOUT rather than as trigonometry.
 //
-// Geometry note: the design is native 320x172 and this rig is 240x135, so the
-// call sites scale coordinates. Nothing in this file assumes either size.
+// Geometry note: the design is native 320x172 (van-core.yaml, the LCD-1.47);
+// the bench rig is 240x135 and its call sites scale coordinates. Nothing in
+// this file assumes either size.
 
 #pragma once
 
@@ -81,12 +82,14 @@ inline void ac_symbol(display::Display &it, int x, int y, int size, Color c, boo
 
 // A request-flag pill: filled when asserted, hairline outline when not. Shape
 // carries the state as well as colour, so it still reads on a washed-out panel
-// in daylight.
+// in daylight. The label is blended against the fill, not against black:
+// with 4-bit fonts a glyph anti-aliased toward the wrong ground grows a fringe.
 inline void pill(display::Display &it, display::BaseFont *font, int x, int y, int w, int h,
                  const char *label, bool on, Color on_color) {
   if (on) {
     it.filled_rectangle(x, y, w, h, on_color);
-    it.print(x + w / 2, y + (h - 9) / 2, font, ink(), display::TextAlign::TOP_CENTER, label);
+    it.print(x + w / 2, y + (h - 9) / 2, font, ink(), display::TextAlign::TOP_CENTER, label,
+             on_color);
   } else {
     it.rectangle(x, y, w, h, faint());
     it.print(x + w / 2, y + (h - 9) / 2, font, dim(), display::TextAlign::TOP_CENTER, label);
