@@ -97,7 +97,13 @@ wifi:
     ssid: "${node_name}-setup"
     password: !secret wifi_password
 
-captive_portal:
+# captive_portal is DELIBERATELY ABSENT, as on van-core (measurements.md M10).
+# With it present, a phone joining the fallback AP stalls at "authenticating"
+# and ends in "saved": ESPHome runs AP+STA and the station scan overwrites the
+# AP state, so the WPA2 handshake never completes. Same symptom seen on this
+# plug 2026-09-15 (cause inferred from M10, not debugged on the plug itself).
+# Even without it, do not rely on the fallback AP: the reliable recovery route
+# is to bring up one of the two networks above.
 
 # DELIBERATELY ABSENT: esp32_ble_tracker, bluetooth_proxy, esp32_improv.
 # Upstream enables an active BLE scan. This plug sits a metre from van-core's

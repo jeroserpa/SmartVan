@@ -127,6 +127,16 @@ ble_client:
   - mac_address: ${p310_mac}
     id: p310_ble
 
+# Build fix, not a control: ESP-FBot's fbot.h includes switch.h unconditionally,
+# so a config with no `switch:` block fails to compile ("switch/switch.h: No
+# such file"). This inert, internal template switch only pulls the switch
+# component in. It is not an fbot switch and cannot write to the P310.
+switch:
+  - platform: template
+    id: build_fix_switch_component
+    internal: true
+    optimistic: true
+
 fbot:
   id: p310
   polling_interval: 5s
@@ -335,6 +345,9 @@ interval:
                            id(p310_connected).state ? 1 : 0,
                            (unsigned) id(ble_drops));
           if (n <= 0) return;
+          // No card mounted: skip, and do not count it. Without this the
+          // "lines" counter reports writes that went nowhere.
+          if (id(sd_card)->is_failed()) return;
           std::string s(line);
           id(sd_card)->append_file("/soak.csv", (const uint8_t *) s.c_str(), s.size());
           id(log_lines)++;
@@ -346,5 +359,6 @@ button:
     name: "Write CSV header"
     on_press:
       - lambda: |-
+          if (id(sd_card)->is_failed()) return;
           std::string h = "uptime_s,soc_pct,input_w,output_w,system_w,ble_up,ble_drops\n";
           id(sd_card)->append_file("/soak.csv", (const uint8_t *) h.c_str(), h.size());
