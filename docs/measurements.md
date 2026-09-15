@@ -249,3 +249,33 @@ Standing corrections from this session:
   the van install (USB-powered), but the header pins differ from the non-B.
 - ESPHome on this laptop must run from PowerShell, not MSYS/Git-Bash: the
   IDF 5.5.5 installer refuses MSYS environments.
+
+## M11 — 2026-09-15 — reg 21 is AC input voltage (×0.1 V): CONFIRMED
+
+At the van, van-core-soak running on the 1.47B, P310 connected. Reference:
+the Athom plug (van-heater) voltage sensor, uncalibrated. No multimeter.
+
+| Condition | Plug position | Plug V | Input power | Reg 21 (`system_power`) |
+|---|---|---|---|---|
+| Solar only, AC output live | P310 AC output | 228.0 | 241 W | 17 |
+| Engine on, AC charge limit 400 W | P310 AC **input** | 229.7 | 654 W | 2280 |
+
+- 17 with the output live at 228 V rules out AC output voltage.
+- 17 with 241 W solar in rules out any input or total power.
+- 17 → 2280 exactly when AC input appears, and 2280/10 = 228.0 V against
+  229.7 V metered on the same wire: 0.7 %, inside the plug's tolerance.
+- Same ~2280 at 400 W here as at other charge rates in M2-era logs, so it
+  is not a power.
+
+**ESP-FBot's `system_power` label is wrong.** Any config or UI showing it as
+watts should rename it (AC input voltage, ×0.1). Closes the "Confirm reg 21"
+TODO above.
+
+Side findings, same session:
+- ESP-FBot's `fbot.h` includes `switch.h` unconditionally; a config with no
+  `switch:` block does not compile. Worked around in van-core-soak.yaml.
+- van-heater's fallback AP could not be joined (authenticating → saved), same
+  symptom as M10. captive_portal removed from van-heater.yaml; not yet
+  reflashed to the plug.
+- Soak running without an SD card: counters in RAM only, and free heap reads
+  optimistic because FAT buffers are never allocated.

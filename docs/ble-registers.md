@@ -69,7 +69,7 @@ analysis; the ESP-FBot name is given where it differs and is wrong.
 | 18 | AC output voltage | ×0.1 V | ESP-FBot |
 | 19 | AC output frequency | ×0.1 Hz | ESP-FBot |
 | 20 | **AC output power only** (FBot: `total_power`) | W | `MEASURED` 2026-08-19 |
-| 21 | **AC input voltage** (FBot: `system_power`) | ×0.1 V | `UNVERIFIED` — reads 2285 whenever AC input is present, 14–24 when not |
+| 21 | **AC input voltage** (FBot: `system_power`) | ×0.1 V | `CONFIRMED` 2026-09-15 (measurements.md M11) — 2280 vs 229.7 V metered on the input side; 14–24 with no AC input |
 | 22 | AC input frequency | ×0.01 Hz | ESP-FBot |
 | 30, 31 | USB-A1, USB-A2 power | ×0.1 W | ESP-FBot |
 | 34–37 | USB-C1..C4 power | ×0.1 W | ESP-FBot |
