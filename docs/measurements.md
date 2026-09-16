@@ -327,3 +327,16 @@ before August.
 
 **Side note, not a soak result:** SOC fell 50.3 % → 29.9 % over 14 h 19 min
 overnight, i.e. ~800 Wh at 3900 Wh usable, with little or no input.
+
+### M12 addendum — 2026-09-16
+
+- **EMI exposure: covered.** During the window the van was driven, charged
+  from the alternator on AC input, and the stove and air fryer were used.
+  Link never dropped. Replaces the `UNVERIFIED` line above.
+- Decision: the soak is accepted as sufficient. The untimed-reconnect and
+  internal-RAM gaps are not being chased with another soak run; the
+  reconnect is covered by the pre-trip fail-safe test (§11).
+- **New issue: the web UI does not load while the phone also has mobile data
+  on.** Android marks the SoftAP as "no internet" and routes browser traffic
+  over cellular, so 192.168.4.1 is unreachable. Phone-side setting, not a
+  node fault.
