@@ -15,6 +15,7 @@ import android.text.style.RelativeSizeSpan
 import android.util.SizeF
 import android.view.View
 import android.widget.RemoteViews
+import androidx.annotation.VisibleForTesting
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
@@ -115,6 +116,11 @@ class VanWidget : AppWidgetProvider() {
         private fun widgetIds(context: Context): IntArray =
             AppWidgetManager.getInstance(context)
                 .getAppWidgetIds(ComponentName(context, VanWidget::class.java))
+
+        /** Instrumented tests only: the views a given snapshot produces. */
+        @VisibleForTesting
+        internal fun viewsFor(context: Context, snap: VanStore.Snapshot, now: Long, full: Boolean): RemoteViews =
+            build(context, model(context, snap, now), full)
 
         private fun render(context: Context, manager: AppWidgetManager, ids: IntArray) {
             val m = model(context, VanStore.load(context), System.currentTimeMillis())

@@ -6,6 +6,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.SystemClock
+import androidx.annotation.VisibleForTesting
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
@@ -29,6 +30,10 @@ import java.util.concurrent.atomic.AtomicReference
 object VanFeed {
 
     private const val EVENTS_URL = "http://192.168.4.1/events"
+
+    /** Instrumented tests only: read a mock van-core instead. */
+    @VisibleForTesting
+    internal var eventsUrlOverride: String? = null
 
     // Entity keys as "<domain>-<slugified name>", matched through [key] so both
     // id formats work: ESPHome up to 2025 sent "sensor-battery"; 2026.8 sends
@@ -97,7 +102,7 @@ object VanFeed {
     }
 
     private fun readInitialBurst(network: Network): Map<String, JSONObject>? {
-        val conn = network.openConnection(URL(EVENTS_URL)) as HttpURLConnection
+        val conn = network.openConnection(URL(eventsUrlOverride ?: EVENTS_URL)) as HttpURLConnection
         conn.connectTimeout = 4_000
         // The stream never ends on its own. A quiet gap after the burst is the
         // end-of-snapshot signal; the deadline bounds the keep-alive pings.

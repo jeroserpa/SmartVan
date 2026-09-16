@@ -28,6 +28,7 @@ import android.webkit.WebViewClient
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
+import androidx.annotation.VisibleForTesting
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.Lifecycle
@@ -60,8 +61,19 @@ class MainActivity : AppCompatActivity() {
     // have ESPHome's stock page at /. ESPHome's IDF web server does not answer
     // an unknown path with a 404: it closes the socket (ERR_EMPTY_RESPONSE,
     // seen 2026-09-16 on van-core-soak). So any failure of /ui falls back to /.
-    private val uiUrl = "http://192.168.4.1/ui"
-    private val rootUrl = "http://192.168.4.1/"
+    private val rootUrl = baseUrlOverride ?: "http://192.168.4.1/"
+    private val uiUrl = rootUrl + "ui"
+
+    companion object {
+        /**
+         * Instrumented tests only: point the app at a mock van-core. A static
+         * set from the test's own process, deliberately not an intent extra —
+         * the activity is exported, and an extra would let any app aim the
+         * WebView (and the save bridge) at its own page.
+         */
+        @VisibleForTesting
+        internal var baseUrlOverride: String? = null
+    }
 
     private enum class Phase { SEARCHING, CONNECTING, NO_WIFI, UNREACHABLE, READY }
 
