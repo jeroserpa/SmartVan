@@ -6,7 +6,14 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.Build
+import android.os.Bundle
+import android.text.SpannableString
+import android.text.Spanned
 import android.text.format.DateFormat
+import android.text.style.RelativeSizeSpan
+import android.util.SizeF
+import android.view.View
 import android.widget.RemoteViews
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
@@ -16,6 +23,7 @@ import androidx.work.WorkManager
 import org.json.JSONObject
 import java.util.Date
 import java.util.concurrent.TimeUnit
+import kotlin.math.roundToInt
 
 /**
  * Read-only home-screen widget.
@@ -26,6 +34,8 @@ import java.util.concurrent.TimeUnit
  *
  * Android caps background refresh at 15 min. It is not an alarm, and it only
  * has data while the phone is within Wi-Fi range of van-core.
+ *
+ * Two layouts: compact (2x1, charge + AC state) and full (3x2 and up).
  */
 class VanWidget : AppWidgetProvider() {
 
@@ -33,6 +43,13 @@ class VanWidget : AppWidgetProvider() {
         render(context, manager, ids)
         schedule(context)
         refreshNow(context)
+    }
+
+    // Pre-Android 12 launchers pick no layout themselves: re-render on resize.
+    override fun onAppWidgetOptionsChanged(
+        context: Context, manager: AppWidgetManager, id: Int, newOptions: Bundle
+    ) {
+        render(context, manager, intArrayOf(id))
     }
 
     override fun onEnabled(context: Context) {
@@ -48,6 +65,21 @@ class VanWidget : AppWidgetProvider() {
         if (intent.action == ACTION_REFRESH) refreshNow(context)
     }
 
+    /** Everything the layouts show, decided once and shared by both. */
+    private class Model(
+        val soc: Double?,
+        val out: Double?,
+        val inp: Double?,
+        val fridge: Double?,
+        val state: String,
+        val stateColor: Int,
+        val reason: String,
+        val footer: String,
+        val footerColor: Int,
+        val stale: Boolean,
+        val refreshing: Boolean,
+    )
+
     companion object {
         private const val ACTION_REFRESH = "van.supervisor.app.WIDGET_REFRESH"
         private const val PERIODIC = "van-widget-periodic"
@@ -56,10 +88,7 @@ class VanWidget : AppWidgetProvider() {
         /** Older than one refresh period plus margin: values are shown greyed. */
         private const val STALE_MS = 20 * 60_000L
 
-        private const val FG = 0xFFE6EDF3.toInt()
-        private const val DIM = 0xFF6B7682.toInt()
-        private const val AMBER = 0xFFF0B429.toInt()
-        private const val BLUE = 0xFF5AA9E6.toInt()   // same as the parked LED blink
+        private val BARS = intArrayOf(R.id.w_bar_ok, R.id.w_bar_warn, R.id.w_bar_bad, R.id.w_bar_dim)
 
         private fun schedule(context: Context) {
             val work = PeriodicWorkRequestBuilder<VanWidgetWorker>(15, TimeUnit.MINUTES).build()
@@ -88,76 +117,139 @@ class VanWidget : AppWidgetProvider() {
                 .getAppWidgetIds(ComponentName(context, VanWidget::class.java))
 
         private fun render(context: Context, manager: AppWidgetManager, ids: IntArray) {
-            val snap = VanStore.load(context)
+            val m = model(context, VanStore.load(context), System.currentTimeMillis())
+            for (id in ids) {
+                val views = if (Build.VERSION.SDK_INT >= 31) {
+                    // The launcher picks the largest layout that fits, and
+                    // switches on resize without calling back.
+                    RemoteViews(mapOf(
+                        SizeF(110f, 40f) to build(context, m, full = false),
+                        SizeF(180f, 100f) to build(context, m, full = true),
+                    ))
+                } else {
+                    val minHeight = manager.getAppWidgetOptions(id)
+                        .getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 0)
+                    build(context, m, full = minHeight >= 100)
+                }
+                manager.updateAppWidget(id, views)
+            }
+        }
+
+        private fun model(context: Context, snap: VanStore.Snapshot, now: Long): Model {
             val s = snap.states
-            val now = System.currentTimeMillis()
+            val muted = context.getColor(R.color.muted)
+            val dim = context.getColor(R.color.dim)
+            val warn = context.getColor(R.color.warn)
+            val alt = context.getColor(R.color.alt)
+
             val stale = snap.okAt == 0L || now - snap.okAt > STALE_MS
-            val main = if (stale) DIM else FG
+            val parked = bool(s, VanFeed.PARKED) == true
+            val ac = bool(s, VanFeed.AC_OUT)
 
-            val v = RemoteViews(context.packageName, R.layout.van_widget)
+            // Parked first (fridge off by design), then a dead P310 link (every
+            // station value is then stale at the source), then the AC itself.
+            var (state, stateColor) = when {
+                snap.okAt == 0L -> "—" to dim
+                parked -> "Parked" to alt
+                bool(s, VanFeed.BLE) == false -> "P310 offline" to warn
+                ac == true -> "AC on" to warn
+                ac == false -> "AC off" to muted
+                else -> "AC ?" to muted
+            }
+            if (stale) stateColor = dim
+            val reason = if (parked) "fridge off by design" else text(s, VanFeed.REASON) ?: ""
 
-            v.setTextViewText(R.id.w_soc, num(s, VanFeed.SOC)?.let { "%.0f%%".format(it) } ?: "—")
-            v.setTextViewText(R.id.w_out, num(s, VanFeed.OUT)?.let { "%.0f W out".format(it) } ?: "— W out")
-            v.setTextViewText(R.id.w_in, num(s, VanFeed.IN)?.let { "%.0f W in".format(it) } ?: "")
-            v.setTextViewText(R.id.w_fridge, num(s, VanFeed.FRIDGE)?.let { "%.1f °C".format(it) } ?: "")
-            v.setTextColor(R.id.w_soc, main)
-            v.setTextColor(R.id.w_out, main)
-            v.setTextColor(R.id.w_fridge, main)
+            val at = if (snap.okAt == 0L) "" else DateFormat.getTimeFormat(context).format(Date(snap.okAt))
+            val ago = ago(now - snap.okAt)
+            val recognised = num(s, VanFeed.SOC) != null || bool(s, VanFeed.BLE) != null
+            val (footer, footerColor) = when {
+                snap.okAt == 0L && snap.tried -> "Not on van-core Wi-Fi" to muted
+                snap.okAt == 0L -> "Waiting for the first update" to muted
+                // Reached van-core but matched nothing: an entity id format or
+                // name change. Say so instead of looking like an empty van.
+                snap.lastOk && !recognised && s.length() > 0 ->
+                    "$at · ${s.length()} entities, none recognised" to warn
+                snap.lastOk && !stale -> "Updated $at" to dim
+                snap.lastOk -> "Last seen $ago" to warn
+                stale -> "Out of range · last seen $ago" to warn
+                else -> "Out of range · updated $at" to dim
+            }
 
-            val (acText, acColor) = acLine(s)
-            v.setTextViewText(R.id.w_ac, acText)
-            v.setTextColor(R.id.w_ac, if (stale) DIM else acColor)
+            return Model(
+                soc = num(s, VanFeed.SOC),
+                out = num(s, VanFeed.OUT),
+                inp = num(s, VanFeed.IN),
+                fridge = num(s, VanFeed.FRIDGE),
+                state = state,
+                stateColor = stateColor,
+                reason = reason,
+                footer = footer,
+                footerColor = footerColor,
+                stale = stale,
+                refreshing = snap.refreshing,
+            )
+        }
 
-            v.setTextViewText(R.id.w_age, footer(context, snap, now, stale))
+        private fun build(context: Context, m: Model, full: Boolean): RemoteViews {
+            val v = RemoteViews(context.packageName,
+                if (full) R.layout.van_widget else R.layout.van_widget_small)
+            val value = context.getColor(if (m.stale) R.color.dim else R.color.fg)
+
+            v.setTextViewText(R.id.w_soc, socText(m.soc))
+            v.setTextColor(R.id.w_soc, value)
+            v.setTextViewText(R.id.w_state, m.state)
+            v.setTextColor(R.id.w_state, m.stateColor)
+            v.setInt(R.id.w_dot, "setColorFilter", m.stateColor)
+            v.setTextViewText(R.id.w_age, m.footer)
+            v.setTextColor(R.id.w_age, m.footerColor)
+            v.setViewVisibility(R.id.w_refresh, if (m.refreshing) View.GONE else View.VISIBLE)
+            v.setViewVisibility(R.id.w_spin, if (m.refreshing) View.VISIBLE else View.GONE)
+
+            if (full) {
+                v.setTextViewText(R.id.w_out, watts(m.out))
+                v.setTextViewText(R.id.w_in, watts(m.inp))
+                v.setTextViewText(R.id.w_fridge, m.fridge?.let { "%.1f °C".format(it) } ?: "—")
+                v.setTextColor(R.id.w_out, value)
+                v.setTextColor(R.id.w_in, value)
+                v.setTextColor(R.id.w_fridge, value)
+                v.setTextViewText(R.id.w_reason, m.reason)
+
+                // Bands follow CLAUDE.md §9 Phase 5 load shedding: 30 % sheds,
+                // 15 % alerts.
+                val soc = m.soc
+                val band = when {
+                    soc == null || m.stale -> R.id.w_bar_dim
+                    soc < 15 -> R.id.w_bar_bad
+                    soc < 30 -> R.id.w_bar_warn
+                    else -> R.id.w_bar_ok
+                }
+                for (bar in BARS) v.setViewVisibility(bar, if (bar == band) View.VISIBLE else View.GONE)
+                v.setProgressBar(band, 100, (soc ?: 0.0).roundToInt().coerceIn(0, 100), false)
+            }
 
             val open = PendingIntent.getActivity(
                 context, 0, Intent(context, MainActivity::class.java),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
-            v.setOnClickPendingIntent(R.id.w_root, open)
+            v.setOnClickPendingIntent(android.R.id.background, open)
             val refresh = PendingIntent.getBroadcast(
                 context, 0,
                 Intent(context, VanWidget::class.java).setAction(ACTION_REFRESH),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
             v.setOnClickPendingIntent(R.id.w_refresh, refresh)
-
-            manager.updateAppWidget(ids, v)
+            return v
         }
 
-        /**
-         * The AC line leads with whatever overrides the normal reading: parked
-         * (fridge off by design) first, then a dead P310 link (every station
-         * value on the widget is then stale at the source).
-         */
-        private fun acLine(s: JSONObject): Pair<String, Int> {
-            if (bool(s, VanFeed.PARKED) == true) return "PARKED · fridge off" to BLUE
-            if (bool(s, VanFeed.BLE) == false) return "P310 link down" to AMBER
-            val ac = when (bool(s, VanFeed.AC_OUT)) {
-                true -> "AC on"
-                false -> "AC off"
-                null -> "AC ?"
-            }
-            val reason = text(s, VanFeed.REASON)
-            return (if (reason != null) "$ac · $reason" else ac) to FG
+        /** "78%" with a smaller percent sign. */
+        private fun socText(soc: Double?): CharSequence {
+            if (soc == null) return "—"
+            val text = SpannableString("${soc.roundToInt()}%")
+            text.setSpan(RelativeSizeSpan(0.5f), text.length - 1, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            return text
         }
 
-        private fun footer(context: Context, snap: VanStore.Snapshot, now: Long, stale: Boolean): String {
-            if (snap.refreshing) return "updating…"
-            if (snap.okAt == 0L) return if (snap.tried) "van-core not in range" else "no data yet"
-            val at = DateFormat.getTimeFormat(context).format(Date(snap.okAt))
-            // Reached van-core but matched nothing: an entity id format or name
-            // change. Say so instead of looking like an empty van.
-            if (snap.lastOk && snap.states.length() > 0 &&
-                num(snap.states, VanFeed.SOC) == null && bool(snap.states, VanFeed.BLE) == null) {
-                return "$at · ${snap.states.length()} entities, none recognised"
-            }
-            return when {
-                snap.lastOk && !stale -> at
-                snap.lastOk -> "last seen ${ago(now - snap.okAt)}"
-                else -> "not in range · last ${ago(now - snap.okAt)}"
-            }
-        }
+        private fun watts(w: Double?): String = w?.let { "${it.roundToInt()} W" } ?: "— W"
 
         private fun ago(ms: Long): String {
             val min = ms / 60_000

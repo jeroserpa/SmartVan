@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The ui/index.html palette (OKLCH), converted to sRGB. Keep in step with
+     the page: the app is a frame around it and must not look like another app. -->
+<resources>
+    <color name="bg">#0E0C09</color>
+    <color name="card">#191714</color>
+    <color name="card2">#23201C</color>
+    <color name="line">#302D2A</color>
+    <color name="fg">#EEEBE5</color>
+    <color name="muted">#95928D</color>
+    <color name="dim">#66635E</color>
+    <color name="ok">#5ED28E</color>
+    <color name="warn">#F0A63C</color>
+    <color name="bad">#F75E54</color>
+    <color name="alt">#56ACF0</color>
+    <color name="widget_bg">#F2191714</color>
+</resources>

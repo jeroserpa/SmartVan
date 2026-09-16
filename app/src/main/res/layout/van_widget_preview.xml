@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Full widget, 3x2 and up. RemoteViews: framework layouts, TextView,
-     ImageView and ProgressBar only. Palette from ui/index.html.
-     van_widget_preview.xml is generated from this file: keep the ids. -->
+<!-- GENERATED from van_widget.xml by tools/make_widget_preview.py, for the
+     widget picker. Do not edit; regenerate. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@android:id/background"
     android:layout_width="match_parent"
@@ -46,15 +45,15 @@
             android:layout_marginEnd="6dp"
             android:importantForAccessibility="no"
             android:src="@drawable/dot"
-            android:tint="@color/dim" />
+            android:tint="@color/warn" />
 
         <TextView
             android:id="@+id/w_state"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:maxLines="1"
-            android:text="—"
-            android:textColor="@color/muted"
+            android:text="AC on"
+            android:textColor="@color/warn"
             android:textSize="12sp"
             android:textStyle="bold" />
     </LinearLayout>
@@ -75,7 +74,7 @@
             android:layout_weight="1"
             android:includeFontPadding="false"
             android:maxLines="1"
-            android:text="—"
+            android:text="78%"
             android:textColor="@color/fg"
             android:textSize="40sp"
             android:textStyle="bold" />
@@ -105,7 +104,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:maxLines="1"
-                    android:text="— W"
+                    android:text="48 W"
                     android:textColor="@color/fg"
                     android:textSize="16sp" />
             </LinearLayout>
@@ -130,7 +129,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:maxLines="1"
-                    android:text="— W"
+                    android:text="310 W"
                     android:textColor="@color/fg"
                     android:textSize="16sp" />
             </LinearLayout>
@@ -151,7 +150,7 @@
             android:layout_height="6dp"
             android:max="100"
             android:progressDrawable="@drawable/soc_bar_ok"
-            android:visibility="gone" />
+            android:progress="78" />
 
         <ProgressBar
             android:id="@+id/w_bar_warn"
@@ -177,7 +176,7 @@
             android:layout_width="match_parent"
             android:layout_height="6dp"
             android:max="100"
-            android:progress="0"
+            android:visibility="gone"
             android:progressDrawable="@drawable/soc_bar_dim" />
     </FrameLayout>
 
@@ -203,7 +202,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:maxLines="1"
-            android:text="—"
+            android:text="4.6 °C"
             android:textColor="@color/fg"
             android:textSize="15sp" />
 
@@ -215,6 +214,7 @@
             android:layout_weight="1"
             android:ellipsize="end"
             android:gravity="end"
+            android:text="fridge block"
             android:maxLines="1"
             android:textColor="@color/muted"
             android:textSize="12sp" />
@@ -233,6 +233,7 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:ellipsize="end"
+            android:text="Updated 14:32"
             android:maxLines="1"
             android:textColor="@color/dim"
             android:textSize="11sp" />

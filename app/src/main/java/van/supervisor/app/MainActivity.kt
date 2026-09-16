@@ -1,8 +1,8 @@
 package van.supervisor.app
 
 import android.annotation.TargetApi
-import android.app.Activity
 import android.content.ContentValues
+import android.content.Intent
 import android.media.MediaScannerConnection
 import android.net.ConnectivityManager
 import android.net.Network
@@ -14,19 +14,25 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.MediaStore
-import android.view.Gravity
+import android.provider.Settings
 import android.view.View
 import android.webkit.JavascriptInterface
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.Button
-import android.widget.FrameLayout
-import android.widget.LinearLayout
+import android.widget.ImageView
 import android.widget.TextView
+import androidx.activity.OnBackPressedCallback
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.lifecycle.Lifecycle
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+import com.google.android.material.button.MaterialButton
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -43,8 +49,12 @@ import java.util.concurrent.atomic.AtomicReference
  * No logic lives here. The web UI stays the source of truth. The one addition
  * is [VanBridge], which only saves bytes the page hands it: a WebView has no
  * download path of its own that respects the network binding.
+ *
+ * Everything else in this class is about never showing a blank or a raw
+ * WebView error: the page, or a panel that says what is happening and what to
+ * do, or the page with a banner when the link dropped underneath it.
  */
-class MainActivity : Activity() {
+class MainActivity : AppCompatActivity() {
 
     // Full firmware serves the packed UI at /ui; bring-up and soak builds only
     // have ESPHome's stock page at /. ESPHome's IDF web server does not answer
@@ -53,88 +63,192 @@ class MainActivity : Activity() {
     private val uiUrl = "http://192.168.4.1/ui"
     private val rootUrl = "http://192.168.4.1/"
 
+    private enum class Phase { SEARCHING, CONNECTING, NO_WIFI, UNREACHABLE, READY }
+
     private lateinit var cm: ConnectivityManager
     private lateinit var web: WebView
-    private lateinit var veil: LinearLayout
-    private lateinit var status: TextView
+    private lateinit var swipe: SwipeRefreshLayout
+    private lateinit var banner: View
+    private lateinit var panel: View
+    private lateinit var panelIcon: ImageView
+    private lateinit var panelProgress: View
+    private lateinit var panelTitle: TextView
+    private lateinit var panelBody: TextView
+    private lateinit var panelActions: View
+    private lateinit var panelDetails: TextView
+    private lateinit var btnDetails: MaterialButton
     private val main = Handler(Looper.getMainLooper())
+    private val startedAt = SystemClock.elapsedRealtime()
 
     private var boundNetwork: Network? = null
     private var callback: ConnectivityManager.NetworkCallback? = null
+    private var phase = Phase.SEARCHING
+    /** The last main-frame URL that failed; its own onPageFinished must not count as loaded. */
+    private var failedUrl: String? = null
+    private var lastError: String? = null
+
+    /** Out of range is expected; keep trying quietly rather than waiting for a tap. */
+    private val autoRetry = Runnable {
+        if (phase == Phase.NO_WIFI || phase == Phase.UNREACHABLE) load()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        val splash = installSplashScreen()
         super.onCreate(savedInstanceState)
+        // Hold the splash while the Wi-Fi lookup settles (normally a few ms),
+        // so the first frame is a real state rather than a flash of "searching".
+        splash.setKeepOnScreenCondition {
+            phase == Phase.SEARCHING && SystemClock.elapsedRealtime() - startedAt < 1_200
+        }
+        setContentView(R.layout.activity_main)
         cm = getSystemService(ConnectivityManager::class.java)
 
-        web = WebView(this).apply {
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            webViewClient = object : WebViewClient() {
-                // Only the main document matters: a failed icon must not
-                // blank a working page.
-                override fun onReceivedError(
-                    view: WebView, request: WebResourceRequest, error: WebResourceError
-                ) {
-                    if (!request.isForMainFrame) return
-                    val url = request.url.toString()
-                    failedUrl = url
-                    if (url == uiUrl) {
-                        main.post { open(rootUrl) }
-                    } else {
-                        showMessage("van-core not reachable\n$url\n${error.description} (${error.errorCode})\n\n${networkInfo()}")
-                    }
-                }
+        web = findViewById(R.id.web)
+        swipe = findViewById(R.id.swipe)
+        banner = findViewById(R.id.banner)
+        panel = findViewById(R.id.panel)
+        panelIcon = findViewById(R.id.panel_icon)
+        panelProgress = findViewById(R.id.panel_progress)
+        panelTitle = findViewById(R.id.panel_title)
+        panelBody = findViewById(R.id.panel_body)
+        panelActions = findViewById(R.id.panel_actions)
+        panelDetails = findViewById(R.id.panel_details)
+        btnDetails = findViewById(R.id.btn_details)
 
-                override fun onReceivedHttpError(
-                    view: WebView, request: WebResourceRequest, response: WebResourceResponse
-                ) {
-                    if (request.isForMainFrame && request.url.toString() == uiUrl) {
-                        failedUrl = uiUrl
-                        main.post { open(rootUrl) }
-                    }
-                }
+        setupWebView()
 
-                override fun onPageFinished(view: WebView, url: String) {
-                    if (!veilPinned && url != failedUrl) veil.visibility = View.GONE
-                }
+        swipe.setColorSchemeResources(R.color.warn)
+        swipe.setProgressBackgroundColorSchemeResource(R.color.card)
+        // The page scrolls the document, so the WebView's own scroll position
+        // is the right test for "at the top".
+        swipe.setOnChildScrollUpCallback { _, _ -> web.scrollY > 0 }
+        swipe.setOnRefreshListener { load(quiet = true) }
+
+        findViewById<View>(R.id.btn_retry).setOnClickListener { load() }
+        findViewById<View>(R.id.btn_wifi).setOnClickListener { openWifiSettings() }
+        btnDetails.setOnClickListener { toggleDetails() }
+
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (phase == Phase.READY && web.canGoBack()) web.goBack() else finish()
             }
-            addJavascriptInterface(VanBridge(), "VanApp")
-        }
-
-        status = TextView(this).apply {
-            textSize = 18f
-            gravity = Gravity.CENTER
-            setPadding(48, 48, 48, 48)
-        }
-        val retry = Button(this).apply {
-            text = "Retry"
-            setOnClickListener { load() }
-        }
-        veil = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setBackgroundColor(0xFF101418.toInt())
-            status.setTextColor(0xFFE0E0E0.toInt())
-            addView(status)
-            addView(retry, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { gravity = Gravity.CENTER_HORIZONTAL })
-        }
-
-        setContentView(FrameLayout(this).apply {
-            addView(web)
-            addView(veil)
         })
 
-        showMessage("Looking for the van-core Wi-Fi…")
+        setPhase(Phase.SEARCHING)
         requestVanNetwork()
     }
 
-    /** True while a message must stay up regardless of page events. */
-    private var veilPinned = false
-    /** The last main-frame URL that failed; its own onPageFinished must not unveil an error page. */
-    private var failedUrl: String? = null
+    private fun setupWebView() {
+        web.setBackgroundColor(getColor(R.color.bg))
+        web.settings.javaScriptEnabled = true
+        web.settings.domStorageEnabled = true
+        web.settings.setSupportZoom(false)
+        web.webViewClient = object : WebViewClient() {
+            // Only the main document matters: a failed icon must not
+            // blank a working page.
+            override fun onReceivedError(
+                view: WebView, request: WebResourceRequest, error: WebResourceError
+            ) {
+                if (!request.isForMainFrame) return
+                val url = request.url.toString()
+                failedUrl = url
+                if (url == uiUrl) {
+                    main.post { open(rootUrl, quiet = panel.visibility != View.VISIBLE) }
+                } else {
+                    lastError = "$url\n${error.description} (${error.errorCode})"
+                    main.post { setPhase(Phase.UNREACHABLE) }
+                }
+            }
+
+            override fun onReceivedHttpError(
+                view: WebView, request: WebResourceRequest, response: WebResourceResponse
+            ) {
+                if (request.isForMainFrame && request.url.toString() == uiUrl) {
+                    failedUrl = uiUrl
+                    main.post { open(rootUrl, quiet = panel.visibility != View.VISIBLE) }
+                }
+            }
+
+            override fun onPageFinished(view: WebView, url: String) {
+                swipe.isRefreshing = false
+                if (phase == Phase.CONNECTING && url != failedUrl) setPhase(Phase.READY)
+            }
+
+            // A crashed or killed renderer takes the WebView with it. Rebuild
+            // the activity instead of letting the whole app die.
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                main.post { recreate() }
+                return true
+            }
+        }
+        web.addJavascriptInterface(VanBridge(), "VanApp")
+    }
+
+    private fun setPhase(p: Phase) {
+        phase = p
+        main.removeCallbacks(autoRetry)
+        if (p == Phase.READY) {
+            panel.visibility = View.GONE
+            banner.visibility = View.GONE
+            return
+        }
+        swipe.isRefreshing = false
+        panel.visibility = View.VISIBLE
+
+        val busy = p == Phase.SEARCHING || p == Phase.CONNECTING
+        panelProgress.visibility = if (busy) View.VISIBLE else View.GONE
+        panelActions.visibility = if (busy) View.GONE else View.VISIBLE
+        btnDetails.visibility = if (busy) View.GONE else View.VISIBLE
+        if (busy) showDetails(false)
+
+        when (p) {
+            Phase.NO_WIFI -> errorIcon(R.drawable.ic_wifi_off)
+            Phase.UNREACHABLE -> errorIcon(R.drawable.ic_link_off)
+            else -> {
+                panelIcon.setImageResource(R.drawable.ic_launcher_foreground)
+                panelIcon.clearColorFilter()
+                panelIcon.setPadding(0, 0, 0, 0)
+            }
+        }
+        val (title, body) = when (p) {
+            Phase.SEARCHING -> R.string.st_searching_title to R.string.st_searching_body
+            Phase.CONNECTING -> R.string.st_connecting_title to R.string.st_connecting_body
+            Phase.NO_WIFI -> R.string.st_nowifi_title to R.string.st_nowifi_body
+            else -> R.string.st_unreachable_title to R.string.st_unreachable_body
+        }
+        panelTitle.setText(title)
+        panelBody.setText(body)
+        refreshDetails()
+
+        if (!busy && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            main.postDelayed(autoRetry, 5_000)
+        }
+    }
+
+    private fun errorIcon(res: Int) {
+        panelIcon.setImageResource(res)
+        panelIcon.setColorFilter(getColor(R.color.muted))
+        val pad = (20 * resources.displayMetrics.density).toInt()
+        panelIcon.setPadding(pad, pad, pad, pad)
+    }
+
+    private fun toggleDetails() = showDetails(panelDetails.visibility != View.VISIBLE)
+
+    private fun showDetails(show: Boolean) {
+        panelDetails.visibility = if (show) View.VISIBLE else View.GONE
+        btnDetails.setText(if (show) R.string.btn_hide_details else R.string.btn_details)
+        if (show) refreshDetails()
+    }
+
+    private fun refreshDetails() {
+        val version = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }
+            .getOrNull() ?: "?"
+        panelDetails.text = buildString {
+            lastError?.let { append(it).append("\n\n") }
+            append(networkInfo())
+            append("\n\nApp ").append(version).append(" · Android ").append(Build.VERSION.RELEASE)
+        }
+    }
 
     /** What the process is actually bound to — the first thing to know when a load fails. */
     private fun networkInfo(): String {
@@ -145,10 +259,11 @@ class MainActivity : Activity() {
         return "Bound: ${lp?.interfaceName ?: "?"}\nAddress: $addrs\nRoutes: $routes"
     }
 
-    private fun showMessage(text: String) {
-        veilPinned = true
-        status.text = text
-        veil.visibility = View.VISIBLE
+    private fun openWifiSettings() {
+        val panelIntent = if (Build.VERSION.SDK_INT >= 29) Intent(Settings.Panel.ACTION_WIFI)
+                          else Intent(Settings.ACTION_WIFI_SETTINGS)
+        runCatching { startActivity(panelIntent) }
+            .onFailure { runCatching { startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) } }
     }
 
     /**
@@ -157,7 +272,7 @@ class MainActivity : Activity() {
      *
      * UNVERIFIED: this matches whichever Wi-Fi the phone is joined to. At home
      * that is the house network, where 192.168.4.1 is not van-core — the load
-     * then fails and the message says so. SSID matching needs location
+     * then fails and the panel says so. SSID matching needs location
      * permission to read; not worth it until this proves to be a problem.
      */
     private fun requestVanNetwork() {
@@ -168,21 +283,29 @@ class MainActivity : Activity() {
 
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                cm.bindProcessToNetwork(network)
-                boundNetwork = network
-                main.post { load() }
+                main.post {
+                    if (callback !== this) return@post
+                    cm.bindProcessToNetwork(network)
+                    boundNetwork = network
+                    banner.visibility = View.GONE
+                    // Back after a drop with the page still up: reload under it.
+                    load(quiet = phase == Phase.READY)
+                }
             }
 
             override fun onLost(network: Network) {
-                if (network == boundNetwork) {
+                main.post {
+                    if (callback !== this || network != boundNetwork) return@post
                     cm.bindProcessToNetwork(null)
                     boundNetwork = null
-                    main.post { showMessage("Wi-Fi to van-core lost.\nWaiting for it to come back…") }
+                    // Keep the last values on screen, marked, instead of blanking.
+                    if (phase == Phase.READY) banner.visibility = View.VISIBLE
+                    else setPhase(Phase.NO_WIFI)
                 }
             }
 
             override fun onUnavailable() {
-                main.post { showMessage("No Wi-Fi connected.\nJoin the van-core network, then Retry.") }
+                main.post { if (callback === this) setPhase(Phase.NO_WIFI) }
             }
         }
         callback = cb
@@ -191,21 +314,27 @@ class MainActivity : Activity() {
         cm.requestNetwork(request, cb, 10_000)
     }
 
-    private fun load() {
+    private fun load(quiet: Boolean = false) {
         if (boundNetwork == null) {
             callback?.let { runCatching { cm.unregisterNetworkCallback(it) } }
-            showMessage("Looking for the van-core Wi-Fi…")
+            callback = null
+            setPhase(Phase.SEARCHING)
             requestVanNetwork()
             return
         }
         failedUrl = null
-        open(uiUrl)
+        lastError = null
+        open(uiUrl, quiet)
     }
 
-    private fun open(url: String) {
-        veilPinned = false
-        status.text = "Connecting to van-core…"
-        veil.visibility = View.VISIBLE
+    /** quiet: keep whatever is on screen (the page, during pull-to-refresh). */
+    private fun open(url: String, quiet: Boolean) {
+        if (quiet) {
+            phase = Phase.CONNECTING
+            main.removeCallbacks(autoRetry)
+        } else {
+            setPhase(Phase.CONNECTING)
+        }
         web.loadUrl(url)
     }
 
@@ -308,9 +437,12 @@ class MainActivity : Activity() {
         super.onResume()
         web.onResume()
         web.resumeTimers()
+        // Back from Wi-Fi settings, or from the home screen: try at once.
+        if (phase == Phase.NO_WIFI || phase == Phase.UNREACHABLE) load()
     }
 
     override fun onPause() {
+        main.removeCallbacks(autoRetry)
         web.onPause()
         web.pauseTimers()
         // The user was just looking at live values, so van-core is in range:
@@ -320,14 +452,11 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        main.removeCallbacksAndMessages(null)
         callback?.let { runCatching { cm.unregisterNetworkCallback(it) } }
+        callback = null
         cm.bindProcessToNetwork(null)
         web.destroy()
         super.onDestroy()
-    }
-
-    @Deprecated("Activity back handling")
-    override fun onBackPressed() {
-        if (web.canGoBack()) web.goBack() else super.onBackPressed()
     }
 }

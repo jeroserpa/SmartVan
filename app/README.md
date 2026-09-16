@@ -1,5 +1,14 @@
 # van-core Android wrapper (D-15)
 
+**Look:** dark only, the `ui/index.html` palette (`res/values/colors.xml`,
+converted from the page's OKLCH values — keep them in step). Adaptive and
+themed launcher icon from the bolt in `tools/make_icon.py`. The app never shows
+a raw WebView error: it is either the page, the page with a "link lost"
+banner, or a status panel (searching / connecting / not on van-core Wi-Fi /
+not answering) with Retry, a Wi-Fi settings shortcut and a Details view of
+the bound network. Errors retry by themselves every 5 s, and again on return
+to the app. Pull down on the page to reload it.
+
 A WebView onto `http://192.168.4.1/ui`, with this app's traffic bound to the
 van Wi-Fi so the rest of the phone keeps using mobile data. No logic here —
 the web UI stays the source of truth.
@@ -32,6 +41,15 @@ bridge exists.
 
 Battery %, output/input power, AC state + `AC reason`, fridge temperature,
 and when it was read. Long-press the home screen → Widgets → van-core.
+
+- **Two sizes:** full (3×2 and up: charge with a bar, power in/out, fridge,
+  reason) and compact (2×1: charge and AC state). Android 12+ switches
+  between them on resize by itself; older launchers re-render on resize.
+- **Battery bar colours** follow the load-shedding bands of CLAUDE.md §9
+  Phase 5: amber below 30 %, red below 15 %, grey when stale.
+- **Picker preview:** `res/layout/van_widget_preview.xml` is generated from
+  `van_widget.xml` — run `python tools/make_widget_preview.py` after editing
+  the widget layout.
 
 - **Data:** the initial state burst of `/events`, read over the Wi-Fi
   network explicitly (`Network.openConnection`), then the connection is
