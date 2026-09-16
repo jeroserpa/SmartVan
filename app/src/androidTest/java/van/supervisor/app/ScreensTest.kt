@@ -81,6 +81,10 @@ class ScreensTest {
             save("app-4-searching", screen())
             Thread.sleep(12_000)   // requestNetwork times out after 10 s
             save("app-5-no-wifi", screen())
+            // Past the 5 s auto-retry: the panel must not have fallen back to
+            // "searching" while the retry runs.
+            Thread.sleep(6_000)
+            save("app-6-no-wifi-while-retrying", screen())
         }
         shell("svc wifi enable")
         Thread.sleep(8_000)

@@ -99,9 +99,17 @@ class MainActivity : AppCompatActivity() {
     private var failedUrl: String? = null
     private var lastError: String? = null
 
-    /** Out of range is expected; keep trying quietly rather than waiting for a tap. */
+    /** Whether the current load keeps the screen as it is (see [open]). */
+    private var quietLoad = false
+
+    /**
+     * Out of range is expected; keep trying rather than waiting for a tap.
+     * Quietly: the error panel, with its Wi-Fi settings button, stays up
+     * until something actually changes, instead of flickering to "searching"
+     * for most of every cycle.
+     */
     private val autoRetry = Runnable {
-        if (phase == Phase.NO_WIFI || phase == Phase.UNREACHABLE) load()
+        if (phase == Phase.NO_WIFI || phase == Phase.UNREACHABLE) load(quiet = true)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -165,7 +173,7 @@ class MainActivity : AppCompatActivity() {
                 val url = request.url.toString()
                 failedUrl = url
                 if (url == uiUrl) {
-                    main.post { open(rootUrl, quiet = panel.visibility != View.VISIBLE) }
+                    main.post { open(rootUrl, quietLoad) }
                 } else {
                     lastError = "$url\n${error.description} (${error.errorCode})"
                     main.post { setPhase(Phase.UNREACHABLE) }
@@ -177,7 +185,7 @@ class MainActivity : AppCompatActivity() {
             ) {
                 if (request.isForMainFrame && request.url.toString() == uiUrl) {
                     failedUrl = uiUrl
-                    main.post { open(rootUrl, quiet = panel.visibility != View.VISIBLE) }
+                    main.post { open(rootUrl, quietLoad) }
                 }
             }
 
@@ -326,11 +334,17 @@ class MainActivity : AppCompatActivity() {
         cm.requestNetwork(request, cb, 10_000)
     }
 
+    /** quiet: keep whatever is on screen — the page, or the current error panel. */
     private fun load(quiet: Boolean = false) {
         if (boundNetwork == null) {
             callback?.let { runCatching { cm.unregisterNetworkCallback(it) } }
             callback = null
-            setPhase(Phase.SEARCHING)
+            if (quiet) {
+                phase = Phase.SEARCHING
+                main.removeCallbacks(autoRetry)
+            } else {
+                setPhase(Phase.SEARCHING)
+            }
             requestVanNetwork()
             return
         }
@@ -339,8 +353,8 @@ class MainActivity : AppCompatActivity() {
         open(uiUrl, quiet)
     }
 
-    /** quiet: keep whatever is on screen (the page, during pull-to-refresh). */
     private fun open(url: String, quiet: Boolean) {
+        quietLoad = quiet
         if (quiet) {
             phase = Phase.CONNECTING
             main.removeCallbacks(autoRetry)
@@ -450,7 +464,7 @@ class MainActivity : AppCompatActivity() {
         web.onResume()
         web.resumeTimers()
         // Back from Wi-Fi settings, or from the home screen: try at once.
-        if (phase == Phase.NO_WIFI || phase == Phase.UNREACHABLE) load()
+        if (phase == Phase.NO_WIFI || phase == Phase.UNREACHABLE) load(quiet = true)
     }
 
     override fun onPause() {
