@@ -1,0 +1,53 @@
+# Builds the D-15 Android wrapper in the cloud, so no Android SDK is needed on
+# the laptop and only the APK (a few MB) comes down over mobile data.
+name: android-app
+
+on:
+  push:
+    paths:
+      - "app/**"
+      - "settings.gradle.kts"
+      - "build.gradle.kts"
+      - "gradle.properties"
+      - ".github/workflows/android-app.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # No wrapper jar in the repo: it could not be generated without a local
+      # JDK. Pinning the Gradle version here does the same job.
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      # A stable signing key, so a new build installs over the old one.
+      # Without the secret each run signs with a throwaway debug key and the
+      # phone refuses the update until the app is uninstalled.
+      - name: Restore signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            mkdir -p ~/.android
+            echo "$KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+          else
+            echo "::warning::DEBUG_KEYSTORE_B64 not set - APK signed with a throwaway key"
+          fi
+
+      - name: Build debug APK
+        run: gradle --no-daemon :app:assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: van-core-apk
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 30
