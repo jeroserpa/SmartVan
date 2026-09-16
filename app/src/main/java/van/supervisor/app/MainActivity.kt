@@ -117,9 +117,7 @@ class MainActivity : Activity() {
         val lp = cm.getLinkProperties(n)
         val addrs = lp?.linkAddresses?.joinToString { it.toString() } ?: "?"
         val routes = lp?.routes?.joinToString { it.toString() } ?: "?"
-        return "Bound: ${lp?.interfaceName ?: "?"}
-Address: $addrs
-Routes: $routes"
+        return "Bound: ${lp?.interfaceName ?: "?"}\nAddress: $addrs\nRoutes: $routes"
     }
 
     private fun showMessage(text: String) {
