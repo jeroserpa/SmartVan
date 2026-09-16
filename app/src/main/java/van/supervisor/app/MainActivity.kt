@@ -313,6 +313,9 @@ class MainActivity : Activity() {
     override fun onPause() {
         web.onPause()
         web.pauseTimers()
+        // The user was just looking at live values, so van-core is in range:
+        // the best moment to bring the widget up to date.
+        VanWidget.refreshNow(this)
         super.onPause()
     }
 

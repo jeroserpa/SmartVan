@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_description">Battery, power, AC and fridge. Read-only; updates every 15 min while in range of van-core.</string>
+</resources>
