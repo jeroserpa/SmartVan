@@ -531,3 +531,69 @@ separate (`set_parked()`, single-step and unconfirmed) for exactly this reason.
 max`, default 80%, applied on entry and restored to 100% on exit. With the
 interlock removed it now applies on every successful park rather than only on
 one that passed the gate, which is a small strengthening rather than a change.
+
+---
+
+## 2026-09-16 — D-15: OPEN, HIGH PRIORITY — a native Android wrapper so the UI works with mobile data on
+
+**Status: proposed, not started.** Recorded as the intended way forward.
+
+**Problem, observed in the van (measurements.md M12 addendum).** With the phone
+joined to the van AP *and* mobile data on, `http://192.168.4.1` does not load.
+D-10 assumed that failing validation keeps cellular as the default route
+*and* leaves the AP reachable. On this phone the first half holds and the
+second does not: Android routes unbound app traffic over the default network
+only, so the browser sends the request to cellular, where 192.168.4.1 does not
+exist.
+
+**Requirement (user, 2026-09-16): the van UI and the phone's internet must work
+at the same time.** Turning mobile data off, or letting the AP become the
+default network, is not acceptable — the phone is also the only internet in
+the van.
+
+None of the phone-side settings meets it reliably. "Stay connected / don't ask
+again" on an unvalidated network can make the AP the default for every app,
+which trades the UI problem for no internet. Spoofing validation (D-10's
+rejected column) does the same deliberately.
+
+### Options
+
+| | Native wrapper app (**proposed**) | Phone hotspot, van-core joins as STA | Settings only |
+|---|---|---|---|
+| UI + internet together | **yes**, by construction | yes | not reliably |
+| Van-side change | **none** | AP+STA on the BLE node | none |
+| Standby power | **none** | none on the van; phone runs a hotspot | none |
+| Re-soak needed | **no** | yes — new radio mode on the node that just passed | no |
+| Node addressing | fixed 192.168.4.1 | DHCP on the phone's subnet; must be discovered | fixed |
+| Other nodes | unaffected | AP channel follows the phone's hotspot | unaffected |
+
+**Proposed: a small Android app** (`app/` in this repo, ~150 lines Kotlin):
+- find the Wi-Fi network whose SSID is `van-core` via `ConnectivityManager`
+  (a `requestNetwork` with `TRANSPORT_WIFI`, no `NET_CAPABILITY_INTERNET`),
+- `bindProcessToNetwork()` to it, so only this app's traffic goes to the van,
+- show `http://192.168.4.1/ui` in a WebView; everything else on the phone
+  stays on cellular.
+
+This is the standard pattern for device-hotspot apps (drones, dashcams). It
+also gives the "van-core app" a real launcher icon, which D-10 could not on
+Android because Chrome only installs web apps over HTTPS.
+
+**Keep the web UI as the source of truth.** The app is a window onto it, not a
+second UI: no logic, no duplicated entities. The browser path stays working
+for iOS, laptops and when the app is not installed.
+
+**Build route.** No Android SDK on the laptop, and several GB is not a
+mobile-data download. Preferred: a GitHub Actions workflow that builds the
+APK in the cloud, so only the APK (a few MB) comes down. Fallback: build at
+home.
+
+**`VERIFY` when built:**
+- `WebView` SSE (`/events`) survives backgrounding, or reconnects.
+- Behaviour when `van-core` is out of range: clear message, no hang.
+- iOS equivalent is not covered. If an iPhone ever needs it, the same idea is
+  `NEHotspotConfiguration` plus an app; out of scope until asked.
+
+**Also stale in D-10**, noted rather than rewritten: it describes
+`captive_portal:` running the catch-all DNS. captive_portal has since been
+removed from every node (measurements.md M10), so the probe-landing path
+depends on the phone reaching the node at all — which is this problem again.

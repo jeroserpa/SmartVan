@@ -79,6 +79,11 @@ The AP is a network with no internet, so the phone will say so. That is
 deliberate — see `docs/decisions.md` D-10. It keeps mobile data as its default
 route, so the rest of the phone still works while parked at the van.
 
+> **Known problem (2026-09-16):** on Android with mobile data on, the page does
+> not load at all — the browser's traffic goes to cellular. The fix planned is a
+> small wrapper app that binds itself to the van network; see
+> `docs/decisions.md` D-15. Until then, the UI needs mobile data off.
+
 1. Join the van AP. When the phone asks, **stay connected** despite no internet.
    Android: also turn off "switch to mobile data automatically" for this
    network.
