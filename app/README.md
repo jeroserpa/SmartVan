@@ -70,8 +70,13 @@ and when it was read. Long-press the home screen → Widgets → van-core.
 
 ## Build (cloud)
 
-Any push touching `app/` runs `.github/workflows/android-app.yml`. Download
-`van-core-apk` from the run's artifacts, unzip, sideload.
+Any push touching `app/` runs `.github/workflows/android-app.yml`.
+
+**On the phone:** https://github.com/jeroserpa/SmartVan/releases/download/app-latest/van-core.apk
+— a rolling pre-release that every build of `main` (and, until it is merged,
+the app branch) replaces. Public, like the repo; the APK holds no secrets.
+
+Or from the run's artifacts (zip, needs a GitHub login):
 
 ```bash
 gh run download --name van-core-apk --dir apk
