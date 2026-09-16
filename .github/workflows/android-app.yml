@@ -130,7 +130,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Build app and test APKs
-        run: gradle --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest
+        run: gradle --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease
 
       # Reached from the emulator as 10.0.2.2:8080.
       - name: Start mock van-core
@@ -157,6 +157,13 @@ jobs:
             adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
             adb shell am instrument -w -r van.supervisor.app.test/androidx.test.runner.AndroidJUnitRunner > instrument.txt 2>&1 || true
             adb pull /data/local/tmp/shots shots || true
+            adb install -r app/build/outputs/apk/release/app-release.apk
+            adb logcat -c
+            adb shell am start -W -n van.supervisor.app/.MainActivity
+            sleep 10
+            adb shell pidof van.supervisor.app > release-pid.txt || true
+            adb logcat -d -b crash > release-crash.txt || true
+            adb exec-out screencap -p > shots/release-launch.png || true
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -166,6 +173,7 @@ jobs:
             shots/
             instrument.txt
             mock.log
+            release-crash.txt
           retention-days: 14
 
       - name: Fail on test failures
@@ -173,3 +181,7 @@ jobs:
         run: |
           cat instrument.txt || true
           ! grep -qE "FAILURES!!!|INSTRUMENTATION_FAILED|Process crashed" instrument.txt
+          # The shrunk release build: launched, still alive after 10 s, no crash.
+          cat release-crash.txt || true
+          [ -s release-pid.txt ] || { echo "::error::release build not running after launch"; exit 1; }
+          [ ! -s release-crash.txt ] || { echo "::error::release build crashed"; exit 1; }
