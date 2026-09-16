@@ -28,6 +28,28 @@ bridge exists.
   gets `Refused: …`.
 - The call is synchronous: the page waits while a few MB are written.
 
+## Home-screen widget (read-only)
+
+Battery %, output/input power, AC state + `AC reason`, fridge temperature,
+and when it was read. Long-press the home screen → Widgets → van-core.
+
+- **Data:** the initial state burst of `/events`, read over the Wi-Fi
+  network explicitly (`Network.openConnection`), then the connection is
+  closed. No firmware change.
+- **Refresh:** every 15 min (WorkManager; Android's floor, and deferred
+  further in Doze), on ↻, and whenever the app is left.
+- **Out of range:** keeps the last values, greyed after 20 min, with
+  `last seen …`. It only ever has data while the phone is on van-core's Wi-Fi —
+  **it is not an alarm** and says nothing about the van while you are away.
+- **Overrides in the AC line:** `PARKED · fridge off` (blue), then
+  `P310 link down` (amber).
+- **No controls,** on purpose: a Manual AC button on the home screen is the
+  phantom-press problem of CLAUDE.md §6.
+- **The one duplication of entity ids outside the page.** `VanFeed.kt` names
+  eight ids that mirror the `E` map in `ui/index.html`; rename an entity in
+  YAML and both need updating. On the soak firmware, fridge temperature,
+  parked and AC reason do not exist and simply stay blank.
+
 ## Build (cloud)
 
 Any push touching `app/` runs `.github/workflows/android-app.yml`. Download
@@ -54,3 +76,6 @@ lost, generate a new one and uninstall the app once before updating.
 - Soak page **Download all** with mobile data on: the file shows up in
   Downloads, and the page reports the name and a size that matches the file.
 - Downloading twice: the second copy gets ` (1)`, and the message names it.
+- Widget: add it with the phone on van-core Wi-Fi — values within a few
+  seconds; ↻ shows `updating…` then a time; out of range shows
+  `not in range · last …` and grey values after 20 min.
