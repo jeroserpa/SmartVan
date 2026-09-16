@@ -50,23 +50,29 @@ jobs:
             echo "::warning::DEBUG_KEYSTORE_B64 not set - APK signed with a throwaway key"
           fi
 
-      - name: Unit tests and debug APK
-        run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug
+      - name: Unit tests and APKs
+        run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease
 
-      # Fails the build if the APK is not signed with the repo key: an APK
+      # Fails the build if an APK is not signed with the repo key: an APK
       # signed with anything else will not install over the previous one.
-      - name: Check signing certificate
+      - name: Check signing certificates
         run: |
           apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
-          got=$("$apksigner" verify --print-certs app/build/outputs/apk/debug/*.apk \
-                | sed -n 's/.*certificate SHA-256 digest: //p' | head -1)
-          echo "APK certificate SHA-256: $got"
+          want=""
           if [ -n "$VAN_KEYSTORE" ]; then
             want=$(keytool -list -v -keystore "$VAN_KEYSTORE" -storepass android \
                    | sed -n 's/.*SHA256: //p' | head -1 | tr -d ':' | tr 'A-F' 'a-f')
-            echo "Keystore SHA-256:        $want"
-            [ "$got" = "$want" ] || { echo "::error::APK not signed with the repo key"; exit 1; }
+            echo "Keystore SHA-256: $want"
           fi
+          for apk in app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/release/app-release.apk; do
+            got=$("$apksigner" verify --print-certs "$apk" \
+                  | sed -n 's/.*certificate SHA-256 digest: //p' | head -1)
+            echo "$(basename "$apk"): $got, $(stat -c %s "$apk") bytes"
+            if [ -n "$want" ] && [ "$got" != "$want" ]; then
+              echo "::error::$apk not signed with the repo key"
+              exit 1
+            fi
+          done
 
       # A fixed download link for the phone:
       #   https://github.com/<repo>/releases/download/app-latest/van-core.apk
@@ -77,11 +83,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk van-core.apk
+          cp app/build/outputs/apk/release/app-release.apk van-core.apk
           link="https://github.com/${GITHUB_REPOSITORY}/releases/download/app-latest/van-core.apk"
           notes="Build ${GITHUB_RUN_NUMBER} from \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA::7}, $(date -u '+%Y-%m-%d %H:%M UTC').
 
-          Debug-signed with the repo key: sideload, installs over the previous build.
+          Shrunk release build, signed with the repo key: sideload, installs over the previous build.
 
           Direct link: ${link}"
           git tag -f app-latest "$GITHUB_SHA"
@@ -97,7 +103,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: van-core-apk
-          path: app/build/outputs/apk/debug/*.apk
+          path: app/build/outputs/apk/release/app-release.apk
           retention-days: 30
 
   # Runs the app and renders every widget state on an emulator, against the
