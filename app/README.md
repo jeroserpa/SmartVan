@@ -13,19 +13,13 @@ Any push touching `app/` runs `.github/workflows/android-app.yml`. Download
 gh run download --name van-core-apk --dir apk
 ```
 
-### Stable signing key (one-time)
+### Signing key
 
-Without it every build is signed with a new throwaway key and must be
-uninstalled before updating. Generate once — keytool ships with any JDK, so
-this can be done in a Codespace or any machine with Java:
-
-```bash
-keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
-```
-
-```bash
-base64 -w0 debug.keystore | gh secret set DEBUG_KEYSTORE_B64
-```
+Builds are signed with the key in the `DEBUG_KEYSTORE_B64` repo secret
+(generated 2026-09-16 with OpenSSL as PKCS12, alias `androiddebugkey`,
+passwords `android`; local copy at `~/.android/debug.keystore`). The CI log's
+"Show signing certificate" step prints its SHA-256. If the secret is ever
+lost, generate a new one and uninstall the app once before updating.
 
 ## `VERIFY` on the phone (D-15)
 - UI loads with mobile data **on**, and other apps still reach the internet.

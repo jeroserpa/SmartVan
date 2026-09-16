@@ -12,6 +12,7 @@ import android.view.Gravity
 import android.view.View
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
@@ -31,7 +32,10 @@ import android.widget.TextView
  */
 class MainActivity : Activity() {
 
+    // Full firmware serves the packed UI at /ui; bring-up and soak builds only
+    // have ESPHome's stock page at /. Try /ui first, fall back on a 404.
     private val uiUrl = "http://192.168.4.1/ui"
+    private val rootUrl = "http://192.168.4.1/"
 
     private lateinit var cm: ConnectivityManager
     private lateinit var web: WebView
@@ -56,7 +60,16 @@ class MainActivity : Activity() {
                     view: WebView, request: WebResourceRequest, error: WebResourceError
                 ) {
                     if (request.isForMainFrame) {
-                        showMessage("van-core not reachable\n(${error.description})")
+                        showMessage("van-core not reachable\n${error.description} (${error.errorCode})\n\n${networkInfo()}")
+                    }
+                }
+
+                override fun onReceivedHttpError(
+                    view: WebView, request: WebResourceRequest, response: WebResourceResponse
+                ) {
+                    if (request.isForMainFrame && response.statusCode == 404 &&
+                        request.url.toString() == uiUrl) {
+                        view.loadUrl(rootUrl)
                     }
                 }
 
@@ -97,6 +110,17 @@ class MainActivity : Activity() {
     }
 
     private var overlayForcedByError = false
+
+    /** What the process is actually bound to — the first thing to know when a load fails. */
+    private fun networkInfo(): String {
+        val n = boundNetwork ?: return "Bound network: none"
+        val lp = cm.getLinkProperties(n)
+        val addrs = lp?.linkAddresses?.joinToString { it.toString() } ?: "?"
+        val routes = lp?.routes?.joinToString { it.toString() } ?: "?"
+        return "Bound: ${lp?.interfaceName ?: "?"}
+Address: $addrs
+Routes: $routes"
+    }
 
     private fun showMessage(text: String) {
         overlayForcedByError = true
