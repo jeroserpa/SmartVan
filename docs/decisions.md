@@ -597,3 +597,57 @@ home.
 `captive_portal:` running the catch-all DNS. captive_portal has since been
 removed from every node (measurements.md M10), so the probe-landing path
 depends on the phone reaching the node at all — which is this problem again.
+
+## 2026-09-16 — D-16: the P310 AC input level is a physical knob — read it, never write it
+
+**Status: decided.** Removes the `ac_charge_limit` select and supersedes the
+Phase 4 voltage-adaptive charge limiter as written in `CLAUDE.md`.
+
+**What was wrong.** The design assumed the AC charge limit was a BLE setting
+with five steps of 300/500/700/900/1100 W, because that is what ESP-FBot
+exposes. On this P310 it is a **physical five-position knob**: 400 / 800 /
+1200 / 1600 / 2200 W (owner-confirmed, matches Aferiy's product pages).
+ESP-FBot's table belongs to another Fbot model.
+
+**What the registers probably are.** Input reg 2 and holding reg 13 both
+report 1–5. Five knob positions and five values: most likely the knob
+position, reported as a reading. `UNVERIFIED` — with van-core unplugged, run
+`fbot_probe.py registers` at two or three knob positions and record the
+result in `measurements.md`.
+
+**Why not write it anyway.** A write to reg 13 either does nothing, or
+overrides the knob until it is next turned — and then the knob is lying
+about the real limit. Neither is useful, and the second is a hidden state on
+the charging path. "Replicate, never fuzz" (CLAUDE.md §9 Phase 0) already
+rules it out: the write was never seen from BrightEMS for this station.
+
+**Changes:**
+- `nodes/van-core.yaml`: `select: ac_charge_limit` removed; read-only
+  `AC input level` sensor added (ESP-FBot `charge_level`, relabelled to the
+  P310 knob values). Display only.
+- `ui/index.html`, `tools/mock_core.py`: the dropdown becomes a read-out.
+- `tools/fbot_probe.py`: P310 knob table; `set charge-limit` refuses.
+- `docs/ble-registers.md`: reg 2 and reg 13 relabelled; reg 13 moved off the
+  writable list.
+
+**Consequence for Phase 4.** The voltage-adaptive limiter cannot be built as
+specified: the node cannot change the limit. What is left to protect the
+starter battery:
+- **On/off switching** of the charger path via the planned contactor, driven
+  by the voltage thresholds. Coarse, but it is the part that actually
+  prevents a drain.
+- **The knob as a driving setting.** 400 W into the P310 is roughly 600 W
+  from 12 V (at the measured 67 % chain efficiency), about 50 A instead of
+  100 A.
+- **Throttling on the charging inverter**, if it has any remote or enable
+  input. `UNVERIFIED` — check its manual.
+
+**Side note, M11 re-read.** "Limit 400 W, 654 W metered on the AC input" is
+not a contradiction: with AC input present the station passes AC through to
+its output loads, so the input meter sees charge power plus the loads.
+`UNVERIFIED` as an explanation — confirm by reading `output_power` while
+charging.
+
+**Not a BLE interference problem.** The question that started this: van-core
+never wrote reg 13 (the soak build had no select at all). The one real effect
+of van-core holding the BLE link is that BrightEMS cannot connect.

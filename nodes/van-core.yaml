@@ -319,6 +319,22 @@ sensor:
       id: remaining_minutes
     ac_out_voltage:
       name: "AC output voltage"
+    # Input reg 2, a level 1-5. On the P310 this is believed to be the AC
+    # input knob position - UNVERIFIED, check with fbot_probe.py at two or
+    # three knob positions. ESP-FBot publishes it as 300..1100 W (another
+    # Fbot model's table), so undo that and relabel with the P310's knob.
+    # Display only: nothing reads this for a control decision.
+    charge_level:
+      name: "AC input level"
+      id: ac_input_level
+      unit_of_measurement: "W"
+      accuracy_decimals: 0
+      filters:
+        - lambda: |-
+            static const float P310_LEVELS_W[] = {400, 800, 1200, 1600, 2200};
+            int level = (int) lround((x - 300.0f) / 200.0f) + 1;
+            if (x < 300.0f || level < 1 || level > 5) return NAN;
+            return P310_LEVELS_W[level - 1];
 
   # --- fridge probe, raw. Unfiltered, for logging and for the coast test. ---
   - platform: dallas_temp
@@ -550,12 +566,12 @@ button:
     on_press:
       - lambda: id(arbiter)->manual_cancel();
 
-select:
-  - platform: fbot
-    fbot_id: p310
-    ac_charge_limit:
-      name: "AC charge limit"
-      id: ac_charge_limit
+# No `select: ac_charge_limit`. The P310's AC input level is a physical
+# five-position knob (400/800/1200/1600/2200 W), so a BLE write to reg 13
+# would at best be ignored and at worst leave the knob lying about the real
+# limit. ESP-FBot's select also labels the positions 300..1100 W, which is
+# another Fbot model. Read-only `ac_input_level` sensor above instead;
+# docs/decisions.md D-16.
 
 # -----------------------------------------------------------------------------
 # The custom web UI - the page that replaces BrightEMS. Source in ui/, packed
