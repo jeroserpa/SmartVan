@@ -1,0 +1,21 @@
+# Line endings are part of the build here: components/van_ui/__init__.py hashes
+# the ui/ sources and compares against the marker tools/pack_ui.py wrote, and a
+# CRLF checkout (core.autocrlf=true on Windows) used to make that hash differ
+# from the committed one and fail `esphome config` with nothing changed. The
+# packer and the check now normalise CRLF before hashing as well, but keep the
+# checkout LF so the generated header diffs cleanly across machines.
+* text=auto eol=lf
+
+# UI sources and the generated header: always LF, everywhere.
+ui/**                            text eol=lf
+components/van_ui/van_ui_html.h  text eol=lf
+
+# Binary assets - never touched.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.woff binary
+*.woff2 binary
+*.bin  binary
