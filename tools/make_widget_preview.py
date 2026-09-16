@@ -19,8 +19,8 @@ LAYOUT = Path(__file__).resolve().parent.parent / "app" / "src" / "main" / "res"
 SAMPLE = {
     "w_state": "AC on",
     "w_soc": "78%",
-    "w_out": "48 W",
-    "w_in": "310 W",
+    "w_out": "48 W out",
+    "w_in": "310 W in",
     "w_fridge": "4.6 °C",
     "w_reason": "fridge block",
     "w_age": "Updated 14:32",

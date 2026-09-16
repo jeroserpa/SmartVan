@@ -95,16 +95,17 @@
                     android:layout_width="14dp"
                     android:layout_height="14dp"
                     android:layout_marginEnd="4dp"
-                    android:contentDescription="Output"
-                    android:src="@drawable/ic_arrow_out"
-                    android:tint="@color/warn" />
+                    android:id="@+id/w_ic_in"
+                    android:contentDescription="Input"
+                    android:src="@drawable/ic_arrow_in"
+                    android:tint="@color/ok" />
 
                 <TextView
-                    android:id="@+id/w_out"
+                    android:id="@+id/w_in"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:maxLines="1"
-                    android:text="48 W"
+                    android:text="310 W in"
                     android:textColor="@color/fg"
                     android:textSize="16sp" />
             </LinearLayout>
@@ -120,16 +121,17 @@
                     android:layout_width="14dp"
                     android:layout_height="14dp"
                     android:layout_marginEnd="4dp"
-                    android:contentDescription="Input"
-                    android:src="@drawable/ic_arrow_in"
-                    android:tint="@color/ok" />
+                    android:id="@+id/w_ic_out"
+                    android:contentDescription="Output"
+                    android:src="@drawable/ic_arrow_out"
+                    android:tint="@color/warn" />
 
                 <TextView
-                    android:id="@+id/w_in"
+                    android:id="@+id/w_out"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:maxLines="1"
-                    android:text="310 W"
+                    android:text="48 W out"
                     android:textColor="@color/fg"
                     android:textSize="16sp" />
             </LinearLayout>
@@ -193,6 +195,7 @@
             android:layout_width="16dp"
             android:layout_height="16dp"
             android:layout_marginEnd="4dp"
+            android:id="@+id/w_ic_fridge"
             android:contentDescription="Fridge"
             android:src="@drawable/ic_snow"
             android:tint="@color/alt" />

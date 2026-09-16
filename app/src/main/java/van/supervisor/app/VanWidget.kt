@@ -9,8 +9,10 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.text.SpannableString
+import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.format.DateFormat
+import android.text.style.ForegroundColorSpan
 import android.text.style.RelativeSizeSpan
 import android.util.SizeF
 import android.view.View
@@ -76,6 +78,8 @@ class VanWidget : AppWidgetProvider() {
         val stateColor: Int,
         val reason: String,
         val footer: String,
+        /** The same, short enough for the compact layout. */
+        val footerShort: String,
         val footerColor: Int,
         val stale: Boolean,
         val refreshing: Boolean,
@@ -155,7 +159,7 @@ class VanWidget : AppWidgetProvider() {
             // Parked first (fridge off by design), then a dead P310 link (every
             // station value is then stale at the source), then the AC itself.
             var (state, stateColor) = when {
-                snap.okAt == 0L -> "—" to dim
+                snap.okAt == 0L -> "--" to dim
                 parked -> "Parked" to alt
                 bool(s, VanFeed.BLE) == false -> "P310 offline" to warn
                 ac == true -> "AC on" to warn
@@ -168,17 +172,22 @@ class VanWidget : AppWidgetProvider() {
             val at = if (snap.okAt == 0L) "" else DateFormat.getTimeFormat(context).format(Date(snap.okAt))
             val ago = ago(now - snap.okAt)
             val recognised = num(s, VanFeed.SOC) != null || bool(s, VanFeed.BLE) != null
-            val (footer, footerColor) = when {
-                snap.okAt == 0L && snap.tried -> "Not on van-core Wi-Fi" to muted
-                snap.okAt == 0L -> "Waiting for the first update" to muted
+            val n = s.length()
+            val entities = if (n == 1) "1 entity" else "$n entities"
+            // (full text, compact text, colour)
+            val (footer, footerShort, footerColor) = when {
+                snap.okAt == 0L && snap.tried ->
+                    Triple("Not on van-core Wi-Fi", "Not on van-core Wi-Fi", muted)
+                snap.okAt == 0L ->
+                    Triple("Waiting for the first update", "Waiting for data", muted)
                 // Reached van-core but matched nothing: an entity id format or
                 // name change. Say so instead of looking like an empty van.
-                snap.lastOk && !recognised && s.length() > 0 ->
-                    "$at · ${s.length()} entities, none recognised" to warn
-                snap.lastOk && !stale -> "Updated $at" to dim
-                snap.lastOk -> "Last seen $ago" to warn
-                stale -> "Out of range · last seen $ago" to warn
-                else -> "Out of range · updated $at" to dim
+                snap.lastOk && !recognised && n > 0 ->
+                    Triple("$at · $entities, none recognised", "No known entities", warn)
+                snap.lastOk && !stale -> Triple("Updated $at", "Updated $at", dim)
+                snap.lastOk -> Triple("Last seen $ago", "Seen $ago", warn)
+                stale -> Triple("Out of range · last seen $ago", "Seen $ago", warn)
+                else -> Triple("Out of range · updated $at", "Updated $at", dim)
             }
 
             return Model(
@@ -190,6 +199,7 @@ class VanWidget : AppWidgetProvider() {
                 stateColor = stateColor,
                 reason = reason,
                 footer = footer,
+                footerShort = footerShort,
                 footerColor = footerColor,
                 stale = stale,
                 refreshing = snap.refreshing,
@@ -200,37 +210,56 @@ class VanWidget : AppWidgetProvider() {
             val v = RemoteViews(context.packageName,
                 if (full) R.layout.van_widget else R.layout.van_widget_small)
             val value = context.getColor(if (m.stale) R.color.dim else R.color.fg)
+            val muted = context.getColor(R.color.muted)
+            val dim = context.getColor(R.color.dim)
 
-            v.setTextViewText(R.id.w_soc, socText(m.soc))
-            v.setTextColor(R.id.w_soc, value)
+            // Bands follow CLAUDE.md §9 Phase 5 load shedding: 30 % sheds,
+            // 15 % alerts. The number carries the band as well as the bar, so
+            // it reads at a glance on the compact layout too.
+            val soc = m.soc
+            val band = when {
+                soc == null || m.stale -> Band.NONE
+                soc < 15 -> Band.BAD
+                soc < 30 -> Band.WARN
+                else -> Band.OK
+            }
+            v.setTextViewText(R.id.w_soc, socText(soc))
+            v.setTextColor(R.id.w_soc, when (band) {
+                Band.BAD -> context.getColor(R.color.bad)
+                Band.WARN -> context.getColor(R.color.warn)
+                else -> value
+            })
             v.setTextViewText(R.id.w_state, m.state)
             v.setTextColor(R.id.w_state, m.stateColor)
             v.setInt(R.id.w_dot, "setColorFilter", m.stateColor)
-            v.setTextViewText(R.id.w_age, m.footer)
+            v.setTextViewText(R.id.w_age, if (full) m.footer else m.footerShort)
             v.setTextColor(R.id.w_age, m.footerColor)
             v.setViewVisibility(R.id.w_refresh, if (m.refreshing) View.GONE else View.VISIBLE)
             v.setViewVisibility(R.id.w_spin, if (m.refreshing) View.VISIBLE else View.GONE)
 
             if (full) {
-                v.setTextViewText(R.id.w_out, watts(m.out))
-                v.setTextViewText(R.id.w_in, watts(m.inp))
-                v.setTextViewText(R.id.w_fridge, m.fridge?.let { "%.1f °C".format(it) } ?: "—")
-                v.setTextColor(R.id.w_out, value)
+                v.setTextViewText(R.id.w_in, flow(m.inp, "in", muted))
+                v.setTextViewText(R.id.w_out, flow(m.out, "out", muted))
+                v.setTextViewText(R.id.w_fridge, m.fridge?.let { "%.1f °C".format(it) } ?: "-- °C")
                 v.setTextColor(R.id.w_in, value)
+                v.setTextColor(R.id.w_out, value)
                 v.setTextColor(R.id.w_fridge, value)
                 v.setTextViewText(R.id.w_reason, m.reason)
 
-                // Bands follow CLAUDE.md §9 Phase 5 load shedding: 30 % sheds,
-                // 15 % alerts.
-                val soc = m.soc
-                val band = when {
-                    soc == null || m.stale -> R.id.w_bar_dim
-                    soc < 15 -> R.id.w_bar_bad
-                    soc < 30 -> R.id.w_bar_warn
-                    else -> R.id.w_bar_ok
+                // Old data: the icons go grey with the numbers, so nothing on
+                // the widget still looks live.
+                v.setInt(R.id.w_ic_in, "setColorFilter", if (m.stale) dim else context.getColor(R.color.ok))
+                v.setInt(R.id.w_ic_out, "setColorFilter", if (m.stale) dim else context.getColor(R.color.warn))
+                v.setInt(R.id.w_ic_fridge, "setColorFilter", if (m.stale) dim else context.getColor(R.color.alt))
+
+                val bar = when (band) {
+                    Band.NONE -> R.id.w_bar_dim
+                    Band.BAD -> R.id.w_bar_bad
+                    Band.WARN -> R.id.w_bar_warn
+                    Band.OK -> R.id.w_bar_ok
                 }
-                for (bar in BARS) v.setViewVisibility(bar, if (bar == band) View.VISIBLE else View.GONE)
-                v.setProgressBar(band, 100, (soc ?: 0.0).roundToInt().coerceIn(0, 100), false)
+                for (b in BARS) v.setViewVisibility(b, if (b == bar) View.VISIBLE else View.GONE)
+                v.setProgressBar(bar, 100, (soc ?: 0.0).roundToInt().coerceIn(0, 100), false)
             }
 
             val open = PendingIntent.getActivity(
@@ -247,15 +276,25 @@ class VanWidget : AppWidgetProvider() {
             return v
         }
 
+        private enum class Band { NONE, OK, WARN, BAD }
+
         /** "78%" with a smaller percent sign. */
         private fun socText(soc: Double?): CharSequence {
-            if (soc == null) return "—"
+            if (soc == null) return "--"
             val text = SpannableString("${soc.roundToInt()}%")
             text.setSpan(RelativeSizeSpan(0.5f), text.length - 1, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             return text
         }
 
-        private fun watts(w: Double?): String = w?.let { "${it.roundToInt()} W" } ?: "— W"
+        /** "310 W in", the direction small and muted: an arrow alone is ambiguous. */
+        private fun flow(w: Double?, label: String, labelColor: Int): CharSequence {
+            val text = SpannableStringBuilder(w?.let { "${it.roundToInt()} W" } ?: "-- W")
+            val start = text.length
+            text.append(" ").append(label)
+            text.setSpan(RelativeSizeSpan(0.75f), start, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            text.setSpan(ForegroundColorSpan(labelColor), start, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            return text
+        }
 
         private fun ago(ms: Long): String {
             val min = ms / 60_000

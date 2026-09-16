@@ -113,7 +113,12 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           # am instrument, not connectedAndroidTest: Gradle uninstalls the app
           # afterwards, and the shots are pulled after the run.
+          # The Pixel launcher on a cold swiftshader emulator raises an ANR
+          # dialog over the screenshots; nothing here needs a launcher.
           script: |
+            adb shell pm disable-user --user 0 com.google.android.apps.nexuslauncher || true
+            adb shell settings put global hide_error_dialogs 1 || true
+            adb shell am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS || true
             adb install -r app/build/outputs/apk/debug/app-debug.apk
             adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
             adb shell am instrument -w -r van.supervisor.app.test/androidx.test.runner.AndroidJUnitRunner > instrument.txt 2>&1 || true

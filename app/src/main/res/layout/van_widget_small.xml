@@ -18,7 +18,7 @@
         android:layout_height="wrap_content"
         android:includeFontPadding="false"
         android:maxLines="1"
-        android:text="—"
+        android:text="--"
         android:textColor="@color/fg"
         android:textSize="28sp"
         android:textStyle="bold" />
@@ -51,7 +51,7 @@
                 android:layout_height="wrap_content"
                 android:ellipsize="end"
                 android:maxLines="1"
-                android:text="—"
+                android:text="--"
                 android:textColor="@color/muted"
                 android:textSize="12sp"
                 android:textStyle="bold" />

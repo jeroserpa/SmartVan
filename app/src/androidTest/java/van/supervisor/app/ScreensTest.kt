@@ -53,20 +53,21 @@ class ScreensTest {
         MainActivity.baseUrlOverride = mock
         ActivityScenario.launch(MainActivity::class.java).use {
             Thread.sleep(10_000)
-            save("app-1-page", instr.uiAutomation.takeScreenshot())
+            save("app-1-page", screen())
         }
     }
 
     @Test
     fun a2_appWhenNodeDoesNotAnswer() {
-        // Nothing listens on port 9 of the host: connection refused.
-        MainActivity.baseUrlOverride = "http://10.0.2.2:9/"
+        // Nothing listens on 8081 on the host: connection refused. (Not a low
+        // port: Chromium refuses those itself with ERR_UNSAFE_PORT.)
+        MainActivity.baseUrlOverride = "http://10.0.2.2:8081/"
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             Thread.sleep(6_000)
-            save("app-2-unreachable", instr.uiAutomation.takeScreenshot())
+            save("app-2-unreachable", screen())
             scenario.onActivity { it.findViewById<View>(R.id.btn_details).performClick() }
             Thread.sleep(800)
-            save("app-3-unreachable-details", instr.uiAutomation.takeScreenshot())
+            save("app-3-unreachable-details", screen())
         }
     }
 
@@ -77,9 +78,9 @@ class ScreensTest {
         MainActivity.baseUrlOverride = mock
         ActivityScenario.launch(MainActivity::class.java).use {
             Thread.sleep(1_000)
-            save("app-4-searching", instr.uiAutomation.takeScreenshot())
+            save("app-4-searching", screen())
             Thread.sleep(12_000)   // requestNetwork times out after 10 s
-            save("app-5-no-wifi", instr.uiAutomation.takeScreenshot())
+            save("app-5-no-wifi", screen())
         }
         shell("svc wifi enable")
         Thread.sleep(8_000)
@@ -148,6 +149,16 @@ class ScreensTest {
     }
 
     // --- helpers -----------------------------------------------------------
+
+    /**
+     * A cold CI emulator's own launcher tends to raise an ANR dialog over
+     * whatever is on screen; close system dialogs before capturing.
+     */
+    private fun screen(): Bitmap {
+        shell("am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS")
+        Thread.sleep(400)
+        return instr.uiAutomation.takeScreenshot()
+    }
 
     private fun renderWidget(name: String, s: VanStore.Snapshot, now: Long) {
         val shots = ArrayList<Pair<String, Bitmap>>()
