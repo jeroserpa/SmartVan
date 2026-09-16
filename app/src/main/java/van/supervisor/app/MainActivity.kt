@@ -35,7 +35,7 @@ class MainActivity : Activity() {
 
     private lateinit var cm: ConnectivityManager
     private lateinit var web: WebView
-    private lateinit var overlay: LinearLayout
+    private lateinit var veil: LinearLayout
     private lateinit var status: TextView
     private val main = Handler(Looper.getMainLooper())
 
@@ -61,7 +61,7 @@ class MainActivity : Activity() {
                 }
 
                 override fun onPageFinished(view: WebView, url: String) {
-                    if (!overlayForcedByError) overlay.visibility = View.GONE
+                    if (!overlayForcedByError) veil.visibility = View.GONE
                 }
             }
         }
@@ -75,7 +75,7 @@ class MainActivity : Activity() {
             text = "Retry"
             setOnClickListener { load() }
         }
-        overlay = LinearLayout(this).apply {
+        veil = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setBackgroundColor(0xFF101418.toInt())
@@ -89,7 +89,7 @@ class MainActivity : Activity() {
 
         setContentView(FrameLayout(this).apply {
             addView(web)
-            addView(overlay)
+            addView(veil)
         })
 
         showMessage("Looking for the van-core Wi-Fi…")
@@ -101,7 +101,7 @@ class MainActivity : Activity() {
     private fun showMessage(text: String) {
         overlayForcedByError = true
         status.text = text
-        overlay.visibility = View.VISIBLE
+        veil.visibility = View.VISIBLE
     }
 
     /**
