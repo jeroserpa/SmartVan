@@ -30,8 +30,10 @@ object VanFeed {
 
     private const val EVENTS_URL = "http://192.168.4.1/events"
 
-    // Entity ids as ESPHome's web_server derives them: "<domain>-<slugified name>".
-    // Mirrors the E map in ui/index.html — keep the two in step.
+    // Entity keys as "<domain>-<slugified name>", matched through [key] so both
+    // id formats work: ESPHome up to 2025 sent "sensor-battery"; 2026.8 sends
+    // "sensor/Battery" (domain/name — seen on van-core-soak, 2026-09-16).
+    // Names are the ones in nodes/van-core.yaml.
     const val SOC = "sensor-battery"
     const val OUT = "sensor-output_power"
     const val IN = "sensor-input_power"
@@ -74,6 +76,26 @@ object VanFeed {
         }
     }
 
+    /**
+     * "sensor/Battery" or "sensor-battery" -> "sensor-battery". Slugged the way
+     * ESPHome built object ids: lower case, anything outside [a-z0-9_-] -> '_'.
+     * A device segment ("domain/device/name"), if ever used, is dropped.
+     */
+    fun key(id: String): String {
+        val slash = id.indexOf('/')
+        val (domain, name) = if (slash >= 0) {
+            id.substring(0, slash) to id.substringAfterLast('/')
+        } else {
+            val dash = id.indexOf('-')
+            if (dash < 0) return id
+            id.substring(0, dash) to id.substring(dash + 1)
+        }
+        val slug = name.lowercase().map { c ->
+            if (c in 'a'..'z' || c in '0'..'9' || c == '_' || c == '-') c else '_'
+        }.joinToString("")
+        return "$domain-$slug"
+    }
+
     private fun readInitialBurst(network: Network): Map<String, JSONObject>? {
         val conn = network.openConnection(URL(EVENTS_URL)) as HttpURLConnection
         conn.connectTimeout = 4_000
@@ -103,7 +125,7 @@ object VanFeed {
                             val j = runCatching { JSONObject(data.toString()) }.getOrNull()
                             val id = j?.optString("id").orEmpty()
                             if (j != null && id.isNotEmpty()) {
-                                states[id] = j
+                                states[key(id)] = j
                                 sawEsphome = true
                             }
                         }

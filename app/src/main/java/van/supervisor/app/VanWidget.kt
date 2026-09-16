@@ -146,6 +146,12 @@ class VanWidget : AppWidgetProvider() {
             if (snap.refreshing) return "updating…"
             if (snap.okAt == 0L) return if (snap.tried) "van-core not in range" else "no data yet"
             val at = DateFormat.getTimeFormat(context).format(Date(snap.okAt))
+            // Reached van-core but matched nothing: an entity id format or name
+            // change. Say so instead of looking like an empty van.
+            if (snap.lastOk && snap.states.length() > 0 &&
+                num(snap.states, VanFeed.SOC) == null && bool(snap.states, VanFeed.BLE) == null) {
+                return "$at · ${snap.states.length()} entities, none recognised"
+            }
             return when {
                 snap.lastOk && !stale -> at
                 snap.lastOk -> "last seen ${ago(now - snap.okAt)}"
