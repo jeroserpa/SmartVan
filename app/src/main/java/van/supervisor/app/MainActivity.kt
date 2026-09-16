@@ -33,7 +33,9 @@ import android.widget.TextView
 class MainActivity : Activity() {
 
     // Full firmware serves the packed UI at /ui; bring-up and soak builds only
-    // have ESPHome's stock page at /. Try /ui first, fall back on a 404.
+    // have ESPHome's stock page at /. ESPHome's IDF web server does not answer
+    // an unknown path with a 404: it closes the socket (ERR_EMPTY_RESPONSE,
+    // seen 2026-09-16 on van-core-soak). So any failure of /ui falls back to /.
     private val uiUrl = "http://192.168.4.1/ui"
     private val rootUrl = "http://192.168.4.1/"
 
@@ -59,22 +61,27 @@ class MainActivity : Activity() {
                 override fun onReceivedError(
                     view: WebView, request: WebResourceRequest, error: WebResourceError
                 ) {
-                    if (request.isForMainFrame) {
-                        showMessage("van-core not reachable\n${error.description} (${error.errorCode})\n\n${networkInfo()}")
+                    if (!request.isForMainFrame) return
+                    val url = request.url.toString()
+                    failedUrl = url
+                    if (url == uiUrl) {
+                        main.post { open(rootUrl) }
+                    } else {
+                        showMessage("van-core not reachable\n$url\n${error.description} (${error.errorCode})\n\n${networkInfo()}")
                     }
                 }
 
                 override fun onReceivedHttpError(
                     view: WebView, request: WebResourceRequest, response: WebResourceResponse
                 ) {
-                    if (request.isForMainFrame && response.statusCode == 404 &&
-                        request.url.toString() == uiUrl) {
-                        view.loadUrl(rootUrl)
+                    if (request.isForMainFrame && request.url.toString() == uiUrl) {
+                        failedUrl = uiUrl
+                        main.post { open(rootUrl) }
                     }
                 }
 
                 override fun onPageFinished(view: WebView, url: String) {
-                    if (!overlayForcedByError) veil.visibility = View.GONE
+                    if (!veilPinned && url != failedUrl) veil.visibility = View.GONE
                 }
             }
         }
@@ -109,7 +116,10 @@ class MainActivity : Activity() {
         requestVanNetwork()
     }
 
-    private var overlayForcedByError = false
+    /** True while a message must stay up regardless of page events. */
+    private var veilPinned = false
+    /** The last main-frame URL that failed; its own onPageFinished must not unveil an error page. */
+    private var failedUrl: String? = null
 
     /** What the process is actually bound to — the first thing to know when a load fails. */
     private fun networkInfo(): String {
@@ -121,7 +131,7 @@ class MainActivity : Activity() {
     }
 
     private fun showMessage(text: String) {
-        overlayForcedByError = true
+        veilPinned = true
         status.text = text
         veil.visibility = View.VISIBLE
     }
@@ -173,9 +183,15 @@ class MainActivity : Activity() {
             requestVanNetwork()
             return
         }
-        overlayForcedByError = false
+        failedUrl = null
+        open(uiUrl)
+    }
+
+    private fun open(url: String) {
+        veilPinned = false
         status.text = "Connecting to van-core…"
-        web.loadUrl(uiUrl)
+        veil.visibility = View.VISIBLE
+        web.loadUrl(url)
     }
 
     override fun onResume() {
