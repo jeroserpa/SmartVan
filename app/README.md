@@ -4,6 +4,30 @@ A WebView onto `http://192.168.4.1/ui`, with this app's traffic bound to the
 van Wi-Fi so the rest of the phone keeps using mobile data. No logic here —
 the web UI stays the source of truth.
 
+## Saving files: `window.VanApp.saveFile(name, text)`
+
+A WebView has no download path of its own, and Android's DownloadManager is
+not an option: it runs outside this app's network binding, so with mobile
+data on it would send 192.168.4.1 to cellular. Instead the page fetches the
+file itself (over the bound Wi-Fi) and hands the text to the app, which only
+writes it. The soak log page (`/ui`, `/soak`) already does this when the
+bridge exists.
+
+- **Android 10+:** public `Download/` via MediaStore, no storage permission.
+  On a name clash MediaStore adds ` (1)`; the reply names the file it kept.
+- **Android 8–9:** the public folder needs a runtime permission a synchronous
+  call cannot ask for, so the file goes to the app's own
+  `Android/data/van.supervisor.app/files/Download/` (readable from a file
+  manager or over USB on those versions). It is deleted if the app is
+  uninstalled. `minSdk` stays 26.
+- Written as UTF-8, MIME `text/csv`. The name is reduced to a basename of
+  `[A-Za-z0-9._-]`.
+- Returns a line for the page to show: `Saved soak-20260917-0830.csv to
+  Downloads (812 kB)`, or `Save failed: …`.
+- Only answers while the WebView shows `http://192.168.4.1`; any other page
+  gets `Refused: …`.
+- The call is synchronous: the page waits while a few MB are written.
+
 ## Build (cloud)
 
 Any push touching `app/` runs `.github/workflows/android-app.yml`. Download
@@ -27,3 +51,6 @@ lost, generate a new one and uninstall the app once before updating.
 - Out of range: message + Retry within ~10 s, no hang.
 - At home on the house Wi-Fi the app binds to that network and fails to load
   — expected; SSID matching is not implemented.
+- Soak page **Download all** with mobile data on: the file shows up in
+  Downloads, and the page reports the name and a size that matches the file.
+- Downloading twice: the second copy gets ` (1)`, and the message names it.
