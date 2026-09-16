@@ -279,3 +279,51 @@ Side findings, same session:
   reflashed to the plug.
 - Soak running without an SD card: counters in RAM only, and free heap reads
   optimistic because FAT buffers are never allocated.
+
+## M12 — 2026-09-15/16 — first BLE soak on the 1.47B, P310 connected
+
+van-core-soak.yaml (commit 37bd4c4), no SD card, backlight 100 %. Flashed
+14:37; power cut briefly by hand ~15:06 (board heat check), which restarted
+the run. After the cut the display showed `BLE DOWN` for a while; how long is
+not recorded (see gaps below). Read from the web UI:
+
+| Reading | 15 Sep 21:41 | 16 Sep 12:00 |
+|---|---|---|
+| Uptime | 6 h 35 min | 20 h 54 min |
+| BLE disconnect count | 0 | 0 |
+| Longest BLE gap | 0 s | 0 s |
+| Free heap (`esp_get_free_heap_size`) | 8 429 912 B | 8 429 624 B |
+| Free PSRAM | 8 275 164 B | 8 275 164 B |
+| Board temperature (die) | 75.3 °C | 71.3 °C |
+| SOC | 50.3 % | 29.9 % |
+| Input / output power | 0 W / 59 W | 396 W / 32 W |
+| Reg 21 (`system_power`) | 20 | 19 (no AC input) |
+
+**Result: pass on what was measured, 21 h rather than the planned 24 h.**
+- Link held: zero drops across ~21 h connected, with SoftAP (phone + heater
+  plug), web server and a 1 s display refresh all running.
+- No reboot: the two uptimes agree on a boot at ~15:06.
+- Heap flat: −288 B over 14 h.
+
+**What this soak did not show:**
+- **Reconnect after a power cut is untimed.** It did recover (data flowed
+  all night), but the counters only time gaps that follow a disconnect seen
+  at runtime, not the wait for the first connection after boot. That is
+  exactly the §5.2 recovery path. Needs its own deliberate test, and the soak
+  config should record time-to-first-connect.
+- **Internal RAM is not visible.** `esp_get_free_heap_size()` includes PSRAM,
+  so the "free heap" figure is dominated by it. The BLE stack lives in
+  internal RAM; track `heap_caps_get_free_size(MALLOC_CAP_INTERNAL)` and its
+  minimum-ever value instead.
+- No SD card, so fatfs buffers never allocated and no CSV.
+- Engine/charging EMI and induction cooking exposure during the window:
+  `UNVERIFIED` — not recorded.
+
+**Thermal: die at 71–75 °C sustained**, backlight at 100 %, in the van in
+September. High for an S3 (50–65 °C is typical for a busy board). The octal
+PSRAM is the limiting part (85 °C ambient rating). Re-measure with the
+backlight blanked as the real node runs, and in the final mounting position,
+before August.
+
+**Side note, not a soak result:** SOC fell 50.3 % → 29.9 % over 14 h 19 min
+overnight, i.e. ~800 Wh at 3900 Wh usable, with little or no input.
