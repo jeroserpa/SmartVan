@@ -32,7 +32,16 @@ android {
     }
 
     buildTypes {
-        release { isMinifyEnabled = false }
+        // The build that goes to the phone. Shrunk: Material + AppCompat took
+        // the APK from 2 MB to 6 MB, too big to hand over reliably on mobile
+        // data. Signed with the same repo key as debug, so it installs over
+        // any earlier build. Debug stays unshrunk for the emulator tests.
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.getByName("debug")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
