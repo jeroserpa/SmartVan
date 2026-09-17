@@ -139,6 +139,14 @@ Any push touching `app/` runs `.github/workflows/android-app.yml`.
 — a rolling pre-release that every build of `main` (and, until it is merged,
 the app branch) replaces. Public, like the repo; the APK holds no secrets.
 
+**If that link stalls at 100 %** — all bytes received, still "Downloading…" —
+the browser is resuming a stale partial of an *earlier* build, because the
+rolling asset is replaced in place and browsers cache and resume by URL. The
+release notes carry a second link, `van-core-<build>.apk`, which is a new
+address every build and so has nothing stale to resume against. A `?v=<build>`
+query on the rolling link does the same thing in one tap. Neither changes the
+file: the notes also print its `sha256` so it can be checked.
+
 Or from the run's artifacts (zip, needs a GitHub login):
 
 ```bash

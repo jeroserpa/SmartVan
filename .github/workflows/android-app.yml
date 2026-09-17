@@ -84,19 +84,35 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp app/build/outputs/apk/release/app-release.apk van-core.apk
+          # A second copy under a name that is unique per build. The rolling
+          # one keeps a fixed, documented link, but it is REPLACED in place,
+          # and a phone browser caches and resumes by URL - a partial download
+          # of build N can then stall against build N+1's bytes at the same
+          # address, showing "1.89/1.89 MB" forever. The versioned copy is
+          # always a URL that has never been downloaded before, so there is
+          # nothing stale to resume against. It also says what you installed.
+          cp van-core.apk "van-core-${GITHUB_RUN_NUMBER}.apk"
           link="https://github.com/${GITHUB_REPOSITORY}/releases/download/app-latest/van-core.apk"
+          fresh="https://github.com/${GITHUB_REPOSITORY}/releases/download/app-latest/van-core-${GITHUB_RUN_NUMBER}.apk"
+          sha=$(sha256sum van-core.apk | cut -d' ' -f1)
           notes="Build ${GITHUB_RUN_NUMBER} from \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA::7}, $(date -u '+%Y-%m-%d %H:%M UTC').
 
           Shrunk release build, signed with the repo key: sideload, installs over the previous build.
 
-          Direct link: ${link}"
+          Direct link: ${link}
+
+          If that one stalls at 100% on the phone, the browser is resuming a stale partial of an
+          earlier build at the same address. This link is new every build, so it cannot:
+          ${fresh}
+
+          \`sha256 ${sha}\`"
           git tag -f app-latest "$GITHUB_SHA"
           git push -f origin refs/tags/app-latest
           if gh release view app-latest >/dev/null 2>&1; then
-            gh release upload app-latest van-core.apk --clobber
+            gh release upload app-latest van-core.apk "van-core-${GITHUB_RUN_NUMBER}.apk" --clobber
             gh release edit app-latest --notes "$notes"
           else
-            gh release create app-latest van-core.apk --prerelease --title "van-core app (latest build)" --notes "$notes"
+            gh release create app-latest van-core.apk "van-core-${GITHUB_RUN_NUMBER}.apk" --prerelease --title "van-core app (latest build)" --notes "$notes"
           fi
           echo "::notice::APK published: ${link}"
 
