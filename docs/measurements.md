@@ -340,3 +340,65 @@ overnight, i.e. ~800 Wh at 3900 Wh usable, with little or no input.
   on.** Android marks the SoftAP as "no internet" and routes browser traffic
   over cellular, so 192.168.4.1 is unreachable. Phone-side setting, not a
   node fault.
+
+## M14 — 2026-09-16/17 — soak 2 first data: probes, fridge plug, PSRAM log — `PRELIMINARY`
+
+Firmware `nodes/van-core-probes.yaml` + `nodes/van-fridge-plug.yaml`, plan in
+`docs/soak-probes.md`. Two logs so far; the long run is in progress.
+
+### Setup, as reported
+- Thermostat: **default setting** (M6 was at the warmest).
+- Fridge probe: interior side wall, held with Kapton tape, **no foam pad**.
+  Cable routed through the rear condensate drain, drain not blocked, so the
+  door gasket is not crossed.
+- 1-Wire addresses (both pass the Dallas CRC):
+  - fridge `0xf50e250267176c28`
+  - cabin `0x600e2502e02beb28`
+  Role assignment: in the 17 Sep log, bus index 0 read 5–8 °C and index 1
+  ~25 °C. ESPHome's ROM search takes the 0 branch first, and the addresses
+  first differ at bit 8, where `0xf50e…` has the 0, so index 0 is `0xf50e…`.
+  Both configs now pin the probes by address.
+- Probe **not yet calibrated** against a reference thermometer: every fridge
+  temperature below is the probe's reading at its mount, not the food's.
+
+### 16 Sep, 15:52–19:55 — station energy balance (no probes, plug reading 0 W)
+AC on throughout, no AC input, solar 472 W falling to 0.
+- Solar in 303 Wh + battery 55 Wh (SOC 49.0 → 47.6 %) = total output 142 Wh
+  + **station overhead 216 Wh**.
+- Overhead per 15 min bin, battery power taken from SOC tick times:
+  **43–59 W, mean 52.6, SD 3.9**, flat while solar went 251 W → 4 W.
+  Consistent with M2 (~48 W).
+- `fridge_w` read 0.0 W on every row. Cause not established; the plug reads
+  normally on 17 Sep.
+- Board temperature column empty: a second `internal_temperature` sensor never
+  publishes. Fixed by logging base.yaml's `board_temp`.
+
+### 17 Sep, 13:36–15:10 — first fridge data (1.6 h)
+- **The compressor stopped on its own** (user-confirmed: fridge on, AC on).
+  Plug 0.0–0.1 W from log start (13:36) to 13:59:57, so the idle lasted at
+  least 24 min. Second natural stop on record; the first was in the
+  2026-08-18 log (M6), at the warmest setting.
+- During the idle the probe rose +0.4 K/h (7.56 → 7.69 °C), then +7.5 K/h over
+  13:56–14:00. Cause of the faster rise unknown: an air fryer ran on and off
+  (>500 W, 13:57–14:12), and a door opening is possible but not confirmed.
+- **Restart at ~8.1 °C on the probe.** Running power **17.5–24 W, median 21.8**,
+  flat for the whole 70 min cool-down (no high-power phase visible). 26 Wh.
+- **Probe lag: the probe kept rising for ~6 min after the compressor started**
+  (peak 8.38 °C at 14:05). The control loop must allow for it.
+- Cool-down: −5.8, −2.6, −1.3 K/h in successive 20 min blocks. Exponential fit
+  from 14:08: **towards 4.5 °C (probe), τ ≈ 27 min**, rmse 0.04 K. Still
+  running at 15:10 at 4.88 °C.
+- Other loads (total output − plug): ~5 W at rest; 34–74 W later.
+- Overhead 50–60 W per 15 min bin (~54 mean). Less precise than 16 Sep: with
+  250–370 W into/out of the battery, a 3 % error in the 3,900 Wh capacity
+  moves each bin ~10 W.
+- Node: BLE 100 %, 0 drops, first connect 1.4 s. Min free internal heap
+  102 kB (from 145 kB at boot); too short a run to judge a trend.
+
+### Open
+- Where the cabinet settles on this thermostat, how long natural stops last,
+  and whether they repeat: needs the ≥24 h run.
+- Probe offset (glass-of-water calibration).
+- CLAUDE.md §1/§6 say the compressor never stops (M6). Two natural stops now
+  argue for "rarely", and the block scheduler already ends a block on a
+  genuine stop. Revisit the wording once the 24 h run shows how often.
