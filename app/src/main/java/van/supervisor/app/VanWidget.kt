@@ -105,8 +105,12 @@ class VanWidget : AppWidgetProvider() {
         /** Older than one refresh period plus margin: values are shown greyed. */
         private const val STALE_MS = 20 * 60_000L
 
-        /** Liquid bitmap heights, roughly each layout's aspect at 240 px wide. */
-        private const val FILL_H_FULL = 150
+        // The battery bitmap, at twice the dp of the box it goes in
+        // (98x54dp full, 78x42dp compact) so fitXY neither stretches the
+        // outline nor wastes pixels.
+        private const val FILL_W_FULL = 196
+        private const val FILL_H_FULL = 108
+        private const val FILL_W_SMALL = 156
         private const val FILL_H_SMALL = 84
 
         private fun schedule(context: Context) {
@@ -157,8 +161,8 @@ class VanWidget : AppWidgetProvider() {
                 push(context, manager, ids, m, to, 0f)
                 return
             }
-            for (i in 1..BatteryFill.FRAMES) {
-                val t = i.toFloat() / BatteryFill.FRAMES
+            for (i in 1..LiquidFill.FRAMES) {
+                val t = i.toFloat() / LiquidFill.FRAMES
                 // Ease out, so the liquid arrives and settles rather than
                 // stopping dead. The surface sloshes and goes flat again over
                 // the same interval, which leaves the last frame at motion 0 —
@@ -166,7 +170,7 @@ class VanWidget : AppWidgetProvider() {
                 val eased = 1f - (1f - t) * (1f - t) * (1f - t)
                 push(context, manager, ids, m, from + (to - from) * eased,
                      sin(Math.PI.toFloat() * t))
-                if (i < BatteryFill.FRAMES) Thread.sleep(BatteryFill.FRAME_MS)
+                if (i < LiquidFill.FRAMES) Thread.sleep(LiquidFill.FRAME_MS)
             }
         }
 
@@ -304,11 +308,16 @@ class VanWidget : AppWidgetProvider() {
                 Band.OK -> R.color.ok
                 Band.NONE -> R.color.dim
             })
-            v.setImageViewBitmap(R.id.w_fill, BatteryFill.bitmap(
-                if (full) FILL_H_FULL else FILL_H_SMALL, level, motion, bandColor))
+            v.setImageViewBitmap(R.id.w_fill, LiquidFill.bitmap(
+                if (full) FILL_W_FULL else FILL_W_SMALL,
+                if (full) FILL_H_FULL else FILL_H_SMALL,
+                level, motion, bandColor, nub = true))
 
+            // The figure stays near-white in every band now that it sits on the
+            // liquid: the band is already carried twice over, by the fill and
+            // by the outline, and white is what reads best on all three colours.
             v.setTextViewText(R.id.w_soc, socText(soc))
-            v.setTextColor(R.id.w_soc, if (band == Band.OK || band == Band.NONE) value else bandColor)
+            v.setTextColor(R.id.w_soc, value)
             v.setTextViewText(R.id.w_state, m.state)
             v.setTextColor(R.id.w_state, m.stateColor)
             v.setInt(R.id.w_dot, "setColorFilter", m.stateColor)

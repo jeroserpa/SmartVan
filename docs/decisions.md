@@ -683,8 +683,7 @@ green liquid. The four-`ProgressBar` band bar went, because it showed the
 same number twice and its row is what the second temperature needed.
 
 - **A bitmap, not drawables.** RemoteViews has no shader and no path.
-  `BatteryFill.kt` draws one 240 px bitmap, stretched with `fitXY` — the
-  level is vertical, so horizontal stretch cannot make it read wrong.
+  `LiquidFill.kt` draws one bitmap, stretched with `fitXY`.
 - **Pushed frames, not an animator.** An `AppWidgetHost` never runs our code,
   so nothing moves unless we push it. `VanWidgetWorker` — which already has a
   thread and holds the process up — pushes ~12 frames over ~0.8 s after a
@@ -758,3 +757,50 @@ exactly the misreading that matters:
 - **Never unlabelled.** It reads `47.5 °C board`, and the widget is the only
   place in the project where a chip temperature and a food temperature could
   ever sit in the same slot.
+
+
+---
+
+## 2026-09-17 — D-18: the battery is a vessel around the figure, not the card
+
+**Context.** D-17 made the whole widget card the battery. Asked to confine it
+to a container around the percentage instead, **because the fresh and grey
+tanks are going on the same card** (CLAUDE.md §9 Phase 2) and a card-sized
+battery leaves nowhere for them.
+
+**That constraint is the right one, and it improves the battery too.** Three
+things follow from the vessel having its own fixed-size box:
+
+- **It can have a real outline and a terminal.** Full-bleed, the bitmap was
+  stretched to whatever the launcher made the card, so any outline or nub
+  would have been stretched with it — which is why D-17 had neither and
+  leaned on the card's own rounded rect to read as a battery. A fixed
+  98×54dp box has a known aspect, so `fitXY` is exact.
+- **The liquid can be about twice as strong.** The 11sp muted labels are out
+  on the card now and no longer sit on it. Measured, the charge figure keeps
+  4.7:1 or better over the liquid body in every band, and it is large bold
+  text needing 3:1. D-17's whole-card version had to hold the muted labels at
+  3.6:1 and was correspondingly pale — closer to a tint than to liquid.
+- **An empty battery still reads as a battery.** The interior is sunk below
+  the card and the outline is always drawn, so 0 % is an empty vessel rather
+  than a blank card.
+
+**The renderer is now `LiquidFill`, not `BatteryFill`,** and the nub is a
+parameter. A water tank is the same drawing with no terminal, so Phase 2
+should not need a second renderer — and naming it for the battery would have
+guaranteed one.
+
+**One thing the measurement does not cover: the surface line.** At alpha 0xE6
+it is brighter than any text could sit on, and it crosses the digits at
+whatever level the charge happens to be. The fix is a text shadow on the
+figure, declared in the layout — which is also why the figure stays near-white
+in every band instead of turning amber or red. The band is carried by the
+liquid and the outline twice over; tinting the number as well would only cost
+contrast.
+
+**Still true from D-17, and worth restating because it is the question that
+gets asked:** the liquid moves *only when the charge moves*. A widget host
+never runs our code, so every frame is an IPC we push ourselves, and a home
+screen animating while nobody looks is phone battery spent on nothing. The
+~12-frame burst runs on a refresh that actually changed the level; at rest the
+surface is a fixed, near-flat curve.

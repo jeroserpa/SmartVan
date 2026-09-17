@@ -35,12 +35,26 @@ def edit(s, vid, fn):
     return s[:m.start()] + fn(m.group(0)) + s[m.end():]
 
 
-def set_text(text):
+def indent_of(element, attr):
+    """The leading whitespace of `attr`'s line, so inserted attributes line up
+    whatever depth the view sits at. Hard-coding it broke silently the first
+    time the layout was re-nested."""
+    m = re.search(r"\n([ \t]*)" + re.escape(attr), element)
+    return m.group(1) if m else "    "
+
+
+def set_attr(attr, value, before):
+    """Set `attr`, or insert it above `before` at that line's own indent."""
     def fn(e):
-        if "android:text=" in e:
-            return re.sub(r'android:text="[^"]*"', f'android:text="{text}"', e)
-        return e.replace("android:maxLines", f'android:text="{text}"\n                android:maxLines', 1)
+        if f"{attr}=" in e:
+            return re.sub(re.escape(attr) + r'="[^"]*"', f'{attr}="{value}"', e)
+        pad = indent_of(e, before)
+        return e.replace(before, f'{attr}="{value}"\n{pad}{before}', 1)
     return fn
+
+
+def set_text(text):
+    return set_attr("android:text", text, "android:maxLines")
 
 
 def main():
@@ -55,9 +69,9 @@ def main():
     # The liquid background is a bitmap the app draws at run time, which the
     # picker never gets to run. A static vector stands in for it at the same
     # 78 % the rest of the sample shows.
-    s = edit(s, "w_fill", lambda e: e.replace(
-        "android:importantForAccessibility",
-        'android:src="@drawable/battery_fill_preview"\n        android:importantForAccessibility', 1))
+    s = edit(s, "w_fill", set_attr(
+        "android:src", "@drawable/battery_fill_preview",
+        "android:importantForAccessibility"))
     (LAYOUT / "van_widget_preview.xml").write_text(s, encoding="utf-8", newline="\n")
 
 

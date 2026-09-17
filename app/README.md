@@ -46,24 +46,40 @@ van-core.
 - **Two sizes:** full (3×2 and up: charge, power in/out, fridge and cabin,
   reason) and compact (2×1: charge and AC state). Android 12+ switches
   between them on resize by itself; older launchers re-render on resize.
-- **The charge is the background.** `BatteryFill.kt` draws the card as a
-  vessel filling with liquid to the state of charge, and the worker pushes
-  ~12 frames (~0.8 s) so it runs up to a new reading rather than jumping.
-  A widget host never runs our code and RemoteViews has no animator, so a
-  pushed burst is the only animation available; it runs on a refresh that
-  actually moved the charge, and nowhere else, so an idle home screen costs
-  nothing. This replaced the old four-`ProgressBar` bar, which showed the
-  same number twice and cost the row that the second temperature now uses.
-- **Liquid colour** follows the load-shedding bands of CLAUDE.md §9 Phase 5:
-  green, amber below 30 %, red below 15 %, grey when stale.
+- **The charge is a battery around the figure**, not the card background.
+  `LiquidFill.kt` draws a vessel with liquid standing in it — outline, a
+  terminal nub, and a surface that rises to the state of charge — into a
+  fixed 98×54dp box with the percentage centred on top. **The card is
+  deliberately left plain** so the fresh and grey tanks can have vessels of
+  their own when Phase 2 lands (CLAUDE.md §9); `LiquidFill` is written to be
+  the renderer for those too, which is why the nub is a parameter.
+  A fixed box is also what lets the battery carry an outline at all: the
+  bitmap's aspect is known, so `fitXY` cannot stretch it out of shape.
+  This replaced the old four-`ProgressBar` bar, which showed the same number
+  twice and cost the row that the second temperature now uses.
+- **It moves only when the charge moves.** The worker pushes ~12 frames over
+  ~0.8 s so the level runs up to a new reading and the surface sloshes and
+  settles, rather than jumping. It does **not** ripple continuously: an
+  `AppWidgetHost` never runs our code, so every frame is an IPC we pay for,
+  and a home screen that animates while nobody is looking is phone battery
+  spent on nothing. At rest the surface is a fixed, near-flat curve.
+- **Liquid, outline and nub colour** follow the load-shedding bands of
+  CLAUDE.md §9 Phase 5: green, amber below 30 %, red below 15 %, grey when
+  stale. The percentage itself stays near-white in every band — the band is
+  already carried twice over, and white reads best on all three colours.
+- **The percentage has a text shadow**, and it is not decoration: the bright
+  surface line can cross a digit at any level. The liquid body is set where
+  the figure keeps 4.7:1 or better over it in every band (measured); the
+  shadow covers the hairline that is brighter than that.
 - **Both temperatures are labelled** (`4.6 °C fridge`, `24.0 °C cabin`), in
   the same small-muted style as `in`/`out`. Two bare numbers side by side
   would be a guessing game, and reading the cabin as the cabinet is the one
   misreading that matters.
 - **Picker preview:** `res/layout/van_widget_preview.xml` is generated from
   `van_widget.xml` — run `python tools/make_widget_preview.py` after editing
-  the widget layout. The picker cannot run our code, so the liquid is stood
-  in for by `res/drawable/battery_fill_preview.xml`, frozen at 78 %.
+  the widget layout. The picker cannot run our code, so the battery is stood
+  in for by `res/drawable/battery_fill_preview.xml`, frozen at 78 % — keep
+  its stops and wave in step with `LiquidFill` by hand.
 
 - **Data:** the initial state burst of `/events`, read over the Wi-Fi
   network explicitly (`Network.openConnection`), then the connection is
