@@ -49,6 +49,20 @@ object VanFeed {
     const val PARKED = "binary_sensor-parked"
     const val REASON = "text_sensor-ac_reason"
 
+    /**
+     * The board temperature is matched by suffix, not by a fixed id, because
+     * common/base.yaml names it "${friendly_name} board temperature" - so it is
+     * `sensor-van_core_board_temperature` on van-core and
+     * `sensor-van_core_soak_board_temperature` on the soak build. Naming both
+     * would still miss the third node to be added.
+     *
+     * It is the ESP32's own die temperature, never a probe, and the widget
+     * labels it "board" so it can never be read as the cabinet. It is shown
+     * only when neither DS18B20 exists - which is the whole of the soak
+     * firmware, where it is also the only temperature there is.
+     */
+    const val BOARD_SUFFIX = "board_temperature"
+
     private val WANTED = setOf(SOC, OUT, IN, FRIDGE, CABIN, BLE, AC_OUT, PARKED, REASON)
 
     /** Per-line read timeout. A gap this long is a pause, not the end. */

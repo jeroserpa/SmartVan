@@ -703,3 +703,32 @@ shows `-- °C`, and it should: `fridge_temp` publishes NAN rather than a
 last-known value, and five minutes of that forces the inverter ON (§6
 `force_on`). Note the 1-Wire addresses in `nodes/van-core.yaml` are still
 `PLACEHOLDER`, so on that firmware neither probe reads at all.
+
+**Addendum, same day — the soak firmware has no probes, and that was the
+second half of the report.** "The temp probes are running, I can see them on
+the webpage but not on the widget", against `van-core-soak`. It does not have
+them: there is no `one_wire:` bus, no `dallas_temp` and no fridge or cabin
+sensor anywhere in `nodes/van-core-soak.yaml`. Its only temperature is
+`internal_temperature` from `common/base.yaml` — the ESP32-S3 die, published
+as `Van core soak board temperature`. That is what its web page shows.
+
+**Decided: on a node with no DS18B20, the widget shows the board temperature
+in that row**, labelled `board`, with the thermometer icon rather than the
+snowflake. Two dashes next to a web page showing a live number is a bug
+report waiting to happen, and on a board running BLE, SoftAP, a display and
+the SD writer in one cooperative loop (§2 risk note) the die temperature is
+the number a soak actually wants.
+
+Three constraints on it, because a temperature in the cabinet's place is
+exactly the misreading that matters:
+- **Suffix match, not a fixed id.** `common/base.yaml` names it
+  `"${friendly_name} board temperature"`, so it is
+  `sensor-van_core_board_temperature` on van-core and
+  `sensor-van_core_soak_board_temperature` on the soak build. Listing both
+  would be wrong again at the third node.
+- **Presence, not value, decides.** The moment either probe *entity* exists
+  the fridge and cabin cells come back, NAN or not — a dead probe must read
+  as `-- °C fridge`, never get quietly replaced by a die temperature.
+- **Never unlabelled.** It reads `47.5 °C board`, and the widget is the only
+  place in the project where a chip temperature and a food temperature could
+  ever sit in the same slot.

@@ -79,7 +79,7 @@ jobs:
       # One rolling pre-release, replaced by every build of the app branches.
       # The repo is public, so the APK is too; it holds no secrets.
       - name: Publish to the app-latest release
-        if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'claude/cloud-app-development-9d5e08')
+        if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'claude/widget-temp-battery-animation-4hmgib')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

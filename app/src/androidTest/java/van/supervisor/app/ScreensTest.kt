@@ -138,10 +138,14 @@ class ScreensTest {
                 states(soc = 71.0, out = null, inp = null, fridge = null, cabin = 22.4,
                        ble = false, ac = null, parked = false, reason = "BLE lost"),
                 okAt = now - min),
+            // The soak build has no DS18B20 at all: its only temperature is the
+            // ESP32 die, named from friendly_name in common/base.yaml. The
+            // widget should show that one, labelled, not two dashes.
             "widget-8-soak-firmware" to snap(
                 JSONObject()
                     .put(VanFeed.SOC, v(50.3)).put(VanFeed.OUT, v(59.0)).put(VanFeed.IN, v(0.0))
-                    .put(VanFeed.BLE, b(true)).put(VanFeed.AC_OUT, b(true)),
+                    .put(VanFeed.BLE, b(true)).put(VanFeed.AC_OUT, b(true))
+                    .put("sensor-van_core_soak_board_temperature", v(47.5)),
                 okAt = now - min),
             "widget-9-refreshing" to snap(live, okAt = now - 2 * min, refreshing = true),
             "widget-a-never-reached" to VanStore.Snapshot(JSONObject(), 0L, false, true, false),

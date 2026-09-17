@@ -1,6 +1,7 @@
 package van.supervisor.app
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** The widget's only parsing rule that can silently blank it (2026-09-16). */
@@ -26,6 +27,27 @@ class VanFeedKeyTest {
             "sensor-fridge_temperature__raw_",
             VanFeed.key("sensor/Fridge temperature (raw)")
         )
+    }
+
+    /**
+     * The board temperature is named "${friendly_name} board temperature" in
+     * common/base.yaml, so its id differs per node. The widget matches the
+     * suffix; this pins that both nodes' ids normalise to something it catches.
+     */
+    @Test
+    fun boardTemperatureIsMatchedBySuffixOnEveryNode() {
+        for (id in listOf(
+            "sensor/Van core board temperature",
+            "sensor/Van core soak board temperature",
+            "sensor-van_core_board_temperature",
+            "sensor-van_core_soak_board_temperature",
+        )) {
+            val key = VanFeed.key(id)
+            assertTrue("$id -> $key is not a sensor", key.startsWith("sensor-"))
+            assertTrue("$id -> $key misses the suffix", key.endsWith(VanFeed.BOARD_SUFFIX))
+        }
+        // And it must not swallow the probes, which are shown in its place.
+        assertTrue(!VanFeed.key("sensor/Cabin temperature").endsWith(VanFeed.BOARD_SUFFIX))
     }
 
     @Test

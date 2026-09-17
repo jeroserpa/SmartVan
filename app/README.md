@@ -88,7 +88,18 @@ van-core.
 - **The one duplication of entity ids outside the page.** `VanFeed.kt` names
   nine ids that mirror the `E` map in `ui/index.html`; rename an entity in
   YAML and both need updating. On the soak firmware, both temperatures,
-  parked and AC reason do not exist and simply stay blank.
+  parked and AC reason do not exist.
+- **On a node with no DS18B20, the row shows the board temperature instead**,
+  labelled `board` and with the thermometer icon, rather than two dashes.
+  `nodes/van-core-soak.yaml` has no `one_wire:` bus at all — its only
+  temperature is `internal_temperature` from `common/base.yaml`, the ESP32-S3
+  die. That is also the only temperature on its web page, so the widget and
+  the page now agree. The id is matched by **suffix**
+  (`VanFeed.BOARD_SUFFIX`), because `common/base.yaml` names it
+  `"${friendly_name} board temperature"` — `sensor-van_core_board_temperature`
+  on van-core, `sensor-van_core_soak_board_temperature` on the soak build.
+  It is never shown in the cabinet's place: the moment either probe entity
+  exists, the fridge and cabin cells come back, NAN or not.
 - **`-- °C` is not nothing.** The fridge sensor in `nodes/van-core.yaml`
   publishes NAN rather than a last-known value once its probe times out, and
   five minutes of that forces the inverter ON (CLAUDE.md §6 `force_on`). A

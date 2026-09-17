@@ -77,6 +77,15 @@ class VanWidget : AppWidgetProvider() {
         val inp: Double?,
         val fridge: Double?,
         val cabin: Double?,
+        /** ESP32 die temperature. Only shown when neither probe exists. */
+        val board: Double?,
+        /**
+         * Whether the node publishes either DS18B20 at all — which is a
+         * different question from whether they are reading. A probe that has
+         * gone NAN must still show "-- °C fridge"; a firmware with no probes
+         * should not pretend to have two.
+         */
+        val probes: Boolean,
         val state: String,
         val stateColor: Int,
         val reason: String,
@@ -257,6 +266,8 @@ class VanWidget : AppWidgetProvider() {
                 inp = num(s, VanFeed.IN),
                 fridge = num(s, VanFeed.FRIDGE),
                 cabin = num(s, VanFeed.CABIN),
+                board = boardTemp(s),
+                probes = s.has(VanFeed.FRIDGE) || s.has(VanFeed.CABIN),
                 state = state,
                 stateColor = stateColor,
                 reason = reason,
@@ -309,19 +320,36 @@ class VanWidget : AppWidgetProvider() {
             if (full) {
                 v.setTextViewText(R.id.w_in, suffixed(m.inp, "W", "in", muted))
                 v.setTextViewText(R.id.w_out, suffixed(m.out, "W", "out", muted))
-                v.setTextViewText(R.id.w_fridge, temp(m.fridge, "fridge", muted))
-                v.setTextViewText(R.id.w_cabin, temp(m.cabin, "cabin", muted))
                 v.setTextColor(R.id.w_in, value)
                 v.setTextColor(R.id.w_out, value)
                 v.setTextColor(R.id.w_fridge, value)
                 v.setTextColor(R.id.w_cabin, value)
                 v.setTextViewText(R.id.w_reason, m.reason)
 
+                // A node with no DS18B20 on it — the soak firmware is the whole
+                // of that case — has exactly one temperature, the board. Show
+                // that rather than two dashes: it is what its web page shows,
+                // and on a board running BLE, SoftAP, a display and the SD
+                // writer in one loop it is the number worth watching. Labelled,
+                // and never in the cabinet's place.
+                val showBoard = !m.probes && m.board != null
+                if (showBoard) {
+                    v.setImageViewResource(R.id.w_ic_fridge, R.drawable.ic_thermo)
+                    v.setTextViewText(R.id.w_fridge, temp(m.board, "board", muted))
+                } else {
+                    v.setImageViewResource(R.id.w_ic_fridge, R.drawable.ic_snow)
+                    v.setTextViewText(R.id.w_fridge, temp(m.fridge, "fridge", muted))
+                    v.setTextViewText(R.id.w_cabin, temp(m.cabin, "cabin", muted))
+                }
+                v.setViewVisibility(R.id.w_ic_cabin, if (showBoard) View.GONE else View.VISIBLE)
+                v.setViewVisibility(R.id.w_cabin, if (showBoard) View.GONE else View.VISIBLE)
+
                 // Old data: the icons go grey with the numbers, so nothing on
                 // the widget still looks live.
                 v.setInt(R.id.w_ic_in, "setColorFilter", if (m.stale) dim else context.getColor(R.color.ok))
                 v.setInt(R.id.w_ic_out, "setColorFilter", if (m.stale) dim else context.getColor(R.color.warn))
-                v.setInt(R.id.w_ic_fridge, "setColorFilter", if (m.stale) dim else context.getColor(R.color.alt))
+                v.setInt(R.id.w_ic_fridge, "setColorFilter",
+                    if (m.stale) dim else if (showBoard) muted else context.getColor(R.color.alt))
                 v.setInt(R.id.w_ic_cabin, "setColorFilter", if (m.stale) dim else muted)
             }
 
@@ -402,6 +430,23 @@ class VanWidget : AppWidgetProvider() {
         }
 
         private val LEADING_NUMBER = Regex("^[+-]?\\d+(\\.\\d+)?")
+
+        /**
+         * The board temperature, whatever the node is called. Its id carries
+         * the node's friendly_name (see [VanFeed.BOARD_SUFFIX]), so it is
+         * matched by suffix — the alternative is a list of ids that is wrong
+         * again the next time a node is added.
+         */
+        private fun boardTemp(s: JSONObject): Double? {
+            val keys = s.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                if (k.startsWith("sensor-") && k.endsWith(VanFeed.BOARD_SUFFIX)) {
+                    num(s, k)?.let { return it }
+                }
+            }
+            return null
+        }
 
         private fun bool(s: JSONObject, id: String): Boolean? {
             val j = s.optJSONObject(id) ?: return null
