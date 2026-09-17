@@ -84,6 +84,13 @@ van-core.
 - **Data:** the initial state burst of `/events`, read over the Wi-Fi
   network explicitly (`Network.openConnection`), then the connection is
   closed. No firmware change.
+- **The end of the stream is never a failure.** `/events` is infinite, so a
+  read of it never finishes cleanly; the only question is how it dies, and on
+  a phone a read issued after a timeout can throw outright rather than
+  resuming. Whatever arrived before that stands. Letting that exception
+  escape discarded a complete snapshot and made the widget report that
+  van-core had not answered — `tools/mock_core.py --port … ?rst=1` reproduces
+  it, and the instrumented test pins it.
 - **The burst is read through pauses, not up to the first one.** van-core
   pushes one entity per loop and that loop also runs BLE, the display and the
   SD writer (CLAUDE.md §2), so a second or two of quiet mid-burst is normal.

@@ -886,3 +886,44 @@ function may depend on another node or on the network. The widget is not a
 node, but the same reasoning applies to *routes*: it had one way to reach
 van-core and no way to say what happened when that way failed. Both are worth
 more than the code they cost.
+
+
+---
+
+## 2026-09-17 — D-21: a snapshot already read is never thrown away
+
+**This one was mine.** D-17 changed the `/events` read to tolerate a quiet
+gap — `continue` instead of `break` on a socket timeout — on a theory about
+truncated bursts that later turned out to be wrong anyway (the blank
+temperatures were the entity naming of D-18). That change took the whole
+widget down.
+
+**The mechanism.** The second `readLine()` after a timeout is issued on a
+connection Android has already marked broken underneath, and it throws a
+plain `IOException` rather than resuming. Nothing caught it: it escaped
+`readInitialBurst`, `runCatching` in `fetch` turned it into null, every route
+counted as failed, and the widget reported that van-core had not answered —
+about a node that had just streamed it every entity it asked for. **The
+states were already in hand and were discarded.**
+
+**The rule, which is more general than the bug.** `/events` is an infinite
+stream. A read of it **never ends cleanly** — the only question is how it
+dies. So the end of the stream can never be a failure of the read: whatever
+arrived before it stands. Only "something answered but it was not a state
+stream" is a reason to report nothing.
+
+**Why nothing caught it.** The mock keeps its stream open and pings, and on
+the emulator's loopback a read after a timeout simply resumes. CI passed
+every time while the phone failed every time. `tools/mock_core.py` now takes
+`?cut=1` (close at once) and `?rst=1` (go quiet past the read timeout, then
+**reset**, so the next read throws). Only the reset reproduces it — a clean
+EOF the old code handled correctly — and `b1_widgetFeedReadsMock` asserts the
+snapshot survives both.
+
+**And the wider lesson, which cost a day.** Three theories were published as
+diagnoses before this one: a truncated burst, a stale download partial, an
+OEM battery restriction. Each was plausible, none was verified on the device,
+and the widget's own message — "Not on van-core Wi-Fi", printed for every
+failure including this one — actively pointed away from the fault. D-20's
+`Miss` values exist so the next fault names itself instead. **When the
+instrument and the observation disagree, suspect the instrument.**

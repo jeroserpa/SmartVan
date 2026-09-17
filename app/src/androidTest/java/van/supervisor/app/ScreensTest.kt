@@ -108,6 +108,27 @@ class ScreensTest {
         assertNotNull("fridge temperature missing from the burst", states[VanFeed.FRIDGE])
         assertNotNull("cabin temperature missing from the burst", states[VanFeed.CABIN])
         assertNotNull("AC reason missing from the burst", states[VanFeed.REASON])
+
+        // The stream is infinite, so a read of it NEVER ends cleanly - how it
+        // dies is the whole question, and a reader can survive one ending and
+        // not another. Both must keep what arrived before the end.
+        for ((suffix, how) in listOf(
+            "cut" to "closed straight after the burst",
+            // The one that matters. ?rst=1 goes quiet long enough for a read to
+            // time out, then RESETS, so the next read throws instead of
+            // returning EOF. Letting that exception escape discarded a full
+            // snapshot and made the widget report that van-core had not
+            // answered - about a node that had just streamed it every entity.
+            // A clean EOF does not catch it; only a reset does.
+            "rst" to "reset after a read timed out",
+        )) {
+            VanFeed.eventsUrlOverride = "${mock}events?$suffix=1"
+            val r = VanFeed.fetch(ctx)
+            assertNotNull("$how: lost the whole snapshot (miss=${r.miss})", r.states)
+            assertNotNull("$how: lost battery", r.states!![VanFeed.SOC])
+            assertNotNull("$how: lost fridge temperature", r.states[VanFeed.FRIDGE])
+        }
+        VanFeed.eventsUrlOverride = mock + "events"
         VanStore.saveOk(ctx, states)
         val now = System.currentTimeMillis()
         renderWidget("widget-0-from-mock", VanStore.load(ctx), now)

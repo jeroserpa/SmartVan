@@ -8,6 +8,7 @@ import android.net.NetworkRequest
 import android.os.SystemClock
 import androidx.annotation.VisibleForTesting
 import org.json.JSONObject
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
 import java.net.URL
@@ -223,14 +224,24 @@ object VanFeed {
                 val line = try {
                     reader.readLine()
                 } catch (e: SocketTimeoutException) {
-                    // A gap mid-burst is not the end of it. van-core pushes one
-                    // entity per loop, and that loop also runs the BLE client,
-                    // the display and the SD writer (CLAUDE.md section 2), so a
-                    // pause of a second or two is normal. Stopping at the first
-                    // one truncated the snapshot after the station sensors -
-                    // which are declared first - and everything declared later
-                    // (both temperatures, parked, the AC reason) stayed blank.
+                    // A gap mid-burst need not be the end of it: van-core
+                    // pushes one entity per loop, and that loop also runs the
+                    // BLE client, the display and the SD writer (CLAUDE.md
+                    // section 2), so a pause of a second or two is normal.
                     if (++quiet >= QUIET_WINDOWS) break else continue
+                } catch (e: IOException) {
+                    // And reading on is only an attempt, never a requirement.
+                    // This stream is infinite - it has no clean end - and on
+                    // Android a read issued after a timeout often fails
+                    // outright rather than resuming, because the connection is
+                    // already marked broken underneath. Everything that
+                    // arrived before that is still a real snapshot.
+                    //
+                    // Letting that throw was a regression that took the whole
+                    // widget down: the exception escaped the read, every route
+                    // counted as failed, and a node that had just streamed its
+                    // entities was reported as not answering.
+                    break
                 } ?: break
                 quiet = 0
 
@@ -259,8 +270,9 @@ object VanFeed {
         } finally {
             conn.disconnect()
         }
-        // A reply from some other device at 192.168.4.1 (a house router, say)
-        // is not a snapshot of the van.
+        // Whatever was collected stands, however the stream ended. A reply from
+        // some other device at 192.168.4.1 (a house router, say) is not a
+        // snapshot of the van, and that is the only reason to report nothing.
         return if (sawEsphome) Reading(states, null) else Reading(null, Miss.NOT_VAN_CORE)
     }
 }
