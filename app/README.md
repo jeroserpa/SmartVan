@@ -94,6 +94,18 @@ van-core.
   stored one instead of replacing it.
 - **Refresh:** every 15 min (WorkManager; Android's floor, and deferred
   further in Doze), on ↻, and whenever the app is left.
+- **A refresh can never latch.** While one is in flight the ↻ icon is
+  replaced by a spinner, so two things guard against a refresh that never
+  comes back — which is what an OS that declines to run background work
+  leaves behind. The in-flight marker is a **timestamp** that expires after
+  45 s (about twice the worst real read), and the tap target is the frame
+  around both, so the control is still there while the spinner shows. The
+  one-shot is enqueued `REPLACE`, not `KEEP`: `KEEP` discards the new request
+  whenever an older one is unfinished, which silently threw away every press.
+- **If the widget still never updates**, the phone is refusing the background
+  work. Check the app is not battery-restricted (Settings → Apps → van-core →
+  Battery → Unrestricted). The ↻ path goes through WorkManager too, so a
+  restricted app cannot refresh even on demand.
 - **Out of range:** keeps the last values, greyed after 20 min, with
   `last seen …`. It only ever has data while the phone is on van-core's Wi-Fi —
   **it is not an alarm** and says nothing about the van while you are away.

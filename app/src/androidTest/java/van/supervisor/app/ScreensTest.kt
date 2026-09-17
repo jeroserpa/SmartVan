@@ -158,9 +158,13 @@ class ScreensTest {
                     .put(VanFeed.BLE, b(true)).put(VanFeed.AC_OUT, b(true))
                     .put("sensor-van_core_soak_board_temperature", v(47.5)),
                 okAt = now - min),
-            "widget-9-refreshing" to snap(live, okAt = now - 2 * min, refreshing = true),
-            "widget-a-never-reached" to VanStore.Snapshot(JSONObject(), 0L, false, true, false),
-            "widget-b-first-run" to VanStore.Snapshot(JSONObject(), 0L, false, false, false),
+            "widget-9-refreshing" to snap(live, okAt = now - 2 * min, refreshingSince = now),
+            // A refresh that never came back. The spinner must have expired and
+            // the button returned, or there is no way to ask again.
+            "widget-9b-refresh-gave-up" to snap(
+                live, okAt = now - 9 * min, refreshingSince = now - 5 * min),
+            "widget-a-never-reached" to VanStore.Snapshot(JSONObject(), 0L, false, true, 0L),
+            "widget-b-first-run" to VanStore.Snapshot(JSONObject(), 0L, false, false, 0L),
             "widget-c-unrecognised" to snap(
                 JSONObject().put("sensor-something_else", v(1.0)), okAt = now - min),
         )
@@ -246,8 +250,8 @@ class ScreensTest {
         .put(VanFeed.REASON, JSONObject().put("value", reason).put("state", reason))
 
     private fun snap(
-        states: JSONObject, okAt: Long, lastOk: Boolean = true, refreshing: Boolean = false,
-    ) = VanStore.Snapshot(states, okAt, lastOk, true, refreshing)
+        states: JSONObject, okAt: Long, lastOk: Boolean = true, refreshingSince: Long = 0L,
+    ) = VanStore.Snapshot(states, okAt, lastOk, true, refreshingSince)
 
     /**
      * Writes through a shell process so the files outlive the app and land

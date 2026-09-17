@@ -804,3 +804,41 @@ never runs our code, so every frame is an IPC we push ourselves, and a home
 screen animating while nobody looks is phone battery spent on nothing. The
 ~12-frame burst runs on a refresh that actually changed the level; at rest the
 surface is a fixed, near-flat curve.
+
+
+---
+
+## 2026-09-17 — D-19: a widget refresh must not be able to latch
+
+**Context.** After a reinstall: "the app works but the widget does not
+update". The app opening proves the phone is on van-core's Wi-Fi and the node
+is answering, so the fault is in the widget's own refresh path.
+
+**Two defects, and together they are a dead end.**
+
+1. **The in-flight marker was a flag, not a deadline.** `refreshNow` set
+   `refreshing = true`; only the worker cleared it. While set, the widget
+   replaces its ↻ icon with a spinner — and the spinner was not the tap
+   target. A refresh that never finished therefore removed the only control
+   the widget has. Tapping the card opens the app, and leaving the app calls
+   `refreshNow` again, which set the flag again: self-perpetuating.
+2. **`ExistingWorkPolicy.KEEP` discarded every press.** KEEP drops the new
+   request whenever work of the same name is unfinished — and unfinished is
+   exactly what a phone that declined to run it leaves behind. So once one
+   request was stuck, no later one ever ran.
+
+**Decided:**
+- The marker is a **timestamp**, expiring after 45 s — about twice the worst
+  real read (6 s waiting for the network, 14 s of burst, then the animation).
+- The **tap target is the frame** holding both the icon and the spinner, so
+  the control exists whichever is showing.
+- The one-shot enqueues **`REPLACE`**. A refresh a person asked for is never
+  dropped in favour of one that may never run.
+- `doWork` clears the marker in a `finally`, so a throw anywhere in the fetch
+  cannot leave the widget believing a refresh is still running.
+
+**What this does not fix, and cannot.** If the OS refuses to run the work at
+all — an OEM battery restriction on a freshly installed app is the usual
+cause — the widget has no data to show and no way to get any: the ↻ path goes
+through WorkManager too. The widget now says so honestly instead of spinning,
+but the remedy is on the phone (battery: unrestricted), not in the code.

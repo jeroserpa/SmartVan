@@ -105,6 +105,18 @@ class VanWidget : AppWidgetProvider() {
         /** Older than one refresh period plus margin: values are shown greyed. */
         private const val STALE_MS = 20 * 60_000L
 
+        /**
+         * How long the spinner may claim a refresh is in flight.
+         *
+         * The worst real read is about 21s - up to 6s waiting for the Wi-Fi
+         * network, up to 14s of event burst, then the fill animation - so this
+         * is twice that and no more. It exists because a refresh that never
+         * finishes (a worker the OS declined to run, a crash before the store
+         * was written) otherwise left the widget showing a spinner in place of
+         * its own refresh button, with no way to ask again.
+         */
+        private const val REFRESH_MAX_MS = 45_000L
+
         // The battery bitmap, at twice the dp of the box it goes in
         // (98x54dp full, 78x42dp compact) so fitXY neither stretches the
         // outline nor wastes pixels.
@@ -122,10 +134,14 @@ class VanWidget : AppWidgetProvider() {
         /** Refresh now, if any widget exists. Called from ↻ and when the app is left. */
         fun refreshNow(context: Context) {
             if (widgetIds(context).isEmpty()) return
-            VanStore.setRefreshing(context, true)
+            VanStore.startRefresh(context)
             renderAll(context)
+            // REPLACE, not KEEP. KEEP drops the new request whenever an older
+            // one is still unfinished - and an unfinished one is exactly the
+            // state a phone that declined to run it leaves behind. Every press
+            // of the refresh button was then silently discarded, forever.
             WorkManager.getInstance(context).enqueueUniqueWork(
-                ONESHOT, ExistingWorkPolicy.KEEP,
+                ONESHOT, ExistingWorkPolicy.REPLACE,
                 OneTimeWorkRequestBuilder<VanWidgetWorker>().build()
             )
         }
@@ -279,7 +295,8 @@ class VanWidget : AppWidgetProvider() {
                 footerShort = footerShort,
                 footerColor = footerColor,
                 stale = stale,
-                refreshing = snap.refreshing,
+                refreshing = snap.refreshingSince != 0L &&
+                    now - snap.refreshingSince in 0..REFRESH_MAX_MS,
             )
         }
 
@@ -372,7 +389,11 @@ class VanWidget : AppWidgetProvider() {
                 Intent(context, VanWidget::class.java).setAction(ACTION_REFRESH),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
-            v.setOnClickPendingIntent(R.id.w_refresh, refresh)
+            // On the box, not the icon: the spinner sits in the same frame and
+            // replaces the icon while a refresh is in flight, so putting the
+            // intent on the icon alone made the control disappear exactly when
+            // someone would want to press it again.
+            v.setOnClickPendingIntent(R.id.w_refresh_box, refresh)
             return v
         }
 

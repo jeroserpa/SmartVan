@@ -19,7 +19,16 @@ object VanStore {
         val lastOk: Boolean,
         /** Whether any attempt has been made yet. */
         val tried: Boolean,
-        val refreshing: Boolean,
+        /**
+         * When a refresh was last started, 0 if none is in flight.
+         *
+         * A timestamp rather than a flag, and the difference is the whole
+         * point: while the widget believes it is refreshing it hides the
+         * refresh button behind a spinner, so a refresh that never finishes
+         * used to leave the widget with no way to ask again. It expires - see
+         * REFRESH_MAX_MS in [VanWidget].
+         */
+        val refreshingSince: Long,
     )
 
     /** Written into each stored state: when that entity was last read. */
@@ -52,7 +61,7 @@ object VanStore {
             .putLong("okAt", now)
             .putBoolean("lastOk", true)
             .putBoolean("tried", true)
-            .putBoolean("refreshing", false)
+            .putLong("refreshingSince", 0L)
             .apply()
     }
 
@@ -61,12 +70,21 @@ object VanStore {
         prefs(context).edit()
             .putBoolean("lastOk", false)
             .putBoolean("tried", true)
-            .putBoolean("refreshing", false)
+            .putLong("refreshingSince", 0L)
             .apply()
     }
 
-    fun setRefreshing(context: Context, refreshing: Boolean) {
-        prefs(context).edit().putBoolean("refreshing", refreshing).apply()
+    fun startRefresh(context: Context) {
+        prefs(context).edit().putLong("refreshingSince", System.currentTimeMillis()).apply()
+    }
+
+    /**
+     * Clear the in-flight marker without touching the data. The worker's
+     * success and miss paths clear it themselves; this is for the case where
+     * neither ran, so that a refresh can never latch the spinner on.
+     */
+    fun endRefresh(context: Context) {
+        prefs(context).edit().putLong("refreshingSince", 0L).apply()
     }
 
     /**
@@ -90,7 +108,7 @@ object VanStore {
             okAt = p.getLong("okAt", 0L),
             lastOk = p.getBoolean("lastOk", false),
             tried = p.getBoolean("tried", false),
-            refreshing = p.getBoolean("refreshing", false),
+            refreshingSince = p.getLong("refreshingSince", 0L),
         )
     }
 }
