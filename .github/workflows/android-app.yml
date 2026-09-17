@@ -127,14 +127,36 @@ jobs:
 
           Both apk links are the same bytes, and so is the one in the zip:
           \`sha256 ${sha}\`"
+          # One asset per call, each retried. `--clobber` DELETES before it
+          # uploads, so a batch that fails partway can leave an asset deleted
+          # and not replaced - which is how the rolling van-core.apk link went
+          # missing when uploads.github.com answered 500 on a later file in the
+          # same batch. Per-file means one bad asset cannot take out the
+          # others, and the retry means a transient 500 does not need a human.
+          upload() {
+            for attempt in 1 2 3 4 5; do
+              if gh release upload app-latest "$1" --clobber; then
+                return 0
+              fi
+              echo "::warning::upload of $1 failed (attempt $attempt of 5), retrying"
+              sleep $(( attempt * 5 ))
+            done
+            echo "::error::could not upload $1 after 5 attempts"
+            return 1
+          }
+
           git tag -f app-latest "$GITHUB_SHA"
           git push -f origin refs/tags/app-latest
-          if gh release view app-latest >/dev/null 2>&1; then
-            gh release upload app-latest van-core.apk "van-core-${GITHUB_RUN_NUMBER}.apk" "van-core-${GITHUB_RUN_NUMBER}.zip" --clobber
-            gh release edit app-latest --notes "$notes"
-          else
-            gh release create app-latest van-core.apk "van-core-${GITHUB_RUN_NUMBER}.apk" "van-core-${GITHUB_RUN_NUMBER}.zip" --prerelease --title "van-core app (latest build)" --notes "$notes"
+          if ! gh release view app-latest >/dev/null 2>&1; then
+            gh release create app-latest --prerelease --title "van-core app (latest build)" --notes "$notes"
           fi
+          # The versioned apk first: it is the link the notes tell people to use
+          # when the rolling one misbehaves, and it is a name nothing is
+          # replacing, so it cannot be caught by the delete-then-upload window.
+          upload "van-core-${GITHUB_RUN_NUMBER}.apk"
+          upload "van-core-${GITHUB_RUN_NUMBER}.zip"
+          upload van-core.apk
+          gh release edit app-latest --notes "$notes"
           echo "::notice::APK published: ${link}"
 
       - uses: actions/upload-artifact@v4
