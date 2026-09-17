@@ -9,18 +9,19 @@ class VanWidgetWorker(context: Context, params: WorkerParameters) : Worker(conte
 
     override fun doWork(): Result {
         try {
-            val states = VanFeed.fetch(applicationContext)
+            val reading = VanFeed.fetch(applicationContext)
+            val states = reading.states
             if (states != null) {
                 VanStore.saveOk(applicationContext, states)
             } else {
-                VanStore.saveMiss(applicationContext)
+                VanStore.saveMiss(applicationContext, reading.miss)
             }
         } catch (t: Throwable) {
             // Whatever went wrong, the widget must not be left believing a
             // refresh is still running: that hides its own refresh button
             // behind a spinner. Treat it as a miss, which keeps the last
             // values and says so.
-            VanStore.saveMiss(applicationContext)
+            VanStore.saveMiss(applicationContext, null)
         } finally {
             VanStore.endRefresh(applicationContext)
         }

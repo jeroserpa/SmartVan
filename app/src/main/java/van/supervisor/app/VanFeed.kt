@@ -96,9 +96,61 @@ object VanFeed {
     /** Hard bound on the whole read, whatever the stream does. */
     private const val BURST_MS = 14_000L
 
-    /** Entity id -> ESPHome state JSON, or null if van-core was not reachable. */
-    fun fetch(context: Context): Map<String, JSONObject>? {
+    /** Why a read failed, so the widget can say something true about it. */
+    enum class Miss { NO_WIFI, NO_ANSWER, NOT_VAN_CORE }
+
+    /** Either the entity states, or the reason there are none. */
+    class Reading internal constructor(
+        val states: Map<String, JSONObject>?,
+        val miss: Miss?,
+    )
+
+    /**
+     * Read van-core over whatever route reaches it, trying each in turn.
+     *
+     * It used to depend on `requestNetwork` alone, and that is the fragile
+     * half of this: it is asynchronous, it times out, and it needs
+     * CHANGE_NETWORK_STATE, which on a modern Android is not a permission an
+     * ordinary app simply has. When it failed, the widget declared "Not on
+     * van-core Wi-Fi" while the phone was demonstrably on van-core's Wi-Fi and
+     * the app was reading the same node over it.
+     */
+    fun fetch(context: Context): Reading {
         val cm = context.getSystemService(ConnectivityManager::class.java)
+
+        // 1. Networks the phone is already joined to. Costs nothing, answers
+        //    at once, needs only ACCESS_NETWORK_STATE - and if we are sitting
+        //    on the van's AP, it is in this list right now.
+        val routes = LinkedHashSet<Network>()
+        runCatching {
+            for (n in cm.allNetworks) {
+                val caps = cm.getNetworkCapabilities(n) ?: continue
+                if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) routes.add(n)
+            }
+        }
+        // 2. Only if that found nothing, ask the system to produce one, the way
+        //    the activity does - same request, and the same 10s it allows.
+        if (routes.isEmpty()) requestWifi(cm)?.let { routes.add(it) }
+        val sawWifi = routes.isNotEmpty()
+
+        var miss = if (sawWifi) Miss.NO_ANSWER else Miss.NO_WIFI
+        for (route in routes) {
+            val r = runCatching { readInitialBurst(route) }.getOrNull() ?: continue
+            r.states?.let { return r }
+            if (r.miss == Miss.NOT_VAN_CORE) miss = Miss.NOT_VAN_CORE
+        }
+
+        // 3. Last resort: the process's own default route. MainActivity binds
+        //    the process to the van network while it is open, and a phone with
+        //    mobile data off has the van AP as its default anyway.
+        val r = runCatching { readInitialBurst(null) }.getOrNull()
+        r?.states?.let { return r }
+        if (r?.miss == Miss.NOT_VAN_CORE) miss = Miss.NOT_VAN_CORE
+        return Reading(null, miss)
+    }
+
+    /** The activity's request, verbatim: any Wi-Fi, internet not required. */
+    private fun requestWifi(cm: ConnectivityManager): Network? {
         val found = AtomicReference<Network?>(null)
         val latch = CountDownLatch(1)
         val cb = object : ConnectivityManager.NetworkCallback() {
@@ -111,17 +163,16 @@ object VanFeed {
                 latch.countDown()
             }
         }
-        // Same request as the activity: any Wi-Fi, internet not required. Only
-        // matches a network the phone is already joined to; never starts a scan.
         val request = NetworkRequest.Builder()
             .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
             .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
-        cm.requestNetwork(request, cb, 5_000)
-        try {
-            latch.await(6, TimeUnit.SECONDS)
-            val network = found.get() ?: return null
-            return runCatching { readInitialBurst(network) }.getOrNull()
+        // Throws if CHANGE_NETWORK_STATE is not effective. That is a reason to
+        // fall through to the other routes, not to fail the whole read.
+        runCatching { cm.requestNetwork(request, cb, 10_000) }.onFailure { return null }
+        return try {
+            latch.await(11, TimeUnit.SECONDS)
+            found.get()
         } finally {
             runCatching { cm.unregisterNetworkCallback(cb) }
         }
@@ -147,8 +198,10 @@ object VanFeed {
         return "$domain-$slug"
     }
 
-    private fun readInitialBurst(network: Network): Map<String, JSONObject>? {
-        val conn = network.openConnection(URL(eventsUrlOverride ?: EVENTS_URL)) as HttpURLConnection
+    /** @param network the route to use, or null for the process default. */
+    private fun readInitialBurst(network: Network?): Reading {
+        val url = URL(eventsUrlOverride ?: EVENTS_URL)
+        val conn = (network?.openConnection(url) ?: url.openConnection()) as HttpURLConnection
         conn.connectTimeout = 4_000
         // The stream never ends on its own. A run of quiet windows after the
         // burst is the end-of-snapshot signal; the deadline bounds the
@@ -159,7 +212,9 @@ object VanFeed {
         val states = HashMap<String, JSONObject>()
         var sawEsphome = false
         try {
-            if (conn.responseCode != 200) return null
+            // Something answered, but not with a state stream: a house router
+            // at the same address, or a captive portal. Not "no Wi-Fi".
+            if (conn.responseCode != 200) return Reading(null, Miss.NOT_VAN_CORE)
             val reader = conn.inputStream.bufferedReader()
             var event = "message"
             val data = StringBuilder()
@@ -206,6 +261,6 @@ object VanFeed {
         }
         // A reply from some other device at 192.168.4.1 (a house router, say)
         // is not a snapshot of the van.
-        return if (sawEsphome) states else null
+        return if (sawEsphome) Reading(states, null) else Reading(null, Miss.NOT_VAN_CORE)
     }
 }

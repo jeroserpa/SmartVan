@@ -842,3 +842,47 @@ all — an OEM battery restriction on a freshly installed app is the usual
 cause — the widget has no data to show and no way to get any: the ↻ path goes
 through WorkManager too. The widget now says so honestly instead of spinning,
 but the remedy is on the phone (battery: unrestricted), not in the code.
+
+
+---
+
+## 2026-09-17 — D-20: the widget reaches van-core by any route, and names the one that failed
+
+**Context.** "The app itself works but the widget still says no van-core
+Wi-Fi." That message is emitted only when `tried` is true and `okAt` is zero,
+so the worker *was* running — the battery theory of D-19 was not it — and
+`VanFeed.fetch` was returning null every time, while the app read the same
+node over the same Wi-Fi.
+
+**Both halves were wrong.**
+
+1. **One route, and the fragile one.** `fetch` depended entirely on
+   `ConnectivityManager.requestNetwork`: asynchronous, timing out at 5s, and
+   requiring `CHANGE_NETWORK_STATE` — which on a modern Android is not a
+   permission an ordinary app simply holds, whatever the manifest says. The
+   activity survives because it also binds the process to the network and
+   hands the WebView a normal default route; the worker had no such fallback.
+2. **The message asserted something false.** "Not on van-core Wi-Fi" was
+   printed for every failure, including while the phone was plainly on
+   van-core's Wi-Fi. A diagnostic that confidently states the wrong cause is
+   worse than none: it sent a day of debugging toward downloads and battery
+   settings.
+
+**Decided:**
+- **Try every route, cheapest and most certain first.** The Wi-Fi networks the
+  phone is already joined to (`getAllNetworks`, needing only
+  `ACCESS_NETWORK_STATE` and answering immediately), then `requestNetwork` as
+  the activity does it, then the process default — which the activity binds to
+  the van network while it is open, and which *is* the van AP on a phone with
+  mobile data off. `requestNetwork` throwing is a reason to fall through, not
+  to fail the read.
+- **Record why.** `VanFeed.Miss` is one of `NO_WIFI`, `NO_ANSWER`,
+  `NOT_VAN_CORE`; the store keeps it and the footer prints it. "Joined but
+  nothing at 192.168.4.1" and "not joined at all" are different problems with
+  different fixes, and the widget now distinguishes them.
+
+**The general rule this is an instance of.** CLAUDE.md §5.1 says no node's
+function may depend on another node or on the network. The widget is not a
+node, but the same reasoning applies to *routes*: it had one way to reach
+van-core and no way to say what happened when that way failed. Both are worth
+more than the code they cost.

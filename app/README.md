@@ -102,10 +102,25 @@ van-core.
   around both, so the control is still there while the spinner shows. The
   one-shot is enqueued `REPLACE`, not `KEEP`: `KEEP` discards the new request
   whenever an older one is unfinished, which silently threw away every press.
-- **If the widget still never updates**, the phone is refusing the background
-  work. Check the app is not battery-restricted (Settings → Apps → van-core →
-  Battery → Unrestricted). The ↻ path goes through WorkManager too, so a
-  restricted app cannot refresh even on demand.
+- **Four routes to the node, tried in order**, because depending on one was
+  the bug: the Wi-Fi networks the phone is already joined to (needs only
+  `ACCESS_NETWORK_STATE`, answers at once), then `requestNetwork` as the
+  activity does it, then the process's own default route. `requestNetwork`
+  alone is fragile — asynchronous, times out, and needs
+  `CHANGE_NETWORK_STATE`, which a modern Android does not simply hand an
+  ordinary app.
+- **The footer names the failure**, which it did not before: `Not on van-core
+  Wi-Fi` (no Wi-Fi at all), `On Wi-Fi · van-core did not answer` (joined,
+  nothing at 192.168.4.1), `On Wi-Fi · this is not van-core` (something
+  answered, but not a state stream — a house router at the same address).
+  The old build printed the first of those whatever went wrong, including
+  while the phone was on van-core's Wi-Fi with the app reading the node over
+  the same link.
+- **If it still never updates**, check the app is not battery-restricted
+  (Settings → Apps → van-core → Battery → Unrestricted). The ↻ path goes
+  through WorkManager too, so a restricted app cannot refresh on demand
+  either — but in that case the footer stays on its old text rather than
+  changing, which is how to tell the two apart.
 - **Out of range:** keeps the last values, greyed after 20 min, with
   `last seen …`. It only ever has data while the phone is on van-core's Wi-Fi —
   **it is not an alarm** and says nothing about the van while you are away.

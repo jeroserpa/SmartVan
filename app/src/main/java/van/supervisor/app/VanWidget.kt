@@ -266,8 +266,18 @@ class VanWidget : AppWidgetProvider() {
             val entities = if (n == 1) "1 entity" else "$n entities"
             // (full text, compact text, colour)
             val (footer, footerShort, footerColor) = when {
-                snap.okAt == 0L && snap.tried ->
-                    Triple("Not on van-core Wi-Fi", "Not on van-core Wi-Fi", muted)
+                // Never once succeeded. Say which of the three it is: the old
+                // text claimed "not on van-core Wi-Fi" even when the phone was
+                // on it and the app was reading the node over the same link,
+                // which sent the search in the wrong direction for a day.
+                snap.okAt == 0L && snap.tried -> when (snap.miss) {
+                    VanFeed.Miss.NO_ANSWER ->
+                        Triple("On Wi-Fi · van-core did not answer", "No answer", warn)
+                    VanFeed.Miss.NOT_VAN_CORE ->
+                        Triple("On Wi-Fi · this is not van-core", "Not van-core", warn)
+                    else ->
+                        Triple("Not on van-core Wi-Fi", "Not on van-core Wi-Fi", muted)
+                }
                 snap.okAt == 0L ->
                     Triple("Waiting for the first update", "Waiting for data", muted)
                 // Reached van-core but matched nothing: an entity id format or

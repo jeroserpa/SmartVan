@@ -19,6 +19,8 @@ object VanStore {
         val lastOk: Boolean,
         /** Whether any attempt has been made yet. */
         val tried: Boolean,
+        /** [VanFeed.Miss] of the last failed attempt, null if it succeeded. */
+        val miss: VanFeed.Miss?,
         /**
          * When a refresh was last started, 0 if none is in flight.
          *
@@ -61,15 +63,22 @@ object VanStore {
             .putLong("okAt", now)
             .putBoolean("lastOk", true)
             .putBoolean("tried", true)
+            .remove("miss")
             .putLong("refreshingSince", 0L)
             .apply()
     }
 
-    /** Out of range is the normal case, not an error: keep the old values. */
-    fun saveMiss(context: Context) {
+    /**
+     * Out of range is the normal case, not an error: keep the old values. The
+     * reason is kept too - "no Wi-Fi at all" and "on the Wi-Fi but nothing
+     * answered" look identical on the widget otherwise, and the widget was
+     * asserting the first while the second was true.
+     */
+    fun saveMiss(context: Context, miss: VanFeed.Miss?) {
         prefs(context).edit()
             .putBoolean("lastOk", false)
             .putBoolean("tried", true)
+            .putString("miss", miss?.name)
             .putLong("refreshingSince", 0L)
             .apply()
     }
@@ -108,6 +117,8 @@ object VanStore {
             okAt = p.getLong("okAt", 0L),
             lastOk = p.getBoolean("lastOk", false),
             tried = p.getBoolean("tried", false),
+            miss = p.getString("miss", null)
+                ?.let { n -> VanFeed.Miss.entries.firstOrNull { it.name == n } },
             refreshingSince = p.getLong("refreshingSince", 0L),
         )
     }

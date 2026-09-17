@@ -95,8 +95,9 @@ class ScreensTest {
     @Test
     fun b1_widgetFeedReadsMock() {
         VanFeed.eventsUrlOverride = mock + "events"
-        val states = VanFeed.fetch(ctx)
-        assertNotNull("no snapshot from the mock van-core", states)
+        val reading = VanFeed.fetch(ctx)
+        val states = reading.states
+        assertNotNull("no snapshot from the mock van-core (miss=${reading.miss})", states)
         assertNotNull("battery not recognised in the mock's stream", states!![VanFeed.SOC])
         // The burst used to be cut at the first quiet window, which kept the
         // station sensors (declared first) and dropped everything after them.
@@ -163,8 +164,15 @@ class ScreensTest {
             // the button returned, or there is no way to ask again.
             "widget-9b-refresh-gave-up" to snap(
                 live, okAt = now - 9 * min, refreshingSince = now - 5 * min),
-            "widget-a-never-reached" to VanStore.Snapshot(JSONObject(), 0L, false, true, 0L),
-            "widget-b-first-run" to VanStore.Snapshot(JSONObject(), 0L, false, false, 0L),
+            // The three ways a first read can fail. They used to be one message,
+            // and it asserted the one that was false.
+            "widget-a-never-reached" to
+                VanStore.Snapshot(JSONObject(), 0L, false, true, VanFeed.Miss.NO_WIFI, 0L),
+            "widget-a2-wifi-no-answer" to
+                VanStore.Snapshot(JSONObject(), 0L, false, true, VanFeed.Miss.NO_ANSWER, 0L),
+            "widget-a3-wifi-not-van-core" to
+                VanStore.Snapshot(JSONObject(), 0L, false, true, VanFeed.Miss.NOT_VAN_CORE, 0L),
+            "widget-b-first-run" to VanStore.Snapshot(JSONObject(), 0L, false, false, null, 0L),
             "widget-c-unrecognised" to snap(
                 JSONObject().put("sensor-something_else", v(1.0)), okAt = now - min),
         )
@@ -251,7 +259,7 @@ class ScreensTest {
 
     private fun snap(
         states: JSONObject, okAt: Long, lastOk: Boolean = true, refreshingSince: Long = 0L,
-    ) = VanStore.Snapshot(states, okAt, lastOk, true, refreshingSince)
+    ) = VanStore.Snapshot(states, okAt, lastOk, true, null, refreshingSince)
 
     /**
      * Writes through a shell process so the files outlive the app and land
