@@ -124,9 +124,13 @@ class ScreensTest {
         )) {
             VanFeed.eventsUrlOverride = "${mock}events?$suffix=1"
             val r = VanFeed.fetch(ctx)
-            assertNotNull("$how: lost the whole snapshot (miss=${r.miss})", r.states)
-            assertNotNull("$how: lost battery", r.states!![VanFeed.SOC])
-            assertNotNull("$how: lost fridge temperature", r.states[VanFeed.FRIDGE])
+            // A local binding, not r.states: the property lives in the main
+            // source set, which is a different module to this one, so it
+            // cannot be smart-cast after a null check.
+            val kept = r.states
+            assertNotNull("$how: lost the whole snapshot (miss=${r.miss})", kept)
+            assertNotNull("$how: lost battery", kept!![VanFeed.SOC])
+            assertNotNull("$how: lost fridge temperature", kept[VanFeed.FRIDGE])
         }
         VanFeed.eventsUrlOverride = mock + "events"
         VanStore.saveOk(ctx, states)
