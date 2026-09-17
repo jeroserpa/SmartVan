@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">van-core</string>
+    <string name="widget_description">Battery, power, AC and fridge at a glance. Read-only; refreshes every 15 min while the phone is on van-core Wi-Fi.</string>
+
+    <string name="st_searching_title">Looking for van-core</string>
+    <string name="st_searching_body">Checking for the van Wi-Fi…</string>
+    <string name="st_connecting_title">Connecting</string>
+    <string name="st_connecting_body">Opening the van-core panel…</string>
+    <string name="st_nowifi_title">Not on van-core Wi-Fi</string>
+    <string name="st_nowifi_body">Join the van-core network. Mobile data can stay on — this app uses the Wi-Fi only for the van.</string>
+    <string name="st_unreachable_title">van-core is not answering</string>
+    <string name="st_unreachable_body">The Wi-Fi is connected, but the node did not reply. Retrying automatically.</string>
+    <string name="st_lost_banner">Wi-Fi to van-core lost — values are frozen. Reconnecting…</string>
+
+    <string name="btn_retry">Retry</string>
+    <string name="btn_wifi">Wi-Fi settings</string>
+    <string name="btn_details">Details</string>
+    <string name="btn_hide_details">Hide details</string>
+
+    <string name="w_title">van-core</string>
+    <string name="w_updating">Updating…</string>
+    <string name="w_refresh">Refresh</string>
+</resources>

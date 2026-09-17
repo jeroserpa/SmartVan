@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The bolt from tools/make_icon.py, mapped into the adaptive icon's 72dp
+     safe zone (x' = 18 + 72x) so no launcher mask can clip it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#F0A63C"
+        android:pathData="M61.2,26.64L38.88,57.6H51.84L47.52,81.36L69.12,51.12H56.16Z" />
+</vector>

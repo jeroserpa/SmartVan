@@ -97,7 +97,7 @@ FN_READ_INPUT = 0x04  # live status
 FN_WRITE_SINGLE = 0x06  # control
 
 # Control registers
-REG_AC_CHARGE_LIMIT = 13
+REG_AC_INPUT_LEVEL = 13  # read-only knob position, see below
 REG_USB_CONTROL = 24
 REG_DC_CONTROL = 25
 REG_AC_CONTROL = 26
@@ -106,6 +106,20 @@ REG_KEY_SOUND = 56
 REG_AC_SILENT_CONTROL = 57
 REG_THRESHOLD_DISCHARGE = 66
 REG_THRESHOLD_CHARGE = 67
+
+# P310 AC input level. A physical five-position knob on the station, reported
+# as 1-5 in input reg 2 and holding reg 13 -- believed to be the knob position,
+# UNVERIFIED. ESP-FBot's 300..1100 W table belongs to another Fbot model.
+# Read-only: the knob sets it, so there is no `set` target for it (D-16).
+P310_AC_INPUT_LEVELS_W = (400, 800, 1200, 1600, 2200)
+
+
+def ac_input_level_w(raw):
+    """Knob position 1-5 -> watts, None if out of range or missing."""
+    if raw is None or not 1 <= raw <= len(P310_AC_INPUT_LEVELS_W):
+        return None
+    return P310_AC_INPUT_LEVELS_W[raw - 1]
+
 
 # State bitfield lives in input register 41
 STATE_BITS = {
@@ -160,7 +174,7 @@ CSV_FIELDS = [
     "ac_out_voltage",
     "ac_in_voltage",
     "ac_in_freq",
-    "ac_charge_limit_w",
+    "ac_input_level_w",
     "remaining_min",
     "link_state",  # "ok" for samples, "gap" for a synthetic outage marker
     "ac_on",
@@ -274,11 +288,7 @@ def decode_status(data: bytes) -> dict:
         for name, mask in STATE_BITS.items():
             out[f"{name}_on"] = bool(flags & mask)
 
-    raw_level = out.get("charge_level_raw")
-    if raw_level and 1 <= raw_level <= 5:
-        out["ac_charge_limit_w"] = 300 + (raw_level - 1) * 200
-    else:
-        out["ac_charge_limit_w"] = None
+    out["ac_input_level_w"] = ac_input_level_w(out.get("charge_level_raw"))
 
     # Derived: everything drawn from the station that is not on the AC output.
     ac = out.get("ac_output_w")
@@ -307,11 +317,10 @@ def decode_settings(data: bytes) -> dict:
 
     charge = reg(REG_THRESHOLD_CHARGE)
     discharge = reg(REG_THRESHOLD_DISCHARGE)
-    limit = reg(REG_AC_CHARGE_LIMIT)
     return {
         "threshold_charge_pct": charge / 10.0 if charge is not None else None,
         "threshold_discharge_pct": discharge / 10.0 if discharge is not None else None,
-        "ac_charge_limit_w": (300 + (limit - 1) * 200) if limit and 1 <= limit <= 5 else None,
+        "ac_input_level_w": ac_input_level_w(reg(REG_AC_INPUT_LEVEL)),
         "ac_silent": reg(REG_AC_SILENT_CONTROL) == 1,
         "key_sound": reg(REG_KEY_SOUND) == 1,
         "light_mode": reg(REG_LIGHT_CONTROL),
@@ -398,7 +407,7 @@ def format_row(s: dict) -> str:
         f"{n('ac_output_w',6)}{n('dc_usb_load_w',6)}{n('total_output_w',7)} |"
         f"{n('ac_out_voltage',6,'{:.1f}')}{n('ac_in_voltage',6,'{:.1f}')}"
         f"{n('ac_in_freq',5,'{:.2f}')} |"
-        f"{n('ac_charge_limit_w',6)} | {flags}"
+        f"{n('ac_input_level_w',6)} | {flags}"
     )
 
 
@@ -756,7 +765,7 @@ async def cmd_services(args):
 # Annotations for the input-register bank (function 0x04).
 # A "?" prefix marks a hypothesis, not a fact.
 INPUT_NOTES = {
-    2: "charge level 1-5 -> 300..1100W",
+    2: "AC input knob 1-5 -> 400..2200W (UNVERIFIED)",
     3: "AC input W",
     4: "DC/solar input W",
     6: "total input W",
@@ -787,7 +796,7 @@ INPUT_NOTES = {
 
 # Annotations for the holding-register bank (function 0x03).
 HOLDING_NOTES = {
-    13: "AC charge limit 1-5",
+    13: "AC input knob 1-5 (UNVERIFIED, read-only)",
     27: "light mode 0=off 1=on 2=SOS 3=flash",
     56: "key sound 0/1",
     57: "AC silent 0/1",
@@ -1424,11 +1433,9 @@ async def cmd_idle_test(args):
 
 async def cmd_set(args):
     if args.target == "charge-limit":
-        watts = int(args.value)
-        if watts not in (300, 500, 700, 900, 1100):
-            raise SystemExit("charge-limit must be one of 300 500 700 900 1100")
-        reg, val = REG_AC_CHARGE_LIMIT, (watts - 300) // 200 + 1
-    elif args.target in ("threshold-charge", "threshold-discharge"):
+        # Physical knob on the P310. Never written from here (D-16).
+        raise SystemExit("charge-limit is set by the knob on the P310, not over BLE")
+    if args.target in ("threshold-charge", "threshold-discharge"):
         pct = float(args.value)
         if not 10.0 <= pct <= 100.0:
             raise SystemExit("threshold must be between 10 and 100 percent")
@@ -1490,7 +1497,7 @@ def cmd_selftest(_args):
     ok &= ac_on[:6] == bytes([0x11, 0x06, 0x00, 0x1A, 0x00, 0x01])
 
     # Synthetic status frame: 80 registers, battery 87.3%, AC out 34W (fridge),
-    # total out 60W (so 26W on the 12V side), AC+DC on, charge limit 700W.
+    # total out 60W (so 26W on the 12V side), AC+DC on, input knob at 1200W.
     payload = bytearray([SLAVE_ADDR, FN_READ_INPUT, 0xA0, 0x00, 0x00, 0x00])
     payload += bytearray(NUM_REGISTERS * 2)
 
@@ -1513,7 +1520,7 @@ def cmd_selftest(_args):
         f"tot {decoded['total_output_w']}W in {decoded['input_w']}W "
         f"Vin {decoded['ac_in_voltage']}V "
         f"AC={decoded['ac_on']} DC={decoded['dc_on']} USB={decoded['usb_on']} "
-        f"limit {decoded['ac_charge_limit_w']}W"
+        f"knob {decoded['ac_input_level_w']}W"
     )
     ok &= decoded["battery_pct"] == 87.3
     ok &= decoded["ac_output_w"] == 34
@@ -1521,7 +1528,7 @@ def cmd_selftest(_args):
     ok &= decoded["dc_usb_load_w"] == 26
     ok &= decoded["ac_in_voltage"] == 228.5
     ok &= decoded["ac_on"] is True and decoded["usb_on"] is False
-    ok &= decoded["ac_charge_limit_w"] == 700
+    ok &= decoded["ac_input_level_w"] == 1200
     ok &= sanity_check(decoded) is None
 
     print(f"terminal row               = {format_row(decoded)}")
@@ -1605,8 +1612,8 @@ def main():
     sp.add_argument("--csv", help="write every sweep as a wide row (reg0..reg79)")
 
     sp = sub.add_parser("set", help="send a control command")
-    sp.add_argument("target", help="ac | dc | usb | light | silent | beep | charge-limit | threshold-charge | threshold-discharge")
-    sp.add_argument("value", help="on/off, or a number for the limit/threshold targets")
+    sp.add_argument("target", help="ac | dc | usb | light | silent | beep | threshold-charge | threshold-discharge")
+    sp.add_argument("value", help="on/off, or a percentage for the threshold targets")
     add_common(sp)
     sp.add_argument("--i-understand", action="store_true", help="required to actually transmit")
 

@@ -330,8 +330,8 @@ table.raw td:first-child{color:var(--muted);padding-right:10px;word-break:break-
   <div class="card">
     <h2>Charging</h2>
     <div class="row">
-      <div class="lbl"><b>AC charge limit</b><small>drop it at idle so the alternator is not cooked</small></div>
-      <select id="sel_limit"></select>
+      <div class="lbl"><b>AC input level</b><small>set by the knob on the P310, not from here</small></div>
+      <div class="v" data-e="ac_level">--</div>
     </div>
     <div class="row" data-num="thr_charge">
       <div class="lbl"><b>Charge to</b><small>60-80% when parked at home</small></div>
@@ -502,6 +502,7 @@ const E = {
   solar_in:   "sensor-solar_input_power",
   ac_in:      "sensor-ac_input_power",
   left:       "sensor-remaining_minutes",
+  ac_level:   "sensor-ac_input_level",
   fridge:     "sensor-fridge_temperature",
   cabin:      "sensor-cabin_temperature",
   man_left:   "sensor-manual_ac_remaining",
@@ -530,7 +531,6 @@ const E = {
   sw_inhibit: "switch-drive_inhibit_test",
   sw_parked:  "switch-parked_mode",
 
-  sel_limit:  "select-ac_charge_limit",
 
   btn_man:        "button-manual_ac_start",
   btn_man_ext:    "button-manual_ac_extend",
@@ -633,7 +633,6 @@ function oid(id) { return id.slice(id.indexOf("-") + 1); }
 var cmd = {
   sw:  function (id, on) { return post("/switch/" + oid(id) + "/turn_" + (on ? "on" : "off")); },
   n:   function (id, v)  { return post("/number/" + oid(id) + "/set?value=" + v); },
-  sel: function (id, o)  { return post("/select/" + oid(id) + "/set?option=" + encodeURIComponent(o)); },
   btn: function (id)     { return post("/button/" + oid(id) + "/press"); }
 };
 
@@ -699,7 +698,6 @@ $("#btn_restart").onclick    = function () {
     cmd.btn(E.btn_restart);
 };
 $("#btn_default").onclick    = function () { location.href = "/"; };
-$("#sel_limit").onchange     = function (e) { cmd.sel(E.sel_limit, e.target.value); };
 
 /* --- render ------------------------------------------------------------- */
 function fmtW(v) {
@@ -772,13 +770,8 @@ function render() {
     ? "Fail-safe active: AC is forced ON and a manual OFF will be undone within seconds."
     : "A manual change here is temporary by design: the arbiter re-asserts its decision on the next tick.";
 
-  /* --- charge limit select --- */
-  var sel = $("#sel_limit"), lim = S[E.sel_limit];
-  if (lim && lim.options && sel.options.length !== lim.options.length) {
-    sel.innerHTML = "";
-    lim.options.forEach(function (o) { sel.add(new Option(o, o)); });
-  }
-  if (lim && document.activeElement !== sel && lim.state != null) sel.value = lim.state;
+  /* --- AC input level: read-only, the P310 knob sets it --- */
+  put('[data-e="ac_level"]', fmtW(num("ac_level")), !fresh("ac_level"));
 
   /* --- numbers --- */
   $$("[data-num]").forEach(function (row) {

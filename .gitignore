@@ -9,3 +9,9 @@ venv/
 # host test binaries
 test/test_arbiter
 test/test_arbiter.exe
+
+# Android wrapper (D-15)
+build/
+.gradle/
+local.properties
+*.keystore

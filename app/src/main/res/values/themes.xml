@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark only, like the page. isLightTheme=false also makes the WebView
+         report prefers-color-scheme: dark, so ESPHome's stock page follows. -->
+    <style name="Theme.Van" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/warn</item>
+        <item name="colorOnPrimary">@color/bg</item>
+        <item name="colorSecondary">@color/alt</item>
+        <item name="colorError">@color/bad</item>
+        <item name="colorSurface">@color/card</item>
+        <item name="colorOnSurface">@color/fg</item>
+        <item name="colorOnSurfaceVariant">@color/muted</item>
+        <item name="colorOutline">@color/line</item>
+        <item name="android:colorBackground">@color/bg</item>
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:statusBarColor">@color/bg</item>
+        <item name="android:navigationBarColor">@color/bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+
+    <style name="Theme.Van.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/bg</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.Van</item>
+    </style>
+</resources>

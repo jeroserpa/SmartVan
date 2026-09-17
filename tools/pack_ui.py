@@ -36,12 +36,23 @@ OUT = ROOT / "components" / "van_ui" / "van_ui_html.h"
 # The PNG is stored raw: it is already deflate-compressed internally, so a
 # second pass costs flash and buys nothing, and serving it without the
 # Content-Encoding header keeps the handler's response path uniform.
+#
+# gzip? doubles as "is text": text sources are normalised to LF before they are
+# hashed or packed, so the output and the staleness hash are identical whether
+# the checkout is LF or CRLF (core.autocrlf on Windows). The PNG is hashed and
+# packed byte for byte.
 ASSETS = [
     ("index.html",          "INDEX",    "text/html",             True),
     ("portal.html",         "PORTAL",   "text/html",             True),
     ("manifest.webmanifest", "MANIFEST", "application/manifest+json", True),
     ("icon.png",            "ICON",     "image/png",             False),
 ]
+
+
+def normalise_eol(raw: bytes) -> bytes:
+    """CRLF -> LF. Mirrors _normalise_eol in components/van_ui/__init__.py;
+    both must agree byte for byte or the staleness check is meaningless."""
+    return raw.replace(b"\r\n", b"\n")
 
 # Flash is 16MB, so size is not a constraint - but a page this size on a node
 # that must not starve its BLE task is, so keep an eye on it.
@@ -72,6 +83,8 @@ def main() -> int:
 
     for name, symbol, _mime, do_gzip in ASSETS:
         raw = (SRC_DIR / name).read_bytes()
+        if do_gzip:
+            raw = normalise_eol(raw)
         h.update(name.encode())
         h.update(raw)
         # mtime=0 so the output is byte-identical for identical input: a
@@ -99,7 +112,9 @@ def main() -> int:
     lines += body
     lines += ["}  // namespace van_ui", "}  // namespace esphome", ""]
 
-    OUT.write_text("\n".join(lines), encoding="utf-8")
+    # newline="\n": the header is LF regardless of platform, so it never shows a
+    # whole-file diff when regenerated on Windows.
+    OUT.write_text("\n".join(lines), encoding="utf-8", newline="\n")
 
     for name, raw_len, blob_len, do_gzip in report:
         how = f"-> {blob_len} B gzip" if do_gzip else "raw"

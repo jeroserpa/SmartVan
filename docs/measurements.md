@@ -341,6 +341,23 @@ overnight, i.e. ~800 Wh at 3900 Wh usable, with little or no input.
   over cellular, so 192.168.4.1 is unreachable. Phone-side setting, not a
   node fault.
 
+## M13 — 2026-09-16 — D-15 Android wrapper: UI and mobile data together, WORKS
+
+App from `app/` (built by `.github/workflows/android-app.yml`), phone joined
+to the van-core AP with 4G on, van-core running `van-core-soak.yaml`.
+
+- **Routing: confirmed.** The app's process bound to `wlan0`, address
+  `192.168.4.100/24`, default route via `192.168.4.1`, while the status bar
+  kept 4G. The page loads in the app. Resolves the M12 addendum issue for
+  Android; the browser path is unchanged.
+- **First failure was not routing.** `/ui` returned `net::ERR_EMPTY_RESPONSE`:
+  the soak build has no `/ui` handler, and ESPHome's IDF web server registers
+  no not-found handler, so an unknown path closes the socket instead of
+  answering 404. Worth remembering for any client that probes paths. The app
+  now falls back to `/` on any `/ui` failure.
+- Still `UNVERIFIED` (D-15 list): SSE surviving backgrounding; other apps'
+  internet while the wrapper is in the foreground; out-of-range behaviour.
+
 ## M14 — 2026-09-16/17 — soak 2 first data: probes, fridge plug, PSRAM log — `PRELIMINARY`
 
 Firmware `nodes/van-core-probes.yaml` + `nodes/van-fridge-plug.yaml`, plan in

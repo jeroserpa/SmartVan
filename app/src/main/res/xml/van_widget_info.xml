@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- updatePeriodMillis is 0: refresh is driven by WorkManager (15 min floor),
+     since the framework's own period cannot go below 30 min.
+     Default 3x2 (full layout); resizable down to 2x1 (compact layout). -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="110dp"
+    android:minHeight="40dp"
+    android:targetCellWidth="3"
+    android:targetCellHeight="2"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="40dp"
+    android:maxResizeWidth="530dp"
+    android:maxResizeHeight="276dp"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/van_widget_small"
+    android:previewLayout="@layout/van_widget_preview"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:description="@string/widget_description" />

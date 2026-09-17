@@ -36,8 +36,20 @@ _UI = _HERE.parent.parent / "ui"
 _HDR = _HERE / "van_ui_html.h"
 
 # Must match ASSETS in tools/pack_ui.py, in order - the staleness hash below is
-# taken over the sources in exactly this sequence.
-_SOURCES = ["index.html", "portal.html", "manifest.webmanifest", "icon.png"]
+# taken over the sources in exactly this sequence. (name, is_text): text
+# sources are hashed with CRLF normalised to LF, so a Windows checkout with
+# core.autocrlf=true hashes the same as an LF one; the PNG is hashed raw.
+_SOURCES = [
+    ("index.html", True),
+    ("portal.html", True),
+    ("manifest.webmanifest", True),
+    ("icon.png", False),
+]
+
+
+def _normalise_eol(raw: bytes) -> bytes:
+    """CRLF -> LF. Must match normalise_eol in tools/pack_ui.py byte for byte."""
+    return raw.replace(b"\r\n", b"\n")
 
 
 def _check_generated(config):
@@ -46,16 +58,17 @@ def _check_generated(config):
         raise cv.Invalid(
             f"{_HDR.name} is missing. Run:  python tools/pack_ui.py"
         )
-    paths = [_UI / n for n in _SOURCES]
+    paths = [_UI / n for n, _ in _SOURCES]
     if not all(p.is_file() for p in paths):
         # Someone is building from a copy of components/ without ui/. That is
         # legitimate - the header is committed - so accept it rather than
         # blocking a flash.
         return config
     h = hashlib.sha256()
-    for name, path in zip(_SOURCES, paths):
+    for (name, is_text), path in zip(_SOURCES, paths):
+        raw = path.read_bytes()
         h.update(name.encode())
-        h.update(path.read_bytes())
+        h.update(_normalise_eol(raw) if is_text else raw)
     want = h.hexdigest()
     m = re.search(r'#define VAN_UI_SHA256 "([0-9a-f]{64})"',
                   _HDR.read_text(encoding="utf-8"))

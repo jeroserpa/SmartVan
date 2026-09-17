@@ -62,8 +62,6 @@ PROBE_PATHS = (
 # there, change it here too and the UI's ENTITIES block stays the arbiter of
 # truth for both.
 # --------------------------------------------------------------------------
-CHARGE_LIMITS = ["300W", "500W", "700W", "900W", "1100W"]
-
 STATE = {}
 LOCK = threading.RLock()
 SUBS = []  # list of queue.Queue, one per connected browser
@@ -111,7 +109,7 @@ def _init_entities():
     define("switch-sleep_mode", "Sleep mode", False)
     define("switch-drive_inhibit_test", "Drive inhibit (test)", False)
 
-    define("select-ac_charge_limit", "AC charge limit", "700W", options=CHARGE_LIMITS)
+    define("sensor-ac_input_level", "AC input level", 800.0, "W")
 
     for eid, name, val, unit in [
         ("number-charge_max", "Charge max", 80, "%"),

@@ -1,0 +1,187 @@
+# Builds the D-15 Android wrapper in the cloud, so no Android SDK is needed on
+# the laptop and only the APK (a few MB) comes down over mobile data.
+name: android-app
+
+on:
+  push:
+    # Branches only: the release step below moves a tag, which must not
+    # count as a push of its own.
+    branches: ["**"]
+    paths:
+      - "app/**"
+      - "settings.gradle.kts"
+      - "build.gradle.kts"
+      - "gradle.properties"
+      - "tools/mock_core.py"
+      - "ui/**"
+      - ".github/workflows/android-app.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # the rolling app-latest release
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # No wrapper jar in the repo: it could not be generated without a local
+      # JDK. Pinning the Gradle version here does the same job.
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      # A stable signing key, so a new build installs over the old one.
+      # Without the secret each run signs with a throwaway debug key and the
+      # phone refuses the update until the app is uninstalled.
+      - name: Restore signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/van.keystore"
+            echo "VAN_KEYSTORE=$RUNNER_TEMP/van.keystore" >> "$GITHUB_ENV"
+          else
+            echo "::warning::DEBUG_KEYSTORE_B64 not set - APK signed with a throwaway key"
+          fi
+
+      - name: Unit tests and APKs
+        run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease
+
+      # Fails the build if an APK is not signed with the repo key: an APK
+      # signed with anything else will not install over the previous one.
+      - name: Check signing certificates
+        run: |
+          apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          want=""
+          if [ -n "$VAN_KEYSTORE" ]; then
+            want=$(keytool -list -v -keystore "$VAN_KEYSTORE" -storepass android \
+                   | sed -n 's/.*SHA256: //p' | head -1 | tr -d ':' | tr 'A-F' 'a-f')
+            echo "Keystore SHA-256: $want"
+          fi
+          for apk in app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/release/app-release.apk; do
+            got=$("$apksigner" verify --print-certs "$apk" \
+                  | sed -n 's/.*certificate SHA-256 digest: //p' | head -1)
+            echo "$(basename "$apk"): $got, $(stat -c %s "$apk") bytes"
+            if [ -n "$want" ] && [ "$got" != "$want" ]; then
+              echo "::error::$apk not signed with the repo key"
+              exit 1
+            fi
+          done
+
+      # A fixed download link for the phone:
+      #   https://github.com/<repo>/releases/download/app-latest/van-core.apk
+      # One rolling pre-release, replaced by every build of the app branches.
+      # The repo is public, so the APK is too; it holds no secrets.
+      - name: Publish to the app-latest release
+        if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'claude/cloud-app-development-9d5e08')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk van-core.apk
+          link="https://github.com/${GITHUB_REPOSITORY}/releases/download/app-latest/van-core.apk"
+          notes="Build ${GITHUB_RUN_NUMBER} from \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA::7}, $(date -u '+%Y-%m-%d %H:%M UTC').
+
+          Shrunk release build, signed with the repo key: sideload, installs over the previous build.
+
+          Direct link: ${link}"
+          git tag -f app-latest "$GITHUB_SHA"
+          git push -f origin refs/tags/app-latest
+          if gh release view app-latest >/dev/null 2>&1; then
+            gh release upload app-latest van-core.apk --clobber
+            gh release edit app-latest --notes "$notes"
+          else
+            gh release create app-latest van-core.apk --prerelease --title "van-core app (latest build)" --notes "$notes"
+          fi
+          echo "::notice::APK published: ${link}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: van-core-apk
+          path: app/build/outputs/apk/release/app-release.apk
+          retention-days: 30
+
+  # Runs the app and renders every widget state on an emulator, against the
+  # mock van-core, and uploads the screenshots. The widget cases go through
+  # RemoteViews.apply(), so a layout a launcher would refuse fails here.
+  screens:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Build app and test APKs
+        run: gradle --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease
+
+      # Reached from the emulator as 10.0.2.2:8080.
+      - name: Start mock van-core
+        run: nohup python3 tools/mock_core.py --port 8080 > mock.log 2>&1 &
+
+      - name: Run on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          # am instrument, not connectedAndroidTest: Gradle uninstalls the app
+          # afterwards, and the shots are pulled after the run.
+          # The Pixel launcher on a cold swiftshader emulator raises an ANR
+          # dialog over the screenshots; nothing here needs a launcher.
+          script: |
+            adb shell pm disable-user --user 0 com.google.android.apps.nexuslauncher || true
+            adb shell settings put global hide_error_dialogs 1 || true
+            adb shell am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS || true
+            adb install -r app/build/outputs/apk/debug/app-debug.apk
+            adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+            adb shell am instrument -w -r van.supervisor.app.test/androidx.test.runner.AndroidJUnitRunner > instrument.txt 2>&1 || true
+            adb pull /data/local/tmp/shots shots || true
+            adb install -r app/build/outputs/apk/release/app-release.apk
+            adb logcat -c
+            adb shell am start -W -n van.supervisor.app/.MainActivity
+            sleep 10
+            adb shell pidof van.supervisor.app > release-pid.txt || true
+            adb logcat -d -b crash > release-crash.txt || true
+            adb exec-out screencap -p > shots/release-launch.png || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: van-core-screens
+          path: |
+            shots/
+            instrument.txt
+            mock.log
+            release-crash.txt
+          retention-days: 14
+
+      - name: Fail on test failures
+        if: always()
+        run: |
+          cat instrument.txt || true
+          ! grep -qE "FAILURES!!!|INSTRUMENTATION_FAILED|Process crashed" instrument.txt
+          # The shrunk release build: launched, still alive after 10 s, no crash.
+          cat release-crash.txt || true
+          [ -s release-pid.txt ] || { echo "::error::release build not running after launch"; exit 1; }
+          [ ! -s release-crash.txt ] || { echo "::error::release build crashed"; exit 1; }
