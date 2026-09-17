@@ -21,9 +21,10 @@ SAMPLE = {
     "w_soc": "78%",
     "w_out": "48 W out",
     "w_in": "310 W in",
-    "w_fridge": "4.6 °C",
+    "w_fridge": "4.6 °C fridge",
+    "w_cabin": "24.0 °C cabin",
     "w_reason": "fridge block",
-    "w_age": "Updated 14:32",
+    "w_age": "14:32",
 }
 
 
@@ -38,7 +39,7 @@ def set_text(text):
     def fn(e):
         if "android:text=" in e:
             return re.sub(r'android:text="[^"]*"', f'android:text="{text}"', e)
-        return e.replace("android:maxLines", f'android:text="{text}"\n            android:maxLines', 1)
+        return e.replace("android:maxLines", f'android:text="{text}"\n                android:maxLines', 1)
     return fn
 
 
@@ -51,8 +52,12 @@ def main():
         s = edit(s, vid, set_text(text))
     s = edit(s, "w_state", lambda e: e.replace("@color/muted", "@color/warn"))
     s = edit(s, "w_dot", lambda e: e.replace("@color/dim", "@color/warn"))
-    s = edit(s, "w_bar_ok", lambda e: e.replace('android:visibility="gone"', 'android:progress="78"'))
-    s = edit(s, "w_bar_dim", lambda e: e.replace('android:progress="0"', 'android:visibility="gone"'))
+    # The liquid background is a bitmap the app draws at run time, which the
+    # picker never gets to run. A static vector stands in for it at the same
+    # 78 % the rest of the sample shows.
+    s = edit(s, "w_fill", lambda e: e.replace(
+        "android:importantForAccessibility",
+        'android:src="@drawable/battery_fill_preview"\n        android:importantForAccessibility', 1))
     (LAYOUT / "van_widget_preview.xml").write_text(s, encoding="utf-8", newline="\n")
 
 

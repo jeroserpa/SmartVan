@@ -651,3 +651,55 @@ charging.
 **Not a BLE interference problem.** The question that started this: van-core
 never wrote reg 13 (the soak build had no select at all). The one real effect
 of van-core holding the BLE link is that BrightEMS cannot connect.
+
+---
+
+## 2026-09-17 — D-17: the widget's charge is the background, and its animation is pushed frames
+
+**Context.** Two complaints about the home-screen widget: the temperature
+field showed nothing, and only one of the two probes was there at all.
+
+**The blank temperature was not a formatting bug.** `VanFeed` read the
+`/events` initial burst and stopped at the first `SocketTimeoutException`
+(2.5 s). van-core pushes one entity per loop and that loop also runs the BLE
+client, the display and the SD writer (CLAUDE.md §2), so a gap of a second or
+two mid-burst is ordinary. The result was a snapshot that reliably contained
+whatever is declared first in `nodes/van-core.yaml` — the ESP-FBot station
+sensors — and reliably lost what comes after: both temperatures, `parked` and
+`AC reason`. SOC and power always worked, which is why it read as "the
+temperature field is broken" rather than "the read is truncated".
+
+**Decided:**
+1. A quiet window is a pause, not an end. The read now needs three
+   consecutive 2 s windows of silence, bounded by a 14 s deadline.
+2. A short burst **merges** over the stored snapshot instead of replacing it,
+   with a 24 h per-entity forget. The widget already has a way to say "old";
+   it had no way to say "I did not manage to read this one".
+3. Cabin temperature joins the widget. Both are labelled in text — two bare
+   numbers side by side invite reading the cabin as the cabinet.
+
+**And the charge became the background.** Asked for: a battery filling with
+green liquid. The four-`ProgressBar` band bar went, because it showed the
+same number twice and its row is what the second temperature needed.
+
+- **A bitmap, not drawables.** RemoteViews has no shader and no path.
+  `BatteryFill.kt` draws one 240 px bitmap, stretched with `fitXY` — the
+  level is vertical, so horizontal stretch cannot make it read wrong.
+- **Pushed frames, not an animator.** An `AppWidgetHost` never runs our code,
+  so nothing moves unless we push it. `VanWidgetWorker` — which already has a
+  thread and holds the process up — pushes ~12 frames over ~0.8 s after a
+  refresh that actually moved the charge. A `BroadcastReceiver` cannot do
+  this, so every other redraw path lands on the final frame at once. An idle
+  home screen costs nothing, which is the only version worth having in a
+  project with a 2 W control budget (CLAUDE.md §5.4) — even on the phone.
+- **Legibility was measured, not eyeballed.** The card carries 11sp muted
+  text. At the chosen alphas the foreground keeps ~9:1 over the liquid and
+  the muted labels ~3.6:1, better than the dim timestamp already managed on
+  the bare card. The brightness is spent on a narrow meniscus and a bright
+  surface line — which is where the level is read — not on the body.
+
+**What this does not fix.** If a probe is genuinely dead the widget still
+shows `-- °C`, and it should: `fridge_temp` publishes NAN rather than a
+last-known value, and five minutes of that forces the inverter ON (§6
+`force_on`). Note the 1-Wire addresses in `nodes/van-core.yaml` are still
+`PLACEHOLDER`, so on that firmware neither probe reads at all.

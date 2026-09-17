@@ -14,7 +14,10 @@ class VanWidgetWorker(context: Context, params: WorkerParameters) : Worker(conte
         } else {
             VanStore.saveMiss(applicationContext)
         }
-        VanWidget.renderAll(applicationContext)
+        // renderFilling, not renderAll: this is the one place with a thread of
+        // its own to run the liquid up to the new charge on. It falls back to a
+        // single frame when nothing moved.
+        VanWidget.renderFilling(applicationContext)
         // Always success: being out of range is the normal state, and a retry
         // with backoff would only spend phone battery on it.
         return Result.success()

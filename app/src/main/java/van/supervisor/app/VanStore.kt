@@ -22,15 +22,34 @@ object VanStore {
         val refreshing: Boolean,
     )
 
+    /** Written into each stored state: when that entity was last read. */
+    private const val SEEN = "_seenAt"
+
+    /** An entity not seen for this long is dropped rather than kept forever. */
+    private const val FORGET_MS = 24 * 60 * 60_000L
+
     private fun prefs(context: Context) =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     fun saveOk(context: Context, states: Map<String, JSONObject>) {
+        val now = System.currentTimeMillis()
+        // Merge over what is already there rather than replacing it. A burst
+        // can arrive short - the phone walks out of range mid-read, or van-core
+        // is busy - and a short burst must not blank fields that were read a
+        // few minutes ago. The widget already says how old the snapshot is, so
+        // "stale" is a state it can show; "gone" is not.
         val json = JSONObject()
-        states.forEach { (id, state) -> json.put(id, state) }
+        val old = load(context).states
+        val names = old.keys()
+        while (names.hasNext()) {
+            val id = names.next()
+            val state = old.optJSONObject(id) ?: continue
+            if (now - state.optLong(SEEN, now) < FORGET_MS) json.put(id, state)
+        }
+        states.forEach { (id, state) -> json.put(id, state.put(SEEN, now)) }
         prefs(context).edit()
             .putString("states", json.toString())
-            .putLong("okAt", System.currentTimeMillis())
+            .putLong("okAt", now)
             .putBoolean("lastOk", true)
             .putBoolean("tried", true)
             .putBoolean("refreshing", false)
@@ -48,6 +67,18 @@ object VanStore {
 
     fun setRefreshing(context: Context, refreshing: Boolean) {
         prefs(context).edit().putBoolean("refreshing", refreshing).apply()
+    }
+
+    /**
+     * The liquid level the widget last drew, 0..1. Kept in prefs rather than in
+     * memory because the widget is redrawn from a fresh process as often as
+     * not, and an animation that always started from empty would make every
+     * quarter-hourly refresh look like a fault.
+     */
+    fun fill(context: Context): Float = prefs(context).getFloat("fill", 0f)
+
+    fun setFill(context: Context, level: Float) {
+        prefs(context).edit().putFloat("fill", level).apply()
     }
 
     fun load(context: Context): Snapshot {

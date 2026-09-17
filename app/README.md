@@ -39,21 +39,43 @@ bridge exists.
 
 ## Home-screen widget (read-only)
 
-Battery %, output/input power, AC state + `AC reason`, fridge temperature,
-and when it was read. Long-press the home screen → Widgets → van-core.
+Battery %, output/input power, AC state + `AC reason`, **both** probe
+temperatures, and when it was read. Long-press the home screen → Widgets →
+van-core.
 
-- **Two sizes:** full (3×2 and up: charge with a bar, power in/out, fridge,
+- **Two sizes:** full (3×2 and up: charge, power in/out, fridge and cabin,
   reason) and compact (2×1: charge and AC state). Android 12+ switches
   between them on resize by itself; older launchers re-render on resize.
-- **Battery bar colours** follow the load-shedding bands of CLAUDE.md §9
-  Phase 5: amber below 30 %, red below 15 %, grey when stale.
+- **The charge is the background.** `BatteryFill.kt` draws the card as a
+  vessel filling with liquid to the state of charge, and the worker pushes
+  ~12 frames (~0.8 s) so it runs up to a new reading rather than jumping.
+  A widget host never runs our code and RemoteViews has no animator, so a
+  pushed burst is the only animation available; it runs on a refresh that
+  actually moved the charge, and nowhere else, so an idle home screen costs
+  nothing. This replaced the old four-`ProgressBar` bar, which showed the
+  same number twice and cost the row that the second temperature now uses.
+- **Liquid colour** follows the load-shedding bands of CLAUDE.md §9 Phase 5:
+  green, amber below 30 %, red below 15 %, grey when stale.
+- **Both temperatures are labelled** (`4.6 °C fridge`, `24.0 °C cabin`), in
+  the same small-muted style as `in`/`out`. Two bare numbers side by side
+  would be a guessing game, and reading the cabin as the cabinet is the one
+  misreading that matters.
 - **Picker preview:** `res/layout/van_widget_preview.xml` is generated from
   `van_widget.xml` — run `python tools/make_widget_preview.py` after editing
-  the widget layout.
+  the widget layout. The picker cannot run our code, so the liquid is stood
+  in for by `res/drawable/battery_fill_preview.xml`, frozen at 78 %.
 
 - **Data:** the initial state burst of `/events`, read over the Wi-Fi
   network explicitly (`Network.openConnection`), then the connection is
   closed. No firmware change.
+- **The burst is read through pauses, not up to the first one.** van-core
+  pushes one entity per loop and that loop also runs BLE, the display and the
+  SD writer (CLAUDE.md §2), so a second or two of quiet mid-burst is normal.
+  Stopping there truncated the snapshot after the station sensors — which are
+  declared first in `van-core.yaml` — and left both temperatures, parked and
+  the AC reason permanently blank. It now ends on three consecutive quiet
+  windows (2 s each) or a 14 s deadline, and a short burst *merges* over the
+  stored one instead of replacing it.
 - **Refresh:** every 15 min (WorkManager; Android's floor, and deferred
   further in Doze), on ↻, and whenever the app is left.
 - **Out of range:** keeps the last values, greyed after 20 min, with
@@ -64,9 +86,15 @@ and when it was read. Long-press the home screen → Widgets → van-core.
 - **No controls,** on purpose: a Manual AC button on the home screen is the
   phantom-press problem of CLAUDE.md §6.
 - **The one duplication of entity ids outside the page.** `VanFeed.kt` names
-  eight ids that mirror the `E` map in `ui/index.html`; rename an entity in
-  YAML and both need updating. On the soak firmware, fridge temperature,
+  nine ids that mirror the `E` map in `ui/index.html`; rename an entity in
+  YAML and both need updating. On the soak firmware, both temperatures,
   parked and AC reason do not exist and simply stay blank.
+- **`-- °C` is not nothing.** The fridge sensor in `nodes/van-core.yaml`
+  publishes NAN rather than a last-known value once its probe times out, and
+  five minutes of that forces the inverter ON (CLAUDE.md §6 `force_on`). A
+  blank fridge reading next to a live cabin reading is a probe fault, not a
+  widget fault — check the 1-Wire addresses, which are still `PLACEHOLDER`
+  in the YAML.
 
 ## Build (cloud)
 

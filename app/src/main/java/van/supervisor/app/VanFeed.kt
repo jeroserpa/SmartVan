@@ -43,12 +43,22 @@ object VanFeed {
     const val OUT = "sensor-output_power"
     const val IN = "sensor-input_power"
     const val FRIDGE = "sensor-fridge_temperature"
+    const val CABIN = "sensor-cabin_temperature"
     const val BLE = "binary_sensor-p310_connected"
     const val AC_OUT = "binary_sensor-p310_ac_output_active"
     const val PARKED = "binary_sensor-parked"
     const val REASON = "text_sensor-ac_reason"
 
-    private val WANTED = setOf(SOC, OUT, IN, FRIDGE, BLE, AC_OUT, PARKED, REASON)
+    private val WANTED = setOf(SOC, OUT, IN, FRIDGE, CABIN, BLE, AC_OUT, PARKED, REASON)
+
+    /** Per-line read timeout. A gap this long is a pause, not the end. */
+    private const val READ_TIMEOUT_MS = 2_000
+
+    /** Consecutive quiet windows before the burst is taken as finished. */
+    private const val QUIET_WINDOWS = 3
+
+    /** Hard bound on the whole read, whatever the stream does. */
+    private const val BURST_MS = 14_000L
 
     /** Entity id -> ESPHome state JSON, or null if van-core was not reachable. */
     fun fetch(context: Context): Map<String, JSONObject>? {
@@ -104,11 +114,12 @@ object VanFeed {
     private fun readInitialBurst(network: Network): Map<String, JSONObject>? {
         val conn = network.openConnection(URL(eventsUrlOverride ?: EVENTS_URL)) as HttpURLConnection
         conn.connectTimeout = 4_000
-        // The stream never ends on its own. A quiet gap after the burst is the
-        // end-of-snapshot signal; the deadline bounds the keep-alive pings.
-        conn.readTimeout = 2_500
+        // The stream never ends on its own. A run of quiet windows after the
+        // burst is the end-of-snapshot signal; the deadline bounds the
+        // keep-alive pings.
+        conn.readTimeout = READ_TIMEOUT_MS
         conn.setRequestProperty("Accept", "text/event-stream")
-        val deadline = SystemClock.elapsedRealtime() + 10_000
+        val deadline = SystemClock.elapsedRealtime() + BURST_MS
         val states = HashMap<String, JSONObject>()
         var sawEsphome = false
         try {
@@ -116,12 +127,21 @@ object VanFeed {
             val reader = conn.inputStream.bufferedReader()
             var event = "message"
             val data = StringBuilder()
+            var quiet = 0
             while (SystemClock.elapsedRealtime() < deadline) {
                 val line = try {
                     reader.readLine()
                 } catch (e: SocketTimeoutException) {
-                    null
+                    // A gap mid-burst is not the end of it. van-core pushes one
+                    // entity per loop, and that loop also runs the BLE client,
+                    // the display and the SD writer (CLAUDE.md section 2), so a
+                    // pause of a second or two is normal. Stopping at the first
+                    // one truncated the snapshot after the station sensors -
+                    // which are declared first - and everything declared later
+                    // (both temperatures, parked, the AC reason) stayed blank.
+                    if (++quiet >= QUIET_WINDOWS) break else continue
                 } ?: break
+                quiet = 0
 
                 when {
                     line.isEmpty() -> {

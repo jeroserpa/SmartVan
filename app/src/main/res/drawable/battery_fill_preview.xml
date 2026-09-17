@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Stand-in for the liquid background, in the widget picker only. The real one
+     is a bitmap BatteryFill.kt draws at the measured charge; a picker never runs
+     our code, so this is frozen at the 78 % the rest of the preview shows. Keep
+     the stops and the wave in step with BatteryFill if either changes. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="240dp"
+    android:height="150dp"
+    android:viewportWidth="240"
+    android:viewportHeight="150">
+    <path android:pathData="M0.0,33.00 L4.0,33.43 L8.0,33.84 L12.0,34.21 L16.0,34.52 L20.0,34.76 L24.0,34.92 L28.0,35.00 L32.0,34.99 L36.0,34.90 L40.0,34.74 L44.0,34.53 L48.0,34.28 L52.0,34.01 L56.0,33.74 L60.0,33.47 L64.0,33.22 L68.0,33.01 L72.0,32.83 L76.0,32.70 L80.0,32.60 L84.0,32.53 L88.0,32.48 L92.0,32.46 L96.0,32.43 L100.0,32.40 L104.0,32.37 L108.0,32.31 L112.0,32.23 L116.0,32.14 L120.0,32.03 L124.0,31.91 L128.0,31.80 L132.0,31.70 L136.0,31.63 L140.0,31.61 L144.0,31.63 L148.0,31.71 L152.0,31.86 L156.0,32.07 L160.0,32.35 L164.0,32.67 L168.0,33.03 L172.0,33.42 L176.0,33.81 L180.0,34.19 L184.0,34.53 L188.0,34.82 L192.0,35.04 L196.0,35.17 L200.0,35.22 L204.0,35.17 L208.0,35.04 L212.0,34.82 L216.0,34.53 L220.0,34.19 L224.0,33.81 L228.0,33.42 L232.0,33.03 L236.0,32.67 L240.0,32.35 L240,150 L0,150 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="0"
+                android:startY="31.47"
+                android:endX="0"
+                android:endY="150"
+                android:type="linear">
+                <item android:color="#425ED28E" android:offset="0" />
+                <item android:color="#1C5ED28E" android:offset="0.139" />
+                <item android:color="#105ED28E" android:offset="1" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path
+        android:pathData="M0.0,33.00 L4.0,33.43 L8.0,33.84 L12.0,34.21 L16.0,34.52 L20.0,34.76 L24.0,34.92 L28.0,35.00 L32.0,34.99 L36.0,34.90 L40.0,34.74 L44.0,34.53 L48.0,34.28 L52.0,34.01 L56.0,33.74 L60.0,33.47 L64.0,33.22 L68.0,33.01 L72.0,32.83 L76.0,32.70 L80.0,32.60 L84.0,32.53 L88.0,32.48 L92.0,32.46 L96.0,32.43 L100.0,32.40 L104.0,32.37 L108.0,32.31 L112.0,32.23 L116.0,32.14 L120.0,32.03 L124.0,31.91 L128.0,31.80 L132.0,31.70 L136.0,31.63 L140.0,31.61 L144.0,31.63 L148.0,31.71 L152.0,31.86 L156.0,32.07 L160.0,32.35 L164.0,32.67 L168.0,33.03 L172.0,33.42 L176.0,33.81 L180.0,34.19 L184.0,34.53 L188.0,34.82 L192.0,35.04 L196.0,35.17 L200.0,35.22 L204.0,35.17 L208.0,35.04 L212.0,34.82 L216.0,34.53 L220.0,34.19 L224.0,33.81 L228.0,33.42 L232.0,33.03 L236.0,32.67 L240.0,32.35"
+        android:strokeColor="#D85ED28E"
+        android:strokeWidth="1.6" />
+</vector>

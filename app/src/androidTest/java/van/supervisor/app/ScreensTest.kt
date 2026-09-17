@@ -98,6 +98,15 @@ class ScreensTest {
         val states = VanFeed.fetch(ctx)
         assertNotNull("no snapshot from the mock van-core", states)
         assertNotNull("battery not recognised in the mock's stream", states!![VanFeed.SOC])
+        // The burst used to be cut at the first quiet window, which kept the
+        // station sensors (declared first) and dropped everything after them.
+        // These three are what that lost, so they are what guards it.
+        // (Not PARKED: tools/mock_core.py does not define it - the whole of
+        // parked mode is missing from the mock, which is why the web UI's
+        // parked switch sits disabled against it.)
+        assertNotNull("fridge temperature missing from the burst", states[VanFeed.FRIDGE])
+        assertNotNull("cabin temperature missing from the burst", states[VanFeed.CABIN])
+        assertNotNull("AC reason missing from the burst", states[VanFeed.REASON])
         VanStore.saveOk(ctx, states)
         val now = System.currentTimeMillis()
         renderWidget("widget-0-from-mock", VanStore.load(ctx), now)
@@ -107,26 +116,26 @@ class ScreensTest {
     fun b2_widgetStates() {
         val now = System.currentTimeMillis()
         val min = 60_000L
-        val live = states(soc = 78.4, out = 48.0, inp = 310.0, fridge = 4.6,
+        val live = states(soc = 78.4, out = 48.0, inp = 310.0, fridge = 4.6, cabin = 24.0,
                           ble = true, ac = true, parked = false, reason = "fridge block")
         val cases = listOf(
             "widget-1-live" to snap(live, okAt = now - 2 * min),
             "widget-2-low-battery" to snap(
-                states(soc = 13.0, out = 0.0, inp = 0.0, fridge = 6.8,
+                states(soc = 13.0, out = 0.0, inp = 0.0, fridge = 6.8, cabin = 31.5,
                        ble = true, ac = false, parked = false, reason = "rest block"),
                 okAt = now - 5 * min),
             "widget-3-warn-battery" to snap(
-                states(soc = 24.0, out = 1450.0, inp = 0.0, fridge = 5.1,
+                states(soc = 24.0, out = 1450.0, inp = 0.0, fridge = 5.1, cabin = 26.2,
                        ble = true, ac = true, parked = false, reason = "manual (cooking)"),
                 okAt = now - min),
             "widget-4-stale" to snap(live, okAt = now - 190 * min, lastOk = false),
             "widget-5-out-of-range-recent" to snap(live, okAt = now - 8 * min, lastOk = false),
             "widget-6-parked" to snap(
-                states(soc = 64.0, out = 0.0, inp = 120.0, fridge = 19.5,
+                states(soc = 64.0, out = 0.0, inp = 120.0, fridge = 19.5, cabin = 19.8,
                        ble = true, ac = false, parked = true, reason = "parked"),
                 okAt = now - 3 * min),
             "widget-7-p310-offline" to snap(
-                states(soc = 71.0, out = null, inp = null, fridge = 4.9,
+                states(soc = 71.0, out = null, inp = null, fridge = null, cabin = 22.4,
                        ble = false, ac = null, parked = false, reason = "BLE lost"),
                 okAt = now - min),
             "widget-8-soak-firmware" to snap(
@@ -208,13 +217,14 @@ class ScreensTest {
         .put("state", when (x) { true -> "ON"; false -> "OFF"; null -> "NA" })
 
     private fun states(
-        soc: Double?, out: Double?, inp: Double?, fridge: Double?,
+        soc: Double?, out: Double?, inp: Double?, fridge: Double?, cabin: Double?,
         ble: Boolean?, ac: Boolean?, parked: Boolean?, reason: String?,
     ): JSONObject = JSONObject()
         .put(VanFeed.SOC, v(soc))
         .put(VanFeed.OUT, v(out))
         .put(VanFeed.IN, v(inp))
         .put(VanFeed.FRIDGE, v(fridge))
+        .put(VanFeed.CABIN, v(cabin))
         .put(VanFeed.BLE, b(ble))
         .put(VanFeed.AC_OUT, b(ac))
         .put(VanFeed.PARKED, b(parked))
