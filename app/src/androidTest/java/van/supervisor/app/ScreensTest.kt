@@ -138,9 +138,20 @@ class ScreensTest {
                 states(soc = 71.0, out = null, inp = null, fridge = null, cabin = 22.4,
                        ble = false, ac = null, parked = false, reason = "BLE lost"),
                 okAt = now - min),
-            // The soak build has no DS18B20 at all: its only temperature is the
-            // ESP32 die, named from friendly_name in common/base.yaml. The
-            // widget should show that one, labelled, not two dashes.
+            // nodes/van-core-probes.yaml (soak 2) publishes the same two
+            // probes as "Fridge probe"/"Cabin probe" and has no arbiter. Both
+            // must show, and the board-temperature fallback must NOT hijack
+            // the row just because the van-core spelling is absent.
+            "widget-7b-probe-firmware" to snap(
+                JSONObject()
+                    .put(VanFeed.SOC, v(66.0)).put(VanFeed.OUT, v(84.0)).put(VanFeed.IN, v(0.0))
+                    .put(VanFeed.BLE, b(true)).put(VanFeed.AC_OUT, b(true))
+                    .put(VanFeed.FRIDGE_PROBE, v(6.2)).put(VanFeed.CABIN_PROBE, v(21.7))
+                    .put("sensor-van_core_board_temperature", v(44.0)),
+                okAt = now - min),
+            // The first soak build has no DS18B20 at all: its only temperature
+            // is the ESP32 die, named from friendly_name in common/base.yaml.
+            // The widget should show that one, labelled, not two dashes.
             "widget-8-soak-firmware" to snap(
                 JSONObject()
                     .put(VanFeed.SOC, v(50.3)).put(VanFeed.OUT, v(59.0)).put(VanFeed.IN, v(0.0))

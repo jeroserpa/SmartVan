@@ -17,6 +17,27 @@ class VanFeedKeyTest {
         )
     }
 
+    /**
+     * The regression that kept the temperatures blank on the bench node:
+     * nodes/van-core-probes.yaml names them "Fridge probe" / "Cabin probe",
+     * nodes/van-core.yaml names them "Fridge temperature" / "Cabin
+     * temperature". Both spellings must resolve to a known id.
+     */
+    @Test
+    fun bothFirmwaresNameTheProbesAndBothAreAccepted() {
+        assertEquals("sensor-fridge_probe", VanFeed.key("sensor/Fridge probe"))
+        assertEquals("sensor-cabin_probe", VanFeed.key("sensor/Cabin probe"))
+        for (id in listOf("sensor/Fridge temperature", "sensor/Fridge probe")) {
+            assertTrue("$id is not accepted as the fridge", VanFeed.key(id) in VanFeed.FRIDGE_IDS)
+        }
+        for (id in listOf("sensor/Cabin temperature", "sensor/Cabin probe")) {
+            assertTrue("$id is not accepted as the cabin", VanFeed.key(id) in VanFeed.CABIN_IDS)
+        }
+        // The roles must stay disjoint: the cabin must never land in the
+        // cabinet's slot, whichever firmware is flashed.
+        assertTrue(VanFeed.FRIDGE_IDS.none { it in VanFeed.CABIN_IDS })
+    }
+
     @Test
     fun bothProbesNormalise() {
         assertEquals("sensor-fridge_temperature", VanFeed.key("sensor/Fridge temperature"))
@@ -69,9 +90,9 @@ class VanFeedKeyTest {
     @Test
     fun everyWidgetKeyIsAFixedPoint() {
         val keys = listOf(
-            VanFeed.SOC, VanFeed.OUT, VanFeed.IN, VanFeed.FRIDGE, VanFeed.CABIN,
-            VanFeed.BLE, VanFeed.AC_OUT, VanFeed.PARKED, VanFeed.REASON,
-        )
+            VanFeed.SOC, VanFeed.OUT, VanFeed.IN, VanFeed.BLE, VanFeed.AC_OUT,
+            VanFeed.PARKED, VanFeed.REASON,
+        ) + VanFeed.FRIDGE_IDS + VanFeed.CABIN_IDS
         for (k in keys) assertEquals(k, VanFeed.key(k))
     }
 }

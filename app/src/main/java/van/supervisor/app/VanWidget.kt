@@ -264,10 +264,10 @@ class VanWidget : AppWidgetProvider() {
                 soc = num(s, VanFeed.SOC),
                 out = num(s, VanFeed.OUT),
                 inp = num(s, VanFeed.IN),
-                fridge = num(s, VanFeed.FRIDGE),
-                cabin = num(s, VanFeed.CABIN),
+                fridge = num(s, VanFeed.FRIDGE_IDS),
+                cabin = num(s, VanFeed.CABIN_IDS),
                 board = boardTemp(s),
-                probes = s.has(VanFeed.FRIDGE) || s.has(VanFeed.CABIN),
+                probes = present(s, VanFeed.FRIDGE_IDS) || present(s, VanFeed.CABIN_IDS),
                 state = state,
                 stateColor = stateColor,
                 reason = reason,
@@ -428,6 +428,20 @@ class VanWidget : AppWidgetProvider() {
             val state = j.optString("state").takeIf { it.isNotEmpty() } ?: return null
             return LEADING_NUMBER.find(state)?.value?.toDoubleOrNull()?.takeIf { it.isFinite() }
         }
+
+        /** The first of [ids] the node publishes a usable number for. */
+        private fun num(s: JSONObject, ids: List<String>): Double? {
+            for (id in ids) num(s, id)?.let { return it }
+            return null
+        }
+
+        /**
+         * Whether the node publishes any of [ids] at all — a different question
+         * from whether one of them reads. A probe that has gone NAN is present
+         * and must show "-- °C"; a node with no probe at all is not.
+         */
+        private fun present(s: JSONObject, ids: List<String>): Boolean =
+            ids.any { s.has(it) }
 
         private val LEADING_NUMBER = Regex("^[+-]?\\d+(\\.\\d+)?")
 

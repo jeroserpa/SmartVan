@@ -42,8 +42,20 @@ object VanFeed {
     const val SOC = "sensor-battery"
     const val OUT = "sensor-output_power"
     const val IN = "sensor-input_power"
+    // The two probes are named differently by the two firmwares that carry
+    // them, so each is a list and the widget takes whichever the node actually
+    // publishes. This is not hypothetical tolerance: it is the reason the
+    // temperatures were blank on the bench node.
+    //   nodes/van-core.yaml         "Fridge temperature" / "Cabin temperature"
+    //   nodes/van-core-probes.yaml  "Fridge probe"       / "Cabin probe"
     const val FRIDGE = "sensor-fridge_temperature"
     const val CABIN = "sensor-cabin_temperature"
+    const val FRIDGE_PROBE = "sensor-fridge_probe"
+    const val CABIN_PROBE = "sensor-cabin_probe"
+
+    /** Preferred first. A node publishes one of each, never both. */
+    val FRIDGE_IDS = listOf(FRIDGE, FRIDGE_PROBE)
+    val CABIN_IDS = listOf(CABIN, CABIN_PROBE)
     const val BLE = "binary_sensor-p310_connected"
     const val AC_OUT = "binary_sensor-p310_ac_output_active"
     const val PARKED = "binary_sensor-parked"
@@ -63,7 +75,17 @@ object VanFeed {
      */
     const val BOARD_SUFFIX = "board_temperature"
 
-    private val WANTED = setOf(SOC, OUT, IN, FRIDGE, CABIN, BLE, AC_OUT, PARKED, REASON)
+    /**
+     * The snapshot is complete once every role has one of its ids. Roles, not
+     * a flat set of ids, because a node that names its probes one way can
+     * never satisfy the other way — a flat set holding both spellings would
+     * mean the early exit never fires on any firmware, and every read would
+     * pay the full quiet-window wait.
+     */
+    private val WANTED: List<List<String>> = listOf(
+        listOf(SOC), listOf(OUT), listOf(IN), FRIDGE_IDS, CABIN_IDS,
+        listOf(BLE), listOf(AC_OUT), listOf(PARKED), listOf(REASON),
+    )
 
     /** Per-line read timeout. A gap this long is a pause, not the end. */
     private const val READ_TIMEOUT_MS = 2_000
@@ -170,7 +192,7 @@ object VanFeed {
                         }
                         event = "message"
                         data.setLength(0)
-                        if (states.keys.containsAll(WANTED)) break
+                        if (WANTED.all { role -> role.any { states.containsKey(it) } }) break
                     }
                     line.startsWith("event:") -> event = line.substring(6).trim()
                     line.startsWith("data:") -> {

@@ -85,13 +85,21 @@ van-core.
   `P310 link down` (amber).
 - **No controls,** on purpose: a Manual AC button on the home screen is the
   phantom-press problem of CLAUDE.md §6.
+- **Each probe is a list of ids, not one id**, because the two firmwares that
+  carry them name them differently: `nodes/van-core.yaml` publishes
+  `Fridge temperature` / `Cabin temperature`, `nodes/van-core-probes.yaml`
+  (soak 2) publishes `Fridge probe` / `Cabin probe`. The widget takes
+  whichever the node actually has. This is the reason the temperatures were
+  blank on the bench node while its own web page showed them.
 - **The one duplication of entity ids outside the page.** `VanFeed.kt` names
-  nine ids that mirror the `E` map in `ui/index.html`; rename an entity in
-  YAML and both need updating. On the soak firmware, both temperatures,
-  parked and AC reason do not exist.
-- **On a node with no DS18B20, the row shows the board temperature instead**,
-  labelled `board` and with the thermometer icon, rather than two dashes.
-  `nodes/van-core-soak.yaml` has no `one_wire:` bus at all — its only
+  the ids that mirror the `E` map in `ui/index.html`; rename an entity in
+  YAML and both need updating. On `van-core-soak.yaml` and
+  `van-core-probes.yaml` there is no arbiter, so parked and AC reason do not
+  exist and stay blank.
+- **On a node with no DS18B20 at all, the row shows the board temperature
+  instead**, labelled `board` and with the thermometer icon, rather than two
+  dashes. That is `nodes/van-core-soak.yaml` (soak 1) and nothing else: it
+  has no `one_wire:` bus — its only
   temperature is `internal_temperature` from `common/base.yaml`, the ESP32-S3
   die. That is also the only temperature on its web page, so the widget and
   the page now agree. The id is matched by **suffix**

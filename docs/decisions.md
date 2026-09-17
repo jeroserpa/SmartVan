@@ -701,16 +701,40 @@ same number twice and its row is what the second temperature needed.
 **What this does not fix.** If a probe is genuinely dead the widget still
 shows `-- °C`, and it should: `fridge_temp` publishes NAN rather than a
 last-known value, and five minutes of that forces the inverter ON (§6
-`force_on`). Note the 1-Wire addresses in `nodes/van-core.yaml` are still
-`PLACEHOLDER`, so on that firmware neither probe reads at all.
+`force_on`). The 1-Wire addresses in `nodes/van-core.yaml` are no longer
+`PLACEHOLDER` — soak 2 measured them (M14) and they are pinned.
 
-**Addendum, same day — the soak firmware has no probes, and that was the
-second half of the report.** "The temp probes are running, I can see them on
-the webpage but not on the widget", against `van-core-soak`. It does not have
-them: there is no `one_wire:` bus, no `dallas_temp` and no fridge or cabin
-sensor anywhere in `nodes/van-core-soak.yaml`. Its only temperature is
+**Addendum, same day — corrected.** The report was "the temp probes are
+running, I can see them on the webpage but not on the widget". The first
+answer here was that the soak firmware has no probes. That was **wrong**: it
+was read against `nodes/van-core-soak.yaml` (soak 1) on a branch cut before
+`nodes/van-core-probes.yaml` (soak 2) existed. Soak 2 has both DS18B20s,
+pinned by address, and they were reading.
+
+**The real fault is a name.** Soak 2 publishes the probes as `Fridge probe`
+and `Cabin probe` — `sensor-fridge_probe` and `sensor-cabin_probe` — where
+`nodes/van-core.yaml` publishes `Fridge temperature` and `Cabin temperature`.
+The widget named one spelling, so it matched nothing, while the node's own
+page listed both entities by name and showed them fine. Exactly the symptom
+reported, and nothing to do with the truncated burst above — that was a
+second, real fault on the same field.
+
+**Decided: each probe is a list of candidate ids, resolved to whichever the
+node publishes.** `VanFeed.FRIDGE_IDS` / `CABIN_IDS`, first match wins. The
+`/events` early exit became role-based for the same reason: a flat set
+holding both spellings could never be satisfied by any single firmware, so
+every read would have paid the full quiet-window wait.
+
+**The lesson is the one CLAUDE.md §11 already states** — entity ids are
+duplicated between the YAML, `ui/index.html` and `VanFeed.kt`, and a rename
+in one is silent in the others. A third firmware that names these probes a
+third way will break it again. The cheap guard is a unit test that pins every
+accepted spelling, which now exists.
+
+**`van-core-soak.yaml` (soak 1) genuinely has no probes**, and that part
+stands: no `one_wire:` bus, no `dallas_temp`. Its only temperature is
 `internal_temperature` from `common/base.yaml` — the ESP32-S3 die, published
-as `Van core soak board temperature`. That is what its web page shows.
+as `Van core soak board temperature`.
 
 **Decided: on a node with no DS18B20, the widget shows the board temperature
 in that row**, labelled `board`, with the thermometer icon rather than the
@@ -726,9 +750,11 @@ exactly the misreading that matters:
   `sensor-van_core_board_temperature` on van-core and
   `sensor-van_core_soak_board_temperature` on the soak build. Listing both
   would be wrong again at the third node.
-- **Presence, not value, decides.** The moment either probe *entity* exists
-  the fridge and cabin cells come back, NAN or not — a dead probe must read
-  as `-- °C fridge`, never get quietly replaced by a die temperature.
+- **Presence, not value, decides** — and presence means *any* accepted
+  spelling. The moment either probe entity exists under any of its ids the
+  fridge and cabin cells come back, NAN or not. A dead probe must read as
+  `-- °C fridge`; and on soak 2 the die temperature must not take the row
+  while two real probes are publishing under a name the widget did not know.
 - **Never unlabelled.** It reads `47.5 °C board`, and the widget is the only
   place in the project where a chip temperature and a food temperature could
   ever sit in the same slot.
