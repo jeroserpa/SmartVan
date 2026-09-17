@@ -186,9 +186,15 @@ In order of how often it is the answer:
    in a Custom Tab, and those hand downloads off poorly, APKs worst of all.
 2. **Turn battery saver off.** It defers the background work that finalises a
    download, so it completes and then never lands.
-3. **Take `van-core-<build>-apk.zip`** from the release notes — the identical
-   bytes under a name no browser treats specially. Download, rename the
-   `.zip` away, tap it.
+3. **Take `van-core-<build>.zip`** from the release notes — the same build
+   inside a zip, which no browser treats specially. Download, extract, tap
+   the `van-core.apk` inside.
+
+   It is a genuine archive, and it has to be: an earlier version was the apk
+   under a `.zip` name, needing a rename back. Opening one of those in a file
+   manager shows the apk's own insides — `classes.dex`, `res/`, `META-INF` —
+   with no `.apk` in sight, because **an apk is itself a zip**. That looks
+   exactly like a broken download and is not worth the confusion it costs.
 
 The notes list all three links and the one `sha256` they share.
 
