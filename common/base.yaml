@@ -42,6 +42,10 @@ sensor:
     entity_category: diagnostic
     update_interval: 60s
   - platform: internal_temperature
+    # The chip has one temperature sensor and IDF allows one driver instance:
+    # a node that wants to log it references this id rather than adding a
+    # second internal_temperature (which silently never publishes).
+    id: board_temp
     name: "${friendly_name} board temperature"
     entity_category: diagnostic
     update_interval: 60s
