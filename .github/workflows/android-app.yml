@@ -92,8 +92,16 @@ jobs:
           # always a URL that has never been downloaded before, so there is
           # nothing stale to resume against. It also says what you installed.
           cp van-core.apk "van-core-${GITHUB_RUN_NUMBER}.apk"
+          # The same bytes under a .zip name. GitHub types assets by extension,
+          # so an .apk is served as application/vnd.android.package-archive -
+          # the MIME that makes a phone browser run its APK path: a dangerous
+          # file confirmation and a Safe Browsing verdict, either of which can
+          # leave a download sitting at 100% for good. A .zip is just a file.
+          # Download it, rename the .zip away, tap it.
+          cp van-core.apk "van-core-${GITHUB_RUN_NUMBER}-apk.zip"
           link="https://github.com/${GITHUB_REPOSITORY}/releases/download/app-latest/van-core.apk"
           fresh="https://github.com/${GITHUB_REPOSITORY}/releases/download/app-latest/van-core-${GITHUB_RUN_NUMBER}.apk"
+          zip="https://github.com/${GITHUB_REPOSITORY}/releases/download/app-latest/van-core-${GITHUB_RUN_NUMBER}-apk.zip"
           sha=$(sha256sum van-core.apk | cut -d' ' -f1)
           notes="Build ${GITHUB_RUN_NUMBER} from \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA::7}, $(date -u '+%Y-%m-%d %H:%M UTC').
 
@@ -101,18 +109,24 @@ jobs:
 
           Direct link: ${link}
 
-          If that one stalls at 100% on the phone, the browser is resuming a stale partial of an
-          earlier build at the same address. This link is new every build, so it cannot:
+          A link that is new every build, if the rolling one above stalls:
           ${fresh}
 
-          \`sha256 ${sha}\`"
+          **If a download sits at 100% and never finishes**, the browser is stuck in its APK
+          handling, not on the network. Two things to try, in order: open the link in Chrome
+          itself rather than the in-app browser some apps use, and turn battery saver off.
+          Failing both, this is the identical file under a name no browser treats specially -
+          download it, rename the \`.zip\` away, and tap it:
+          ${zip}
+
+          All three are the same bytes: \`sha256 ${sha}\`"
           git tag -f app-latest "$GITHUB_SHA"
           git push -f origin refs/tags/app-latest
           if gh release view app-latest >/dev/null 2>&1; then
-            gh release upload app-latest van-core.apk "van-core-${GITHUB_RUN_NUMBER}.apk" --clobber
+            gh release upload app-latest van-core.apk "van-core-${GITHUB_RUN_NUMBER}.apk" "van-core-${GITHUB_RUN_NUMBER}-apk.zip" --clobber
             gh release edit app-latest --notes "$notes"
           else
-            gh release create app-latest van-core.apk "van-core-${GITHUB_RUN_NUMBER}.apk" --prerelease --title "van-core app (latest build)" --notes "$notes"
+            gh release create app-latest van-core.apk "van-core-${GITHUB_RUN_NUMBER}.apk" "van-core-${GITHUB_RUN_NUMBER}-apk.zip" --prerelease --title "van-core app (latest build)" --notes "$notes"
           fi
           echo "::notice::APK published: ${link}"
 

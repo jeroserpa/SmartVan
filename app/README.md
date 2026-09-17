@@ -151,13 +151,24 @@ Any push touching `app/` runs `.github/workflows/android-app.yml`.
 — a rolling pre-release that every build of `main` (and, until it is merged,
 the app branch) replaces. Public, like the repo; the APK holds no secrets.
 
-**If that link stalls at 100 %** — all bytes received, still "Downloading…" —
-the browser is resuming a stale partial of an *earlier* build, because the
-rolling asset is replaced in place and browsers cache and resume by URL. The
-release notes carry a second link, `van-core-<build>.apk`, which is a new
-address every build and so has nothing stale to resume against. A `?v=<build>`
-query on the rolling link does the same thing in one tap. Neither changes the
-file: the notes also print its `sha256` so it can be checked.
+**If a download sits at 100 %** — all bytes received, still "Downloading…" —
+the network is not the problem: the asset verifies byte for byte against the
+digest in the release notes, and the CDN resumes correctly. The browser is
+stuck in its **APK handling**. GitHub types assets by extension, so an `.apk`
+is served as `application/vnd.android.package-archive`, and that MIME is what
+triggers a dangerous-file confirmation and a Safe Browsing verdict — either
+of which can hang after the bytes have arrived.
+
+In order of how often it is the answer:
+1. **Open the link in Chrome itself.** A link tapped inside another app opens
+   in a Custom Tab, and those hand downloads off poorly, APKs worst of all.
+2. **Turn battery saver off.** It defers the background work that finalises a
+   download, so it completes and then never lands.
+3. **Take `van-core-<build>-apk.zip`** from the release notes — the identical
+   bytes under a name no browser treats specially. Download, rename the
+   `.zip` away, tap it.
+
+The notes list all three links and the one `sha256` they share.
 
 Or from the run's artifacts (zip, needs a GitHub login):
 
