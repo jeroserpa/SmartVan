@@ -1,0 +1,394 @@
+# van-core-probes - soak #2: both DS18B20s, the fridge plug, and a PSRAM log.
+#
+# Same rule as van-core-soak.yaml: READ-ONLY toward the P310. No arbiter, no
+# fbot switch, nothing that can write to the station. The inverter is left on
+# and the fridge runs on its own mechanical thermostat at its DEFAULT setting,
+# so this is the baseline every later imposed-cycling result is compared with.
+#
+# What one run answers (analysis: tools/soak_report.py, plan: docs/soak-probes.md):
+#   - where the cabinet actually sits on the default thermostat, and how much
+#     it swings; M-series only has the warmest setting (7-8 C)
+#   - whether this inverter compressor ever stops at the default setting, and
+#     if so for how long: every stop is a free coast-rate measurement (8.5)
+#   - fridge energy per day against cabin temperature: the heat-leak slope,
+#     i.e. what August will cost
+#   - fridge power separated from everything else on the AC bus (the plug),
+#     so station overhead comes out of the SOC balance without the cooking
+#   - door openings, as the fast excursions the control filter must ignore
+#   - the M12 gaps: internal RAM (not PSRAM-dominated heap), time to first BLE
+#     connection after boot, and die temperature with the backlight blanked
+#
+# Wiring: docs/soak-probes.md. Probes are pinned by address (M14).
+#
+# LOG: the van-core Android app opens straight onto it (/ui). In a browser,
+# http://192.168.4.1/soak with mobile data off (M12). Opening the page syncs
+# the clock from the phone - do it once after flashing or rows have no
+# wall-clock time. Downloads need Chrome until the app can save files.
+# PSRAM survives crashes and OTA, NOT a power cut: download before unplugging
+# the board.
+
+substitutions:
+  node_name: van-core-probes
+  friendly_name: Van core
+  p310_mac: "E8:06:90:C7:AD:F6"
+  pin_onewire: GPIO4
+  plug_ip: "192.168.4.12"
+
+esphome:
+  name: ${node_name}
+  friendly_name: ${friendly_name}
+  comment: "Soak 2: probes + fridge plug + PSRAM log (read-only to the P310)"
+  min_version: 2025.7.0
+  includes:
+    - soak_includes.h
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+
+psram:
+  mode: octal
+  speed: 80MHz
+  # Must be false: the noinit PSRAM section the log lives in is incompatible
+  # with "boot without PSRAM" (IDF Kconfig SPIRAM_IGNORE_NOTFOUND).
+  ignore_not_found: false
+
+packages:
+  base: !include ../common/base.yaml
+
+external_components:
+  - source: github://ylianst/esp-fbot
+    refresh: 1d
+  - source:
+      type: local
+      path: ../components
+    components: [soak_log]
+
+wifi:
+  ap:
+    ssid: !secret wifi_ssid
+    password: !secret wifi_password
+  # captive_portal deliberately absent - see van-core-soak.yaml.
+
+# Kept from van-core-soak.yaml, and load-bearing: the defaulted 100 % scan
+# window starves the SoftAP handshake (M9, M10).
+esp32_ble_tracker:
+  scan_parameters:
+    interval: 320ms
+    window: 30ms
+
+ble_client:
+  - mac_address: ${p310_mac}
+    id: p310_ble
+
+fbot:
+  id: p310
+  polling_interval: 5s
+  settings_polling_interval: 60s
+  poll_timeout: 15s
+  max_poll_failures: 3
+
+# -----------------------------------------------------------------------------
+# 1-Wire: both probes on GPIO4, 3-wire mode, 4.7k to 3V3 at this end.
+# -----------------------------------------------------------------------------
+one_wire:
+  - platform: gpio
+    pin: ${pin_onewire}
+    id: bus_1w
+
+# -----------------------------------------------------------------------------
+# Display, backlight blanked after 2 min (M12: re-measure die temperature the
+# way the real node runs). "Display on" in the web UI wakes it.
+# -----------------------------------------------------------------------------
+spi:
+  clk_pin: GPIO40
+  mosi_pin: GPIO45
+
+font:
+  - file: "gfonts://Roboto"
+    id: font_med
+    size: 20
+  - file: "gfonts://Roboto"
+    id: font_small
+    size: 14
+
+display:
+  - platform: st7789v
+    id: van_display
+    model: Custom
+    width: 172
+    height: 320
+    offset_width: 34
+    offset_height: 0
+    rotation: 90
+    cs_pin: GPIO42
+    dc_pin: GPIO41
+    reset_pin: GPIO39
+    update_interval: 2s
+    lambda: |-
+      // A glance, not a UI: are both probes and the plug reporting?
+      auto f = [](sensor::Sensor *s) { return s->has_state() ? s->state : NAN; };
+      it.printf(4, 0, id(font_med), "SOAK2 %s", id(p310_connected).state ? "BLE up" : "BLE DOWN");
+      it.printf(4, 26, id(font_med), "in %.1f  out %.1f C", f(id(t_fridge)), f(id(t_cabin)));
+      it.printf(4, 52, id(font_med), "fridge %.1f W", f(id(fridge_w)));
+      it.printf(4, 78, id(font_small), "rows %u  boot %u  clock %s", (unsigned) id(soak)->rows(),
+                (unsigned) id(soak)->boot(), id(soak)->clock_state() ? "ok" : "NOT SET");
+      it.printf(4, 96, id(font_small), "1-wire: %s", id(probe_ids).state.c_str());
+      it.printf(4, 114, id(font_small), "192.168.4.1/soak");
+
+output:
+  - platform: ledc
+    pin:
+      number: GPIO46
+      ignore_strapping_warning: true
+    id: out_backlight
+    frequency: 20000Hz
+
+light:
+  - platform: monochromatic
+    output: out_backlight
+    name: "Backlight"
+    id: backlight
+    restore_mode: ALWAYS_ON
+    on_turn_on:
+      - script.execute: blank_later
+
+script:
+  - id: blank_later
+    mode: restart
+    then:
+      - delay: 2min
+      - light.turn_off: backlight
+
+button:
+  - platform: template
+    name: "Display on"
+    on_press:
+      - light.turn_on: backlight
+
+# The fbot component needs switch.h - see van-core-soak.yaml. Inert.
+switch:
+  - platform: template
+    id: build_fix_switch_component
+    internal: true
+    optimistic: true
+
+# -----------------------------------------------------------------------------
+# Instrumentation globals
+# -----------------------------------------------------------------------------
+globals:
+  - id: ble_drops
+    type: uint32_t
+    initial_value: "0"
+  - id: ble_down_since
+    type: uint32_t
+    initial_value: "0"
+  - id: ble_longest_gap_s
+    type: uint32_t
+    initial_value: "0"
+  # M12 gap: the wait for the FIRST connection after boot was never timed,
+  # and that is the section 5.2 recovery path.
+  - id: ble_first_connect_s
+    type: float
+    initial_value: "NAN"
+
+binary_sensor:
+  - platform: fbot
+    fbot_id: p310
+    connected:
+      name: "P310 connected"
+      id: p310_connected
+      on_press:
+        - lambda: |-
+            // First connection since boot: time it once.
+            if (std::isnan(id(ble_first_connect_s)))
+              id(ble_first_connect_s) = millis() / 1000.0f;
+            // Reconnect: close out the gap being timed.
+            if (id(ble_down_since) != 0) {
+              uint32_t gap = (millis() - id(ble_down_since)) / 1000;
+              if (gap > id(ble_longest_gap_s)) id(ble_longest_gap_s) = gap;
+              id(ble_down_since) = 0;
+            }
+      on_release:
+        - lambda: |-
+            id(ble_drops)++;
+            id(ble_down_since) = millis();
+    ac_active:
+      name: "P310 AC output active"
+      id: p310_ac_active
+
+sensor:
+  # --- the station, read-only ---
+  - platform: fbot
+    fbot_id: p310
+    battery_level:
+      name: "Battery"
+      id: soc
+    input_power:
+      name: "Input power"
+      id: in_w
+    output_power:
+      name: "Output power"
+      id: out_w
+    system_power:
+      # Reg 21: AC input voltage x0.1, not a power (M11). Logged because it
+      # marks alternator/shore charging unambiguously.
+      name: "AC input voltage x0.1 (reg 21)"
+      id: reg21
+    ac_input_power:
+      name: "AC input power"
+      id: ac_in_w
+    total_power:
+      # Reg 20: AC output only (M1). out_w - ac_out_w is the 12 V + USB load,
+      # and ac_out_w - fridge_w cross-checks the plug.
+      name: "AC output power"
+      id: ac_out_w
+    dc_input_power:
+      name: "Solar input power"
+      id: dc_in_w
+
+  # --- probes. Raw: no EMA, no timeout. This is a dataset, not a control
+  # input, and the filters are one of the things it exists to design.
+  # Pinned by address (M14): bus index 0 was 0xf50e..., the probe that read
+  # 5-8 C inside the fridge.
+  - platform: dallas_temp
+    one_wire_id: bus_1w
+    address: 0xf50e250267176c28
+    name: "Fridge probe"
+    id: t_fridge
+    update_interval: 10s
+    accuracy_decimals: 2
+  - platform: dallas_temp
+    one_wire_id: bus_1w
+    address: 0x600e2502e02beb28
+    name: "Cabin probe"
+    id: t_cabin
+    update_interval: 10s
+    accuracy_decimals: 2
+
+  # --- diagnostics ---
+  - platform: template
+    name: "BLE disconnect count"
+    id: s_ble_drops
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: return id(ble_drops);
+  - platform: template
+    name: "Longest BLE gap"
+    unit_of_measurement: "s"
+    accuracy_decimals: 0
+    update_interval: 60s
+    lambda: return id(ble_longest_gap_s);
+  - platform: template
+    name: "BLE first connect after boot"
+    id: s_ble_first
+    unit_of_measurement: "s"
+    accuracy_decimals: 1
+    update_interval: 10s
+    lambda: return id(ble_first_connect_s);
+  - platform: template
+    # Internal RAM only - where the BLE stack lives. M12's "free heap" was
+    # PSRAM-dominated and could not have shown a leak here.
+    name: "Free internal heap"
+    id: heap_int
+    unit_of_measurement: "B"
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      return heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+  - platform: template
+    name: "Min free internal heap"
+    id: heap_int_min
+    unit_of_measurement: "B"
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: return heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+  - platform: template
+    name: "Largest internal block"
+    id: heap_int_block
+    unit_of_measurement: "B"
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: return heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+  - platform: template
+    name: "SoftAP clients"
+    id: ap_clients
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      wifi_sta_list_t l;
+      if (esp_wifi_ap_get_sta_list(&l) != ESP_OK) return NAN;
+      return l.num;
+  - platform: template
+    name: "Backlight on"
+    id: bl_on
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      return id(backlight).remote_values.is_on() ? 1.0f : 0.0f;
+
+text_sensor:
+  - platform: template
+    # Both addresses, in index order. Write them down; the real node pins
+    # probes by address, never by index.
+    name: "1-Wire devices"
+    id: probe_ids
+    update_interval: 60s
+    lambda: |-
+      std::string s;
+      char b[24];
+      for (uint64_t a : id(bus_1w)->get_devices()) {
+        snprintf(b, sizeof(b), "%s0x%016llx", s.empty() ? "" : " ", (unsigned long long) a);
+        s += b;
+      }
+      return s.empty() ? std::string("NONE FOUND") : s;
+
+# -----------------------------------------------------------------------------
+# The log. 10 s rows of 96 bytes (21 columns): 4 MB holds ~4.8 days.
+# -----------------------------------------------------------------------------
+soak_log:
+  id: soak
+  # The Android app opens /ui: land it on the log page. Stock entities stay at /.
+  serve_at_ui: true
+  interval: 10s
+  buffer_size: 4000000
+  remote:
+    # The Athom plug between the P310 and the fridge, flashed with
+    # nodes/van-fridge-plug.yaml. Polled off the main loop.
+    - url: "http://${plug_ip}/sensor/Fridge%20power"
+      sensor:
+        name: "Fridge power (plug)"
+        id: fridge_w
+        unit_of_measurement: "W"
+        accuracy_decimals: 1
+    - url: "http://${plug_ip}/sensor/Fridge%20energy"
+      sensor:
+        name: "Fridge energy (plug)"
+        id: fridge_kwh
+        unit_of_measurement: "kWh"
+        accuracy_decimals: 4
+  columns:
+    - {name: t_fridge, sensor: t_fridge, accuracy_decimals: 3}
+    - {name: t_cabin, sensor: t_cabin, accuracy_decimals: 3}
+    - {name: fridge_w, sensor: fridge_w, accuracy_decimals: 1}
+    - {name: fridge_kwh, sensor: fridge_kwh, accuracy_decimals: 4}
+    - {name: soc, sensor: soc, accuracy_decimals: 1}
+    - {name: in_w, sensor: in_w, accuracy_decimals: 0}
+    - {name: out_w, sensor: out_w, accuracy_decimals: 0}
+    - {name: ac_in_w, sensor: ac_in_w, accuracy_decimals: 0}
+    - {name: dc_in_w, sensor: dc_in_w, accuracy_decimals: 0}
+    - {name: reg21, sensor: reg21, accuracy_decimals: 0}
+    - {name: ac_on, binary_sensor: p310_ac_active}
+    - {name: ble_up, binary_sensor: p310_connected}
+    - {name: ble_drops, sensor: s_ble_drops, accuracy_decimals: 0}
+    - {name: ble_first_s, sensor: s_ble_first, accuracy_decimals: 1}
+    - {name: heap_int, sensor: heap_int, accuracy_decimals: 0}
+    - {name: heap_int_min, sensor: heap_int_min, accuracy_decimals: 0}
+    - {name: heap_int_blk, sensor: heap_int_block, accuracy_decimals: 0}
+    - {name: die_c, sensor: board_temp, accuracy_decimals: 1}
+    - {name: ap_clients, sensor: ap_clients, accuracy_decimals: 0}
+    - {name: backlight, sensor: bl_on, accuracy_decimals: 0}
+    - {name: ac_out_w, sensor: ac_out_w, accuracy_decimals: 0}

@@ -339,10 +339,10 @@ sensor:
   # --- fridge probe, raw. Unfiltered, for logging and for the coast test. ---
   - platform: dallas_temp
     one_wire_id: bus_1w
-    # TODO: fill in from the 1-Wire bus scan the component logs on first boot.
     # Both probes sit on one bus, so both addresses are mandatory - and once
     # they are written down, swapping a probe cannot silently swap the roles.
-    address: 0x0000000000000028  # PLACEHOLDER - fridge wall probe
+    # From soak 2 (measurements.md M14): this one read 5-8 C inside the fridge.
+    address: 0xf50e250267176c28  # fridge side-wall probe
     name: "Fridge temperature (raw)"
     id: fridge_temp_raw
     update_interval: 10s
@@ -378,7 +378,7 @@ sensor:
   # --- cabin ambient, same 1-Wire bus. Correlates directly with duty cycle. ---
   - platform: dallas_temp
     one_wire_id: bus_1w
-    address: 0x0000000000000029  # PLACEHOLDER - cabin ambient probe
+    address: 0x600e2502e02beb28  # cabin ambient probe (M14)
     name: "Cabin temperature"
     id: cabin_temp
     update_interval: 30s
