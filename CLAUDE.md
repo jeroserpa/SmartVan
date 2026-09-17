@@ -238,6 +238,9 @@ Exposes as ESPHome entities:
 - **Switches:** `ac` (inverter), `dc`, `usb`, `light`, `ac_silent`.
 - **Numbers:** charge max / discharge min thresholds.
 - **Select:** `ac_charge_limit` (300/500/700/900/1100W), `light_mode`.
+  **Not used on the P310** — its AC input level is a physical knob
+  (400/800/1200/1600/2200W), read back as a 1–5 level and never written.
+  See `docs/decisions.md` D-16.
 - **Binary sensors:** `connected`, output states, expansion battery presence.
 
 **Critical constraint:** the P310 accepts effectively one BLE connection. Once
@@ -1285,9 +1288,15 @@ inverter's DC input** (not at the battery — include cable drop):
 
 Use an **ADS1115**, not the raw ESP32 ADC — these thresholds need better than ±5%.
 
-#### Voltage-adaptive charge limiting
-This is what makes `ac_charge_limit` genuinely valuable rather than a nicety.
-Modulate the charging load against measured voltage:
+#### Voltage-adaptive charge limiting — `SUPERSEDED 2026-09-16`, see D-16
+
+**Cannot be built as written.** The P310's AC input level is a physical
+five-position knob (400/800/1200/1600/2200W), not a BLE setting, so
+`van-vehicle` cannot modulate it. What remains: switch the charger path on/off
+with the contactor below using the same voltage thresholds, leave the knob at
+400W for driving (~50A from 12V instead of ~100A), and check whether the
+charging inverter has a control input. The original table is kept for the
+intent:
 
 | Measured V | `ac_charge_limit` |
 |---|---|
@@ -1324,8 +1333,9 @@ unaccounted for, at 100A continuous.** Diagnose before designing around it:
 - **The manual switch:** 100A through degraded contacts dissipates real power.
   If it is warm after 10 min of charging, that is the loss — and a fire risk.
 - **Inverter loading:** if the inverter is rated 1000–1500W, 1200W is near full
-  load where efficiency is worst. Dropping `ac_charge_limit` to 700W may improve
-  chain efficiency by several points.
+  load where efficiency is worst. Turning the P310's input knob down to 800W
+  may improve chain efficiency by several points (it is a knob, not a BLE
+  setting — D-16).
 - Confirm how 1200W was measured — a clamp meter on the positive cable settles it.
 
 #### The manual switch is the primary hazard

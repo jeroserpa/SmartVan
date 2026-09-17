@@ -62,7 +62,7 @@ analysis; the ESP-FBot name is given where it differs and is wrong.
 
 | Reg | Meaning | Scale | Confidence |
 |---|---|---|---|
-| 2 | AC charge level, 1–5 → 300/500/700/900/1100 W | raw | ESP-FBot |
+| 2 | **AC input knob position, 1–5 → 400/800/1200/1600/2200 W** (ESP-FBot: "charge level", 300…1100 W — another model) | raw | `UNVERIFIED`, D-16 |
 | 3 | AC input power | W | ESP-FBot |
 | 4 | DC/solar input power | W | ESP-FBot |
 | 6 | Total input power | W | ESP-FBot |
@@ -107,7 +107,7 @@ load. Only a sweep on our own station answers that.
 
 | Reg | Meaning | Values |
 |---|---|---|
-| 13 | AC charge limit | 1–5 → 300…1100 W |
+| 13 | **AC input knob position**, read-only (ESP-FBot: "AC charge limit") | 1–5 → 400…2200 W, `UNVERIFIED` (D-16) |
 | 27 | Light mode | 0 off, 1 on, 2 SOS, 3 flashing |
 | 56 | Key sound | 0/1 |
 | 57 | AC silent mode | 0/1 |
@@ -229,7 +229,6 @@ fridge cooling state (there is no electrical signature to follow — see
 
 | Reg | Control | Valid |
 |---|---|---|
-| 13 | AC charge limit | 1–5 |
 | 24 | USB output | 0/1 |
 | 25 | DC output | 0/1 |
 | 26 | **AC output — the one the arbiter drives** | 0/1 |
@@ -240,4 +239,6 @@ fridge cooling state (there is no electrical signature to follow — see
 | 67 | Charge threshold | 100–1000 |
 
 `fbot_probe.py set` exposes only these, and requires `--i-understand`.
+Reg 13 used to be on this list; it is the P310's physical AC input knob and is
+deliberately not writable (D-16).
 Registers outside this list are deliberately not writable from the tool.
