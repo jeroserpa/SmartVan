@@ -21,9 +21,10 @@ SAMPLE = {
     "w_soc": "78%",
     "w_out": "48 W out",
     "w_in": "310 W in",
-    "w_fridge": "4.6 °C",
+    "w_fridge": "4.6 °C fridge",
+    "w_cabin": "24.0 °C cabin",
     "w_reason": "fridge block",
-    "w_age": "Updated 14:32",
+    "w_age": "14:32",
 }
 
 
@@ -34,12 +35,26 @@ def edit(s, vid, fn):
     return s[:m.start()] + fn(m.group(0)) + s[m.end():]
 
 
-def set_text(text):
+def indent_of(element, attr):
+    """The leading whitespace of `attr`'s line, so inserted attributes line up
+    whatever depth the view sits at. Hard-coding it broke silently the first
+    time the layout was re-nested."""
+    m = re.search(r"\n([ \t]*)" + re.escape(attr), element)
+    return m.group(1) if m else "    "
+
+
+def set_attr(attr, value, before):
+    """Set `attr`, or insert it above `before` at that line's own indent."""
     def fn(e):
-        if "android:text=" in e:
-            return re.sub(r'android:text="[^"]*"', f'android:text="{text}"', e)
-        return e.replace("android:maxLines", f'android:text="{text}"\n            android:maxLines', 1)
+        if f"{attr}=" in e:
+            return re.sub(re.escape(attr) + r'="[^"]*"', f'{attr}="{value}"', e)
+        pad = indent_of(e, before)
+        return e.replace(before, f'{attr}="{value}"\n{pad}{before}', 1)
     return fn
+
+
+def set_text(text):
+    return set_attr("android:text", text, "android:maxLines")
 
 
 def main():
@@ -51,8 +66,12 @@ def main():
         s = edit(s, vid, set_text(text))
     s = edit(s, "w_state", lambda e: e.replace("@color/muted", "@color/warn"))
     s = edit(s, "w_dot", lambda e: e.replace("@color/dim", "@color/warn"))
-    s = edit(s, "w_bar_ok", lambda e: e.replace('android:visibility="gone"', 'android:progress="78"'))
-    s = edit(s, "w_bar_dim", lambda e: e.replace('android:progress="0"', 'android:visibility="gone"'))
+    # The liquid background is a bitmap the app draws at run time, which the
+    # picker never gets to run. A static vector stands in for it at the same
+    # 78 % the rest of the sample shows.
+    s = edit(s, "w_fill", set_attr(
+        "android:src", "@drawable/battery_fill_preview",
+        "android:importantForAccessibility"))
     (LAYOUT / "van_widget_preview.xml").write_text(s, encoding="utf-8", newline="\n")
 
 

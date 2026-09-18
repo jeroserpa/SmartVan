@@ -76,28 +76,92 @@ jobs:
 
       # A fixed download link for the phone:
       #   https://github.com/<repo>/releases/download/app-latest/van-core.apk
-      # One rolling pre-release, replaced by every build of the app branches.
+      # One rolling pre-release, replaced by every build of main.
       # The repo is public, so the APK is too; it holds no secrets.
+      #
+      # To test an app branch on the phone, add it here as
+      # `|| github.ref_name == '<branch>'` - and TAKE IT OUT when it merges.
+      # A merged branch left in this list still overwrites main's release from
+      # any later push to it, which is a confusing way to install an old build.
       - name: Publish to the app-latest release
-        if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'claude/cloud-app-development-9d5e08')
+        if: github.event_name == 'push' && github.ref_name == 'main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp app/build/outputs/apk/release/app-release.apk van-core.apk
+          # A second copy under a name that is unique per build. The rolling
+          # one keeps a fixed, documented link, but it is REPLACED in place,
+          # and a phone browser caches and resumes by URL - a partial download
+          # of build N can then stall against build N+1's bytes at the same
+          # address, showing "1.89/1.89 MB" forever. The versioned copy is
+          # always a URL that has never been downloaded before, so there is
+          # nothing stale to resume against. It also says what you installed.
+          cp van-core.apk "van-core-${GITHUB_RUN_NUMBER}.apk"
+          # A REAL archive with the apk inside, not the apk under a .zip name.
+          # GitHub types assets by extension, so an .apk is served as
+          # application/vnd.android.package-archive - the MIME that makes a
+          # phone browser run its APK path: a dangerous file confirmation and a
+          # Safe Browsing verdict, either of which can leave a download sitting
+          # at 100% for good. A .zip is just a file to a browser.
+          #
+          # It has to be a genuine archive. A renamed apk needs renaming back,
+          # and opening one in a file manager shows the apk's own insides -
+          # classes.dex, res/, META-INF - with no .apk in sight, because an apk
+          # IS a zip. That looked exactly like a broken download. Extracting
+          # this one yields van-core.apk, which is what anyone expects.
+          zip -j -q "van-core-${GITHUB_RUN_NUMBER}.zip" van-core.apk
           link="https://github.com/${GITHUB_REPOSITORY}/releases/download/app-latest/van-core.apk"
+          fresh="https://github.com/${GITHUB_REPOSITORY}/releases/download/app-latest/van-core-${GITHUB_RUN_NUMBER}.apk"
+          zip="https://github.com/${GITHUB_REPOSITORY}/releases/download/app-latest/van-core-${GITHUB_RUN_NUMBER}.zip"
+          sha=$(sha256sum van-core.apk | cut -d' ' -f1)
           notes="Build ${GITHUB_RUN_NUMBER} from \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA::7}, $(date -u '+%Y-%m-%d %H:%M UTC').
 
           Shrunk release build, signed with the repo key: sideload, installs over the previous build.
 
-          Direct link: ${link}"
+          Direct link: ${link}
+
+          A link that is new every build, if the rolling one above stalls:
+          ${fresh}
+
+          **If a download sits at 100% and never finishes**, the browser is stuck in its APK
+          handling, not on the network. Two things to try, in order: open the link in Chrome
+          itself rather than the in-app browser some apps use, and turn battery saver off.
+          Failing both, here is the same build inside a zip, which no browser treats
+          specially. Download it, extract it, and tap the \`van-core.apk\` inside:
+          ${zip}
+
+          Both apk links are the same bytes, and so is the one in the zip:
+          \`sha256 ${sha}\`"
+          # One asset per call, each retried. `--clobber` DELETES before it
+          # uploads, so a batch that fails partway can leave an asset deleted
+          # and not replaced - which is how the rolling van-core.apk link went
+          # missing when uploads.github.com answered 500 on a later file in the
+          # same batch. Per-file means one bad asset cannot take out the
+          # others, and the retry means a transient 500 does not need a human.
+          upload() {
+            for attempt in 1 2 3 4 5; do
+              if gh release upload app-latest "$1" --clobber; then
+                return 0
+              fi
+              echo "::warning::upload of $1 failed (attempt $attempt of 5), retrying"
+              sleep $(( attempt * 5 ))
+            done
+            echo "::error::could not upload $1 after 5 attempts"
+            return 1
+          }
+
           git tag -f app-latest "$GITHUB_SHA"
           git push -f origin refs/tags/app-latest
-          if gh release view app-latest >/dev/null 2>&1; then
-            gh release upload app-latest van-core.apk --clobber
-            gh release edit app-latest --notes "$notes"
-          else
-            gh release create app-latest van-core.apk --prerelease --title "van-core app (latest build)" --notes "$notes"
+          if ! gh release view app-latest >/dev/null 2>&1; then
+            gh release create app-latest --prerelease --title "van-core app (latest build)" --notes "$notes"
           fi
+          # The versioned apk first: it is the link the notes tell people to use
+          # when the rolling one misbehaves, and it is a name nothing is
+          # replacing, so it cannot be caught by the delete-then-upload window.
+          upload "van-core-${GITHUB_RUN_NUMBER}.apk"
+          upload "van-core-${GITHUB_RUN_NUMBER}.zip"
+          upload van-core.apk
+          gh release edit app-latest --notes "$notes"
           echo "::notice::APK published: ${link}"
 
       - uses: actions/upload-artifact@v4

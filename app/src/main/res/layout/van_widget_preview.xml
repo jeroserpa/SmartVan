@@ -67,21 +67,45 @@
         android:orientation="horizontal"
         android:paddingEnd="6dp">
 
-        <TextView
-            android:id="@+id/w_soc"
+        <!-- The battery. Fixed size so the bitmap's aspect is known. -->
+        <FrameLayout
+            android:layout_width="98dp"
+            android:layout_height="54dp"
+            android:layout_gravity="center_vertical">
+
+            <ImageView
+                android:id="@+id/w_fill"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:src="@drawable/battery_fill_preview"
+                android:importantForAccessibility="no"
+                android:scaleType="fitXY" />
+
+            <!-- The shadow is not decoration: the bright surface line can
+                 cross a digit at any level, and this is what keeps the
+                 figure readable when it does. -->
+            <TextView
+                android:id="@+id/w_soc"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:gravity="center"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:paddingEnd="5dp"
+                android:shadowColor="#B3000000"
+                android:shadowDx="0"
+                android:shadowDy="1"
+                android:shadowRadius="3"
+                android:text="78%"
+                android:textColor="@color/fg"
+                android:textSize="30sp"
+                android:textStyle="bold" />
+        </FrameLayout>
+
+        <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:includeFontPadding="false"
-            android:maxLines="1"
-            android:text="78%"
-            android:textColor="@color/fg"
-            android:textSize="40sp"
-            android:textStyle="bold" />
-
-        <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
             android:gravity="end"
             android:orientation="vertical">
 
@@ -138,62 +162,22 @@
         </LinearLayout>
     </LinearLayout>
 
-    <!-- Battery bar: one per colour band, only one visible. -->
-    <FrameLayout
-        android:layout_width="match_parent"
-        android:layout_height="6dp"
-        android:layout_marginTop="6dp"
-        android:layout_marginEnd="6dp">
-
-        <ProgressBar
-            android:id="@+id/w_bar_ok"
-            style="?android:attr/progressBarStyleHorizontal"
-            android:layout_width="match_parent"
-            android:layout_height="6dp"
-            android:max="100"
-            android:progressDrawable="@drawable/soc_bar_ok"
-            android:progress="78" />
-
-        <ProgressBar
-            android:id="@+id/w_bar_warn"
-            style="?android:attr/progressBarStyleHorizontal"
-            android:layout_width="match_parent"
-            android:layout_height="6dp"
-            android:max="100"
-            android:progressDrawable="@drawable/soc_bar_warn"
-            android:visibility="gone" />
-
-        <ProgressBar
-            android:id="@+id/w_bar_bad"
-            style="?android:attr/progressBarStyleHorizontal"
-            android:layout_width="match_parent"
-            android:layout_height="6dp"
-            android:max="100"
-            android:progressDrawable="@drawable/soc_bar_bad"
-            android:visibility="gone" />
-
-        <ProgressBar
-            android:id="@+id/w_bar_dim"
-            style="?android:attr/progressBarStyleHorizontal"
-            android:layout_width="match_parent"
-            android:layout_height="6dp"
-            android:max="100"
-            android:visibility="gone"
-            android:progressDrawable="@drawable/soc_bar_dim" />
-    </FrameLayout>
-
-    <!-- Fridge and the arbiter's reason. -->
+    <!-- Both probes. Two numbers with no label would be a guessing game,
+         so each carries its own, small and muted, the way the power flows
+         carry "in" and "out". Cabin is the ambient one: it is what the
+         fridge is working against, so the pair reads as a cause and an
+         effect rather than as two thermometers. -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
+        android:layout_marginTop="6dp"
         android:gravity="center_vertical"
         android:orientation="horizontal"
         android:paddingEnd="6dp">
 
         <ImageView
-            android:layout_width="16dp"
-            android:layout_height="16dp"
+            android:layout_width="15dp"
+            android:layout_height="15dp"
             android:layout_marginEnd="4dp"
             android:id="@+id/w_ic_fridge"
             android:contentDescription="Fridge"
@@ -205,25 +189,33 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:maxLines="1"
-            android:text="4.6 °C"
+            android:text="4.6 °C fridge"
             android:textColor="@color/fg"
             android:textSize="15sp" />
 
+        <ImageView
+            android:layout_width="15dp"
+            android:layout_height="15dp"
+            android:layout_marginStart="12dp"
+            android:layout_marginEnd="4dp"
+            android:id="@+id/w_ic_cabin"
+            android:contentDescription="Cabin"
+            android:src="@drawable/ic_thermo"
+            android:tint="@color/muted" />
+
         <TextView
-            android:id="@+id/w_reason"
+            android:id="@+id/w_cabin"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="10dp"
             android:layout_weight="1"
             android:ellipsize="end"
-            android:gravity="end"
-            android:text="fridge block"
             android:maxLines="1"
-            android:textColor="@color/muted"
-            android:textSize="12sp" />
+            android:text="24.0 °C cabin"
+            android:textColor="@color/fg"
+            android:textSize="15sp" />
     </LinearLayout>
 
-    <!-- Footer: freshness, refresh. -->
+    <!-- Footer: why the AC is where it is, how old the reading is, refresh. -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -231,17 +223,29 @@
         android:orientation="horizontal">
 
         <TextView
-            android:id="@+id/w_age"
+            android:id="@+id/w_reason"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:ellipsize="end"
-            android:text="Updated 14:32"
+            android:text="fridge block"
+            android:maxLines="1"
+            android:textColor="@color/muted"
+            android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/w_age"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:ellipsize="end"
+            android:text="14:32"
             android:maxLines="1"
             android:textColor="@color/dim"
             android:textSize="11sp" />
 
         <FrameLayout
+            android:id="@+id/w_refresh_box"
             android:layout_width="36dp"
             android:layout_height="36dp">
 

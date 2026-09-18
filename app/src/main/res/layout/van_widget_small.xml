@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Compact widget, 2x1: state of charge and AC state only. Same ids as
-     van_widget.xml for what it shows; the rest is simply absent. -->
+     van_widget.xml for what it shows; the rest is simply absent. The battery
+     (w_fill + w_soc) is the same vessel as the full layout, smaller. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@android:id/background"
     android:layout_width="match_parent"
@@ -12,16 +13,34 @@
     android:paddingStart="@dimen/widget_pad"
     android:paddingEnd="4dp">
 
-    <TextView
-        android:id="@+id/w_soc"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:includeFontPadding="false"
-        android:maxLines="1"
-        android:text="--"
-        android:textColor="@color/fg"
-        android:textSize="28sp"
-        android:textStyle="bold" />
+    <FrameLayout
+        android:layout_width="78dp"
+        android:layout_height="42dp">
+
+        <ImageView
+            android:id="@+id/w_fill"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:importantForAccessibility="no"
+            android:scaleType="fitXY" />
+
+        <TextView
+            android:id="@+id/w_soc"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:paddingEnd="4dp"
+            android:shadowColor="#B3000000"
+            android:shadowDx="0"
+            android:shadowDy="1"
+            android:shadowRadius="3"
+            android:text="--"
+            android:textColor="@color/fg"
+            android:textSize="24sp"
+            android:textStyle="bold" />
+    </FrameLayout>
 
     <LinearLayout
         android:layout_width="0dp"
@@ -68,6 +87,7 @@
     </LinearLayout>
 
     <FrameLayout
+        android:id="@+id/w_refresh_box"
         android:layout_width="36dp"
         android:layout_height="36dp">
 
