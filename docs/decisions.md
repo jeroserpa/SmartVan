@@ -651,3 +651,279 @@ charging.
 **Not a BLE interference problem.** The question that started this: van-core
 never wrote reg 13 (the soak build had no select at all). The one real effect
 of van-core holding the BLE link is that BrightEMS cannot connect.
+
+---
+
+## 2026-09-17 — D-17: the widget's charge is the background, and its animation is pushed frames
+
+**Context.** Two complaints about the home-screen widget: the temperature
+field showed nothing, and only one of the two probes was there at all.
+
+**The blank temperature was not a formatting bug.** `VanFeed` read the
+`/events` initial burst and stopped at the first `SocketTimeoutException`
+(2.5 s). van-core pushes one entity per loop and that loop also runs the BLE
+client, the display and the SD writer (CLAUDE.md §2), so a gap of a second or
+two mid-burst is ordinary. The result was a snapshot that reliably contained
+whatever is declared first in `nodes/van-core.yaml` — the ESP-FBot station
+sensors — and reliably lost what comes after: both temperatures, `parked` and
+`AC reason`. SOC and power always worked, which is why it read as "the
+temperature field is broken" rather than "the read is truncated".
+
+**Decided:**
+1. A quiet window is a pause, not an end. The read now needs three
+   consecutive 2 s windows of silence, bounded by a 14 s deadline.
+2. A short burst **merges** over the stored snapshot instead of replacing it,
+   with a 24 h per-entity forget. The widget already has a way to say "old";
+   it had no way to say "I did not manage to read this one".
+3. Cabin temperature joins the widget. Both are labelled in text — two bare
+   numbers side by side invite reading the cabin as the cabinet.
+
+**And the charge became the background.** Asked for: a battery filling with
+green liquid. The four-`ProgressBar` band bar went, because it showed the
+same number twice and its row is what the second temperature needed.
+
+- **A bitmap, not drawables.** RemoteViews has no shader and no path.
+  `LiquidFill.kt` draws one bitmap, stretched with `fitXY`.
+- **Pushed frames, not an animator.** An `AppWidgetHost` never runs our code,
+  so nothing moves unless we push it. `VanWidgetWorker` — which already has a
+  thread and holds the process up — pushes ~12 frames over ~0.8 s after a
+  refresh that actually moved the charge. A `BroadcastReceiver` cannot do
+  this, so every other redraw path lands on the final frame at once. An idle
+  home screen costs nothing, which is the only version worth having in a
+  project with a 2 W control budget (CLAUDE.md §5.4) — even on the phone.
+- **Legibility was measured, not eyeballed.** The card carries 11sp muted
+  text. At the chosen alphas the foreground keeps ~9:1 over the liquid and
+  the muted labels ~3.6:1, better than the dim timestamp already managed on
+  the bare card. The brightness is spent on a narrow meniscus and a bright
+  surface line — which is where the level is read — not on the body.
+
+**What this does not fix.** If a probe is genuinely dead the widget still
+shows `-- °C`, and it should: `fridge_temp` publishes NAN rather than a
+last-known value, and five minutes of that forces the inverter ON (§6
+`force_on`). The 1-Wire addresses in `nodes/van-core.yaml` are no longer
+`PLACEHOLDER` — soak 2 measured them (M14) and they are pinned.
+
+**Addendum, same day — corrected.** The report was "the temp probes are
+running, I can see them on the webpage but not on the widget". The first
+answer here was that the soak firmware has no probes. That was **wrong**: it
+was read against `nodes/van-core-soak.yaml` (soak 1) on a branch cut before
+`nodes/van-core-probes.yaml` (soak 2) existed. Soak 2 has both DS18B20s,
+pinned by address, and they were reading.
+
+**The real fault is a name.** Soak 2 publishes the probes as `Fridge probe`
+and `Cabin probe` — `sensor-fridge_probe` and `sensor-cabin_probe` — where
+`nodes/van-core.yaml` publishes `Fridge temperature` and `Cabin temperature`.
+The widget named one spelling, so it matched nothing, while the node's own
+page listed both entities by name and showed them fine. Exactly the symptom
+reported, and nothing to do with the truncated burst above — that was a
+second, real fault on the same field.
+
+**Decided: each probe is a list of candidate ids, resolved to whichever the
+node publishes.** `VanFeed.FRIDGE_IDS` / `CABIN_IDS`, first match wins. The
+`/events` early exit became role-based for the same reason: a flat set
+holding both spellings could never be satisfied by any single firmware, so
+every read would have paid the full quiet-window wait.
+
+**The lesson is the one CLAUDE.md §11 already states** — entity ids are
+duplicated between the YAML, `ui/index.html` and `VanFeed.kt`, and a rename
+in one is silent in the others. A third firmware that names these probes a
+third way will break it again. The cheap guard is a unit test that pins every
+accepted spelling, which now exists.
+
+**`van-core-soak.yaml` (soak 1) genuinely has no probes**, and that part
+stands: no `one_wire:` bus, no `dallas_temp`. Its only temperature is
+`internal_temperature` from `common/base.yaml` — the ESP32-S3 die, published
+as `Van core soak board temperature`.
+
+**Decided: on a node with no DS18B20, the widget shows the board temperature
+in that row**, labelled `board`, with the thermometer icon rather than the
+snowflake. Two dashes next to a web page showing a live number is a bug
+report waiting to happen, and on a board running BLE, SoftAP, a display and
+the SD writer in one cooperative loop (§2 risk note) the die temperature is
+the number a soak actually wants.
+
+Three constraints on it, because a temperature in the cabinet's place is
+exactly the misreading that matters:
+- **Suffix match, not a fixed id.** `common/base.yaml` names it
+  `"${friendly_name} board temperature"`, so it is
+  `sensor-van_core_board_temperature` on van-core and
+  `sensor-van_core_soak_board_temperature` on the soak build. Listing both
+  would be wrong again at the third node.
+- **Presence, not value, decides** — and presence means *any* accepted
+  spelling. The moment either probe entity exists under any of its ids the
+  fridge and cabin cells come back, NAN or not. A dead probe must read as
+  `-- °C fridge`; and on soak 2 the die temperature must not take the row
+  while two real probes are publishing under a name the widget did not know.
+- **Never unlabelled.** It reads `47.5 °C board`, and the widget is the only
+  place in the project where a chip temperature and a food temperature could
+  ever sit in the same slot.
+
+
+---
+
+## 2026-09-17 — D-18: the battery is a vessel around the figure, not the card
+
+**Context.** D-17 made the whole widget card the battery. Asked to confine it
+to a container around the percentage instead, **because the fresh and grey
+tanks are going on the same card** (CLAUDE.md §9 Phase 2) and a card-sized
+battery leaves nowhere for them.
+
+**That constraint is the right one, and it improves the battery too.** Three
+things follow from the vessel having its own fixed-size box:
+
+- **It can have a real outline and a terminal.** Full-bleed, the bitmap was
+  stretched to whatever the launcher made the card, so any outline or nub
+  would have been stretched with it — which is why D-17 had neither and
+  leaned on the card's own rounded rect to read as a battery. A fixed
+  98×54dp box has a known aspect, so `fitXY` is exact.
+- **The liquid can be about twice as strong.** The 11sp muted labels are out
+  on the card now and no longer sit on it. Measured, the charge figure keeps
+  4.7:1 or better over the liquid body in every band, and it is large bold
+  text needing 3:1. D-17's whole-card version had to hold the muted labels at
+  3.6:1 and was correspondingly pale — closer to a tint than to liquid.
+- **An empty battery still reads as a battery.** The interior is sunk below
+  the card and the outline is always drawn, so 0 % is an empty vessel rather
+  than a blank card.
+
+**The renderer is now `LiquidFill`, not `BatteryFill`,** and the nub is a
+parameter. A water tank is the same drawing with no terminal, so Phase 2
+should not need a second renderer — and naming it for the battery would have
+guaranteed one.
+
+**One thing the measurement does not cover: the surface line.** At alpha 0xE6
+it is brighter than any text could sit on, and it crosses the digits at
+whatever level the charge happens to be. The fix is a text shadow on the
+figure, declared in the layout — which is also why the figure stays near-white
+in every band instead of turning amber or red. The band is carried by the
+liquid and the outline twice over; tinting the number as well would only cost
+contrast.
+
+**Still true from D-17, and worth restating because it is the question that
+gets asked:** the liquid moves *only when the charge moves*. A widget host
+never runs our code, so every frame is an IPC we push ourselves, and a home
+screen animating while nobody looks is phone battery spent on nothing. The
+~12-frame burst runs on a refresh that actually changed the level; at rest the
+surface is a fixed, near-flat curve.
+
+
+---
+
+## 2026-09-17 — D-19: a widget refresh must not be able to latch
+
+**Context.** After a reinstall: "the app works but the widget does not
+update". The app opening proves the phone is on van-core's Wi-Fi and the node
+is answering, so the fault is in the widget's own refresh path.
+
+**Two defects, and together they are a dead end.**
+
+1. **The in-flight marker was a flag, not a deadline.** `refreshNow` set
+   `refreshing = true`; only the worker cleared it. While set, the widget
+   replaces its ↻ icon with a spinner — and the spinner was not the tap
+   target. A refresh that never finished therefore removed the only control
+   the widget has. Tapping the card opens the app, and leaving the app calls
+   `refreshNow` again, which set the flag again: self-perpetuating.
+2. **`ExistingWorkPolicy.KEEP` discarded every press.** KEEP drops the new
+   request whenever work of the same name is unfinished — and unfinished is
+   exactly what a phone that declined to run it leaves behind. So once one
+   request was stuck, no later one ever ran.
+
+**Decided:**
+- The marker is a **timestamp**, expiring after 45 s — about twice the worst
+  real read (6 s waiting for the network, 14 s of burst, then the animation).
+- The **tap target is the frame** holding both the icon and the spinner, so
+  the control exists whichever is showing.
+- The one-shot enqueues **`REPLACE`**. A refresh a person asked for is never
+  dropped in favour of one that may never run.
+- `doWork` clears the marker in a `finally`, so a throw anywhere in the fetch
+  cannot leave the widget believing a refresh is still running.
+
+**What this does not fix, and cannot.** If the OS refuses to run the work at
+all — an OEM battery restriction on a freshly installed app is the usual
+cause — the widget has no data to show and no way to get any: the ↻ path goes
+through WorkManager too. The widget now says so honestly instead of spinning,
+but the remedy is on the phone (battery: unrestricted), not in the code.
+
+
+---
+
+## 2026-09-17 — D-20: the widget reaches van-core by any route, and names the one that failed
+
+**Context.** "The app itself works but the widget still says no van-core
+Wi-Fi." That message is emitted only when `tried` is true and `okAt` is zero,
+so the worker *was* running — the battery theory of D-19 was not it — and
+`VanFeed.fetch` was returning null every time, while the app read the same
+node over the same Wi-Fi.
+
+**Both halves were wrong.**
+
+1. **One route, and the fragile one.** `fetch` depended entirely on
+   `ConnectivityManager.requestNetwork`: asynchronous, timing out at 5s, and
+   requiring `CHANGE_NETWORK_STATE` — which on a modern Android is not a
+   permission an ordinary app simply holds, whatever the manifest says. The
+   activity survives because it also binds the process to the network and
+   hands the WebView a normal default route; the worker had no such fallback.
+2. **The message asserted something false.** "Not on van-core Wi-Fi" was
+   printed for every failure, including while the phone was plainly on
+   van-core's Wi-Fi. A diagnostic that confidently states the wrong cause is
+   worse than none: it sent a day of debugging toward downloads and battery
+   settings.
+
+**Decided:**
+- **Try every route, cheapest and most certain first.** The Wi-Fi networks the
+  phone is already joined to (`getAllNetworks`, needing only
+  `ACCESS_NETWORK_STATE` and answering immediately), then `requestNetwork` as
+  the activity does it, then the process default — which the activity binds to
+  the van network while it is open, and which *is* the van AP on a phone with
+  mobile data off. `requestNetwork` throwing is a reason to fall through, not
+  to fail the read.
+- **Record why.** `VanFeed.Miss` is one of `NO_WIFI`, `NO_ANSWER`,
+  `NOT_VAN_CORE`; the store keeps it and the footer prints it. "Joined but
+  nothing at 192.168.4.1" and "not joined at all" are different problems with
+  different fixes, and the widget now distinguishes them.
+
+**The general rule this is an instance of.** CLAUDE.md §5.1 says no node's
+function may depend on another node or on the network. The widget is not a
+node, but the same reasoning applies to *routes*: it had one way to reach
+van-core and no way to say what happened when that way failed. Both are worth
+more than the code they cost.
+
+
+---
+
+## 2026-09-17 — D-21: a snapshot already read is never thrown away
+
+**This one was mine.** D-17 changed the `/events` read to tolerate a quiet
+gap — `continue` instead of `break` on a socket timeout — on a theory about
+truncated bursts that later turned out to be wrong anyway (the blank
+temperatures were the entity naming of D-18). That change took the whole
+widget down.
+
+**The mechanism.** The second `readLine()` after a timeout is issued on a
+connection Android has already marked broken underneath, and it throws a
+plain `IOException` rather than resuming. Nothing caught it: it escaped
+`readInitialBurst`, `runCatching` in `fetch` turned it into null, every route
+counted as failed, and the widget reported that van-core had not answered —
+about a node that had just streamed it every entity it asked for. **The
+states were already in hand and were discarded.**
+
+**The rule, which is more general than the bug.** `/events` is an infinite
+stream. A read of it **never ends cleanly** — the only question is how it
+dies. So the end of the stream can never be a failure of the read: whatever
+arrived before it stands. Only "something answered but it was not a state
+stream" is a reason to report nothing.
+
+**Why nothing caught it.** The mock keeps its stream open and pings, and on
+the emulator's loopback a read after a timeout simply resumes. CI passed
+every time while the phone failed every time. `tools/mock_core.py` now takes
+`?cut=1` (close at once) and `?rst=1` (go quiet past the read timeout, then
+**reset**, so the next read throws). Only the reset reproduces it — a clean
+EOF the old code handled correctly — and `b1_widgetFeedReadsMock` asserts the
+snapshot survives both.
+
+**And the wider lesson, which cost a day.** Three theories were published as
+diagnoses before this one: a truncated burst, a stale download partial, an
+OEM battery restriction. Each was plausible, none was verified on the device,
+and the widget's own message — "Not on van-core Wi-Fi", printed for every
+failure including this one — actively pointed away from the fault. D-20's
+`Miss` values exist so the next fault names itself instead. **When the
+instrument and the observation disagree, suspect the instrument.**

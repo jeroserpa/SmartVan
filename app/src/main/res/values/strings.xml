@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">van-core</string>
-    <string name="widget_description">Battery, power, AC and fridge at a glance. Read-only; refreshes every 15 min while the phone is on van-core Wi-Fi.</string>
+    <string name="widget_description">Battery, power, AC state and both temperatures at a glance, on a card that fills with the charge. Read-only; refreshes every 15 min while the phone is on van-core Wi-Fi.</string>
 
     <string name="st_searching_title">Looking for van-core</string>
     <string name="st_searching_body">Checking for the van Wi-Fi…</string>

@@ -31,6 +31,8 @@ import math
 import queue
 import random
 import re
+import socket
+import struct
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -357,6 +359,32 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self.wfile.write(initial.encode())
             self.wfile.flush()
+            # Two ways to end a stream early, because a reader can survive one
+            # and not the other. The stream is infinite, so a real read of it
+            # NEVER finishes cleanly - how it dies is the whole question.
+            #
+            #   ?cut=1  close at once: the client reads EOF. The easy case.
+            #   ?rst=1  go quiet long enough for the client to time out a read,
+            #           then RESET rather than close, so its next read throws.
+            #           This is the one that took the widget down: the reader
+            #           let that exception escape and discarded a full snapshot
+            #           it had already collected, and the widget then reported
+            #           that van-core had not answered. A clean EOF would not
+            #           have caught it - only a reset does.
+            query = parse_qs(urlparse(self.path).query)
+            if query.get("cut"):
+                return
+            if query.get("rst"):
+                time.sleep(3.0)
+                self.close_connection = True
+                try:
+                    self.connection.setsockopt(
+                        socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+                    )
+                    self.connection.close()
+                except OSError:
+                    pass
+                return
             while True:
                 try:
                     chunk = q.get(timeout=5)

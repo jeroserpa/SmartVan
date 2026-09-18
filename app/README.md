@@ -39,23 +39,95 @@ bridge exists.
 
 ## Home-screen widget (read-only)
 
-Battery %, output/input power, AC state + `AC reason`, fridge temperature,
-and when it was read. Long-press the home screen → Widgets → van-core.
+Battery %, output/input power, AC state + `AC reason`, **both** probe
+temperatures, and when it was read. Long-press the home screen → Widgets →
+van-core.
 
-- **Two sizes:** full (3×2 and up: charge with a bar, power in/out, fridge,
+- **Two sizes:** full (3×2 and up: charge, power in/out, fridge and cabin,
   reason) and compact (2×1: charge and AC state). Android 12+ switches
   between them on resize by itself; older launchers re-render on resize.
-- **Battery bar colours** follow the load-shedding bands of CLAUDE.md §9
-  Phase 5: amber below 30 %, red below 15 %, grey when stale.
+- **The charge is a battery around the figure**, not the card background.
+  `LiquidFill.kt` draws a vessel with liquid standing in it — outline, a
+  terminal nub, and a surface that rises to the state of charge — into a
+  fixed 98×54dp box with the percentage centred on top. **The card is
+  deliberately left plain** so the fresh and grey tanks can have vessels of
+  their own when Phase 2 lands (CLAUDE.md §9); `LiquidFill` is written to be
+  the renderer for those too, which is why the nub is a parameter.
+  A fixed box is also what lets the battery carry an outline at all: the
+  bitmap's aspect is known, so `fitXY` cannot stretch it out of shape.
+  This replaced the old four-`ProgressBar` bar, which showed the same number
+  twice and cost the row that the second temperature now uses.
+- **It moves only when the charge moves.** The worker pushes ~12 frames over
+  ~0.8 s so the level runs up to a new reading and the surface sloshes and
+  settles, rather than jumping. It does **not** ripple continuously: an
+  `AppWidgetHost` never runs our code, so every frame is an IPC we pay for,
+  and a home screen that animates while nobody is looking is phone battery
+  spent on nothing. At rest the surface is a fixed, near-flat curve.
+- **Liquid, outline and nub colour** follow the load-shedding bands of
+  CLAUDE.md §9 Phase 5: green, amber below 30 %, red below 15 %, grey when
+  stale. The percentage itself stays near-white in every band — the band is
+  already carried twice over, and white reads best on all three colours.
+- **The percentage has a text shadow**, and it is not decoration: the bright
+  surface line can cross a digit at any level. The liquid body is set where
+  the figure keeps 4.7:1 or better over it in every band (measured); the
+  shadow covers the hairline that is brighter than that.
+- **Both temperatures are labelled** (`4.6 °C fridge`, `24.0 °C cabin`), in
+  the same small-muted style as `in`/`out`. Two bare numbers side by side
+  would be a guessing game, and reading the cabin as the cabinet is the one
+  misreading that matters.
 - **Picker preview:** `res/layout/van_widget_preview.xml` is generated from
   `van_widget.xml` — run `python tools/make_widget_preview.py` after editing
-  the widget layout.
+  the widget layout. The picker cannot run our code, so the battery is stood
+  in for by `res/drawable/battery_fill_preview.xml`, frozen at 78 % — keep
+  its stops and wave in step with `LiquidFill` by hand.
 
 - **Data:** the initial state burst of `/events`, read over the Wi-Fi
   network explicitly (`Network.openConnection`), then the connection is
   closed. No firmware change.
+- **The end of the stream is never a failure.** `/events` is infinite, so a
+  read of it never finishes cleanly; the only question is how it dies, and on
+  a phone a read issued after a timeout can throw outright rather than
+  resuming. Whatever arrived before that stands. Letting that exception
+  escape discarded a complete snapshot and made the widget report that
+  van-core had not answered — `tools/mock_core.py --port … ?rst=1` reproduces
+  it, and the instrumented test pins it.
+- **The burst is read through pauses, not up to the first one.** van-core
+  pushes one entity per loop and that loop also runs BLE, the display and the
+  SD writer (CLAUDE.md §2), so a second or two of quiet mid-burst is normal.
+  Stopping there truncated the snapshot after the station sensors — which are
+  declared first in `van-core.yaml` — and left both temperatures, parked and
+  the AC reason permanently blank. It now ends on three consecutive quiet
+  windows (2 s each) or a 14 s deadline, and a short burst *merges* over the
+  stored one instead of replacing it.
 - **Refresh:** every 15 min (WorkManager; Android's floor, and deferred
   further in Doze), on ↻, and whenever the app is left.
+- **A refresh can never latch.** While one is in flight the ↻ icon is
+  replaced by a spinner, so two things guard against a refresh that never
+  comes back — which is what an OS that declines to run background work
+  leaves behind. The in-flight marker is a **timestamp** that expires after
+  45 s (about twice the worst real read), and the tap target is the frame
+  around both, so the control is still there while the spinner shows. The
+  one-shot is enqueued `REPLACE`, not `KEEP`: `KEEP` discards the new request
+  whenever an older one is unfinished, which silently threw away every press.
+- **Four routes to the node, tried in order**, because depending on one was
+  the bug: the Wi-Fi networks the phone is already joined to (needs only
+  `ACCESS_NETWORK_STATE`, answers at once), then `requestNetwork` as the
+  activity does it, then the process's own default route. `requestNetwork`
+  alone is fragile — asynchronous, times out, and needs
+  `CHANGE_NETWORK_STATE`, which a modern Android does not simply hand an
+  ordinary app.
+- **The footer names the failure**, which it did not before: `Not on van-core
+  Wi-Fi` (no Wi-Fi at all), `On Wi-Fi · van-core did not answer` (joined,
+  nothing at 192.168.4.1), `On Wi-Fi · this is not van-core` (something
+  answered, but not a state stream — a house router at the same address).
+  The old build printed the first of those whatever went wrong, including
+  while the phone was on van-core's Wi-Fi with the app reading the node over
+  the same link.
+- **If it still never updates**, check the app is not battery-restricted
+  (Settings → Apps → van-core → Battery → Unrestricted). The ↻ path goes
+  through WorkManager too, so a restricted app cannot refresh on demand
+  either — but in that case the footer stays on its old text rather than
+  changing, which is how to tell the two apart.
 - **Out of range:** keeps the last values, greyed after 20 min, with
   `last seen …`. It only ever has data while the phone is on van-core's Wi-Fi —
   **it is not an alarm** and says nothing about the van while you are away.
@@ -63,10 +135,35 @@ and when it was read. Long-press the home screen → Widgets → van-core.
   `P310 link down` (amber).
 - **No controls,** on purpose: a Manual AC button on the home screen is the
   phantom-press problem of CLAUDE.md §6.
+- **Each probe is a list of ids, not one id**, because the two firmwares that
+  carry them name them differently: `nodes/van-core.yaml` publishes
+  `Fridge temperature` / `Cabin temperature`, `nodes/van-core-probes.yaml`
+  (soak 2) publishes `Fridge probe` / `Cabin probe`. The widget takes
+  whichever the node actually has. This is the reason the temperatures were
+  blank on the bench node while its own web page showed them.
 - **The one duplication of entity ids outside the page.** `VanFeed.kt` names
-  eight ids that mirror the `E` map in `ui/index.html`; rename an entity in
-  YAML and both need updating. On the soak firmware, fridge temperature,
-  parked and AC reason do not exist and simply stay blank.
+  the ids that mirror the `E` map in `ui/index.html`; rename an entity in
+  YAML and both need updating. On `van-core-soak.yaml` and
+  `van-core-probes.yaml` there is no arbiter, so parked and AC reason do not
+  exist and stay blank.
+- **On a node with no DS18B20 at all, the row shows the board temperature
+  instead**, labelled `board` and with the thermometer icon, rather than two
+  dashes. That is `nodes/van-core-soak.yaml` (soak 1) and nothing else: it
+  has no `one_wire:` bus — its only
+  temperature is `internal_temperature` from `common/base.yaml`, the ESP32-S3
+  die. That is also the only temperature on its web page, so the widget and
+  the page now agree. The id is matched by **suffix**
+  (`VanFeed.BOARD_SUFFIX`), because `common/base.yaml` names it
+  `"${friendly_name} board temperature"` — `sensor-van_core_board_temperature`
+  on van-core, `sensor-van_core_soak_board_temperature` on the soak build.
+  It is never shown in the cabinet's place: the moment either probe entity
+  exists, the fridge and cabin cells come back, NAN or not.
+- **`-- °C` is not nothing.** The fridge sensor in `nodes/van-core.yaml`
+  publishes NAN rather than a last-known value once its probe times out, and
+  five minutes of that forces the inverter ON (CLAUDE.md §6 `force_on`). A
+  blank fridge reading next to a live cabin reading is a probe fault, not a
+  widget fault — check the 1-Wire addresses, which are still `PLACEHOLDER`
+  in the YAML.
 
 ## Build (cloud)
 
@@ -75,6 +172,31 @@ Any push touching `app/` runs `.github/workflows/android-app.yml`.
 **On the phone:** https://github.com/jeroserpa/SmartVan/releases/download/app-latest/van-core.apk
 — a rolling pre-release that every build of `main` (and, until it is merged,
 the app branch) replaces. Public, like the repo; the APK holds no secrets.
+
+**If a download sits at 100 %** — all bytes received, still "Downloading…" —
+the network is not the problem: the asset verifies byte for byte against the
+digest in the release notes, and the CDN resumes correctly. The browser is
+stuck in its **APK handling**. GitHub types assets by extension, so an `.apk`
+is served as `application/vnd.android.package-archive`, and that MIME is what
+triggers a dangerous-file confirmation and a Safe Browsing verdict — either
+of which can hang after the bytes have arrived.
+
+In order of how often it is the answer:
+1. **Open the link in Chrome itself.** A link tapped inside another app opens
+   in a Custom Tab, and those hand downloads off poorly, APKs worst of all.
+2. **Turn battery saver off.** It defers the background work that finalises a
+   download, so it completes and then never lands.
+3. **Take `van-core-<build>.zip`** from the release notes — the same build
+   inside a zip, which no browser treats specially. Download, extract, tap
+   the `van-core.apk` inside.
+
+   It is a genuine archive, and it has to be: an earlier version was the apk
+   under a `.zip` name, needing a rename back. Opening one of those in a file
+   manager shows the apk's own insides — `classes.dex`, `res/`, `META-INF` —
+   with no `.apk` in sight, because **an apk is itself a zip**. That looks
+   exactly like a broken download and is not worth the confusion it costs.
+
+The notes list all three links and the one `sha256` they share.
 
 Or from the run's artifacts (zip, needs a GitHub login):
 
