@@ -21,4 +21,60 @@
     <string name="w_title">van-core</string>
     <string name="w_updating">Updating…</string>
     <string name="w_refresh">Refresh</string>
+
+    <!-- Tabs. The dashboard is the node's own page; History is native, because
+         the node's ring buffer is volatile and only ~4.3 days deep (D-22). -->
+    <string name="tab_dashboard">Dashboard</string>
+    <string name="tab_history">History</string>
+
+    <string name="h_sync">Sync from van</string>
+    <string name="h_export">Export CSV</string>
+    <string name="h_syncing">Reading the node\u2019s log\u2026</string>
+    <string name="h_range_1d">24 h</string>
+    <string name="h_range_3d">3 d</string>
+    <string name="h_range_7d">7 d</string>
+    <string name="h_range_all">All</string>
+
+    <string name="h_archive_empty">No history yet — sync while you are at the van.</string>
+    <string name="h_archive">%1$d rows · %2$.1f days · newest %3$s</string>
+    <string name="h_up_to_date">Already up to date</string>
+    <string name="h_added">+%1$d rows</string>
+    <string name="h_node_buffer">node holds %1$d rows (%2$d%% of its buffer)</string>
+    <string name="h_undateable">%1$d rows had no clock and were skipped</string>
+    <string name="h_sync_failed">Sync failed.</string>
+    <string name="h_no_wifi">Not on van-core Wi-Fi — the archive below is what is already stored.</string>
+    <string name="h_offline_quiet">Showing the stored archive; not at the van.</string>
+    <string name="h_no_answer">On Wi-Fi · van-core did not answer</string>
+    <string name="h_not_van_core">On Wi-Fi · this is not van-core</string>
+    <string name="h_no_log">van-core answered, but its log is empty.</string>
+    <string name="h_export_failed">Export failed.</string>
+
+    <string name="h_no_rows">Nothing in this range.</string>
+    <string name="h_no_probe">No fridge probe in this log.</string>
+    <string name="h_no_plug">No fridge plug in this log — energy and duty need it.</string>
+
+    <string name="h_temp">Cabinet and cabin</string>
+    <string name="h_temp_read">Fridge now %1$.1f °C · mean %2$.1f · peak %3$.1f</string>
+
+    <string name="h_power">Power</string>
+    <string name="h_power_read">Fridge mean %1$.1f W · %2$.0f Wh over this range</string>
+
+    <!-- CLAUDE.md §1 and §8.2: no register reports the station's own draw, so
+         it is only recoverable as the SOC balance nothing else accounts for. -->
+    <string name="h_overhead">Station overhead</string>
+    <string name="h_overhead_none">Not enough SOC movement yet.</string>
+    <string name="h_overhead_wait">Needs a few hours of log before this means anything.</string>
+    <string name="h_overhead_read">%1$.1f ±%2$.1f W · ±%3$.1f more if the pack is not 3900 Wh · bins %4$.0f–%5$.0f W, n=%6$d</string>
+
+    <string name="h_duty">Compressor duty</string>
+    <string name="h_duty_wait">Needs at least half an hour in a bin.</string>
+    <string name="h_duty_read">%1$.0f%% of the time, over %2$d hours</string>
+
+    <string name="h_episodes">Run and rest blocks</string>
+    <string name="h_ep_wait">No complete block in this range yet.</string>
+    <string name="h_ep_plug">From the fridge plug — direct measurement.</string>
+    <string name="h_ep_inverter">From the inverter state, not the plug: cooking looks like a run block here.</string>
+    <string name="h_ep_cool">COOLING   dur   from → to      energy</string>
+    <string name="h_ep_coast">COASTING  dur   from → to      rate</string>
+    <string name="h_ep_pulldown">Pulldown: %1$.1f Wh/K mean (%2$.1f–%3$.1f, n=%4$d). Compare blocks after long and short rests — the difference is the penalty CLAUDE.md §6 calls UNVERIFIED.</string>
 </resources>

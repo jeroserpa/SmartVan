@@ -1,9 +1,36 @@
 <?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- Two tabs at the TOP, not the bottom, and that is deliberate: ui/index.html
+     carries its own fixed bottom nav (Power / Fridge / Setup / Diag), so an
+     app-level bottom bar would stack two rows of tabs on one screen. The app's
+     chrome above, the page's chrome below, visibly different things. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/bg">
+    android:background="@color/bg"
+    android:orientation="vertical">
+
+    <com.google.android.material.tabs.TabLayout
+        android:id="@+id/tabs"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/bg"
+        app:tabIndicatorColor="@color/warn"
+        app:tabIndicatorFullWidth="false"
+        app:tabIndicatorHeight="2dp"
+        app:tabSelectedTextColor="@color/warn"
+        app:tabTextColor="@color/dim" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/line" />
+
+    <FrameLayout
+        android:id="@+id/page_dashboard"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
 
     <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
         android:id="@+id/swipe"
@@ -148,4 +175,17 @@
                 android:visibility="gone" />
         </LinearLayout>
     </ScrollView>
-</FrameLayout>
+    </FrameLayout>
+
+    <!-- The native half. Inflated here so it keeps its state across tab
+         switches; it holds a database handle and a worker thread. -->
+    <FrameLayout
+        android:id="@+id/page_history"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:visibility="gone">
+
+        <include layout="@layout/view_history" />
+    </FrameLayout>
+</LinearLayout>

@@ -29,6 +29,25 @@ object Analysis {
     /** Above this the compressor is running. M14 saw 17.5–24 W running, 0.0–0.1 W idle. */
     const val COMPRESSOR_W = 5f
 
+    /**
+     * SOC at which the pack stops absorbing, and the energy balance stops
+     * measuring anything.
+     *
+     * A full pack curtails: the MPPT throttles, or the surplus is simply not
+     * taken, and the input no longer has to equal output plus storage plus
+     * overhead. An interval spent pinned here reads as enormous overhead —
+     * on the mock log, five hours at 100 % reported 334 W against a true 50 W.
+     * The same applies at the bottom, where the station cuts out rather than
+     * discharging further.
+     *
+     * These intervals are **excluded, not clamped**. There is no overhead
+     * figure to be had from them, and a plausible-looking wrong one is worse
+     * than a gap — this is the §9 rule about out-of-band tank readings, in a
+     * different subsystem.
+     */
+    const val SOC_FULL = 99.5f
+    const val SOC_EMPTY = 1.0f
+
     // -----------------------------------------------------------------------
     // Station overhead
     // -----------------------------------------------------------------------
@@ -43,8 +62,15 @@ object Analysis {
         val to: Long,
         /** The answer. Watts the station consumed that no register reports. */
         val overheadW: Float,
-        /** ± on [overheadW], from capacity tolerance and tick timing, in quadrature. */
+        /** ± on [overheadW] overall: [errRandomW] and the capacity term together. */
         val errW: Float,
+        /**
+         * The part of [errW] that averages down over many bins — SOC
+         * quantisation and tick timing. Pack-capacity error is deliberately
+         * NOT in here: it is the same capacity in every bin, so it shifts them
+         * all the same way and never averages out. See [overheadEstimate].
+         */
+        val errRandomW: Float,
         val inW: Float,
         val outW: Float,
         /** Positive = the battery was absorbing. */
@@ -96,6 +122,11 @@ object Analysis {
             }
         }
 
+        // The station's SOC resolution, taken from the data rather than
+        // assumed: the P310 reports 0.1 %, but nothing here should break on a
+        // station that reports whole percent.
+        val socStep = inferStep(soc, ticks)
+
         val out = ArrayList<OverheadBin>()
         // Walk the ticks, closing a bin once it has covered minSpanS. Both
         // ends stay on a tick - which is what keeps deltaSOC exact - while the
@@ -122,6 +153,12 @@ object Analysis {
             k = m
             val hours = spanS / 3600f
 
+            // Pinned at either rail: nothing can be inferred here (see
+            // SOC_FULL). Both ends, so an interval genuinely charging INTO the
+            // top is still measured.
+            if (minOf(soc[a], soc[b]) >= SOC_FULL) continue
+            if (maxOf(soc[a], soc[b]) <= SOC_EMPTY) continue
+
             val dSoc = soc[b] - soc[a]
             val battW = dSoc / 100f * capacityWh / hours
             val mIn = timeMean(ep, inW, a, b)
@@ -130,19 +167,35 @@ object Analysis {
             // already advanced, so this drops the bin without stalling.
             if (mIn.isNaN() || mOut.isNaN()) continue
 
-            // Two independent errors. The capacity is uncertain by a fixed
-            // fraction; the tick instants are uncertain by up to one sample
-            // each, which matters only for short intervals.
             val dt = medianStep(ep, a, b)
-            val eCap = abs(battW) * CAPACITY_TOLERANCE
+
+            // Three error terms, and the first one is the one it is easy to
+            // talk yourself out of.
+            //
+            // SOC QUANTISATION. Both ends of a bin sit on a tick, and it is
+            // tempting to conclude deltaSOC is therefore exact. It is not:
+            // near a turning point the pack can drift across one 0.1 %
+            // boundary and back having moved almost no energy, so a single
+            // tick can mean anything from nothing to two steps. Ignoring this
+            // made short low-movement bins claim +-0.9 W when they were 26 W
+            // out, and since they were then the most heavily weighted bins in
+            // the estimate, they dragged the answer 2 W BELOW a plain mean.
+            // Standard uniform quantisation noise, one step per endpoint.
+            val eQuant = socStep * QUANT_SIGMA / 100f * capacityWh / hours
+            // TICK TIMING: the crossing happened somewhere inside a sample.
             val eTime = if (spanS > 0f) abs(battW) * (dt / spanS) else 0f
+            // PACK CAPACITY: systematic. Kept out of the random total on
+            // purpose - see errRandomW.
+            val eCap = abs(battW) * CAPACITY_TOLERANCE
+            val eRand = sqrt(eQuant * eQuant + eTime * eTime)
 
             out.add(
                 OverheadBin(
                     from = from,
                     to = to,
                     overheadW = mIn - mOut - battW,
-                    errW = sqrt(eCap * eCap + eTime * eTime),
+                    errW = sqrt(eRand * eRand + eCap * eCap),
+                    errRandomW = eRand,
                     inW = mIn,
                     outW = mOut,
                     battW = battW,
@@ -152,6 +205,76 @@ object Analysis {
             )
         }
         return out
+    }
+
+    /**
+     * The project's headline number, weighted by how much each bin is worth.
+     *
+     * Bins differ enormously in quality: an interval with the pack barely
+     * moving carries almost no capacity error, while one at 500 W of charge
+     * carries ±24 W of it (all computed per bin as [OverheadBin.errW]). A
+     * plain mean throws that away and lets the noisiest intervals drag the
+     * answer around. Inverse-variance weighting is the standard treatment and
+     * costs nothing here, because the variances are already known.
+     *
+     * [se] is the standard error of the weighted mean — quote it. The spread
+     * from [summarise] describes the bins; this describes the answer.
+     */
+    class Estimate(
+        val watts: Float,
+        /** Statistical error on [watts]. Shrinks as bins accumulate. */
+        val se: Float,
+        /**
+         * The pack-capacity band. It does **not** shrink with more bins,
+         * because it is the same capacity in every one of them — 3 % of 3 900
+         * Wh moves every bin the same way at once. Quoting only [se] on a
+         * figure this band dominates is the false precision this project's
+         * own notes keep warning about, so both are reported and the screen
+         * shows both.
+         */
+        val systematicW: Float,
+        val n: Int,
+    )
+
+    fun overheadEstimate(bins: List<OverheadBin>): Estimate? {
+        var sw = 0.0
+        var swx = 0.0
+        var swb = 0.0
+        var n = 0
+        for (b in bins) {
+            if (b.overheadW.isNaN()) continue
+            // Weight by the RANDOM error only. Weighting by the total would
+            // let the capacity term — which is common to every bin and cannot
+            // be averaged away — decide which bins to believe.
+            //
+            // The floor matters: a bin claiming near-zero error would take
+            // almost all the weight and become the only bin.
+            val e = maxOf(b.errRandomW, 1f).toDouble()
+            val w = 1.0 / (e * e)
+            sw += w
+            swx += w * b.overheadW
+            swb += w * b.battW
+            n++
+        }
+        if (n == 0 || sw <= 0.0) return null
+        val watts = (swx / sw).toFloat()
+        // A wrong capacity shifts every bin by -epsilon*battW, so it shifts
+        // the weighted mean by epsilon times the weighted mean battery power.
+        val systematic = (abs(swb / sw) * CAPACITY_TOLERANCE).toFloat()
+        return Estimate(watts, (1.0 / kotlin.math.sqrt(sw)).toFloat(), systematic, n)
+    }
+
+    /** Uniform quantisation noise, one step at each end: sqrt(2/12). */
+    private val QUANT_SIGMA = sqrt(2f / 12f)
+
+    /** Smallest real change in a quantised series — its resolution. */
+    private fun inferStep(soc: FloatArray, ticks: List<Int>): Float {
+        var smallest = Float.MAX_VALUE
+        for (k in 0 until ticks.size - 1) {
+            val d = abs(soc[ticks[k + 1]] - soc[ticks[k]])
+            if (d > 1e-4f && d < smallest) smallest = d
+        }
+        return if (smallest in 0.01f..5f) smallest else 0.1f
     }
 
     /** Mean and sample SD of a set of bins, weighted by nothing — M14's own summary. */

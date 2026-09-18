@@ -1,10 +1,7 @@
 package van.supervisor.app
 
 import android.content.Context
-import android.net.ConnectivityManager
 import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.os.SystemClock
 import androidx.annotation.VisibleForTesting
 import org.json.JSONObject
@@ -12,9 +9,6 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
 import java.net.URL
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicReference
 
 /**
  * One-shot read of van-core's state for the widget.
@@ -109,30 +103,16 @@ object VanFeed {
     /**
      * Read van-core over whatever route reaches it, trying each in turn.
      *
-     * It used to depend on `requestNetwork` alone, and that is the fragile
-     * half of this: it is asynchronous, it times out, and it needs
-     * CHANGE_NETWORK_STATE, which on a modern Android is not a permission an
-     * ordinary app simply has. When it failed, the widget declared "Not on
-     * van-core Wi-Fi" while the phone was demonstrably on van-core's Wi-Fi and
-     * the app was reading the same node over it.
+     * The routes themselves are [VanRoutes]' problem. What stays here is the
+     * distinction the footer depends on: no Wi-Fi at all, Wi-Fi but nothing
+     * answering, or something answering that is not a state stream (D-20).
      */
     fun fetch(context: Context): Reading {
-        val cm = context.getSystemService(ConnectivityManager::class.java)
-
-        // 1. Networks the phone is already joined to. Costs nothing, answers
-        //    at once, needs only ACCESS_NETWORK_STATE - and if we are sitting
-        //    on the van's AP, it is in this list right now.
-        val routes = LinkedHashSet<Network>()
-        runCatching {
-            for (n in cm.allNetworks) {
-                val caps = cm.getNetworkCapabilities(n) ?: continue
-                if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) routes.add(n)
-            }
-        }
-        // 2. Only if that found nothing, ask the system to produce one, the way
-        //    the activity does - same request, and the same 10s it allows.
-        if (routes.isEmpty()) requestWifi(cm)?.let { routes.add(it) }
-        val sawWifi = routes.isNotEmpty()
+        // Route selection lives in VanRoutes, shared with the history sync.
+        // Depending on one route was the bug; having two copies of the fix
+        // would be the next one.
+        val routes = VanRoutes.candidates(context)
+        val sawWifi = routes.any { it != null }
 
         var miss = if (sawWifi) Miss.NO_ANSWER else Miss.NO_WIFI
         for (route in routes) {
@@ -140,43 +120,7 @@ object VanFeed {
             r.states?.let { return r }
             if (r.miss == Miss.NOT_VAN_CORE) miss = Miss.NOT_VAN_CORE
         }
-
-        // 3. Last resort: the process's own default route. MainActivity binds
-        //    the process to the van network while it is open, and a phone with
-        //    mobile data off has the van AP as its default anyway.
-        val r = runCatching { readInitialBurst(null) }.getOrNull()
-        r?.states?.let { return r }
-        if (r?.miss == Miss.NOT_VAN_CORE) miss = Miss.NOT_VAN_CORE
         return Reading(null, miss)
-    }
-
-    /** The activity's request, verbatim: any Wi-Fi, internet not required. */
-    private fun requestWifi(cm: ConnectivityManager): Network? {
-        val found = AtomicReference<Network?>(null)
-        val latch = CountDownLatch(1)
-        val cb = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                found.set(network)
-                latch.countDown()
-            }
-
-            override fun onUnavailable() {
-                latch.countDown()
-            }
-        }
-        val request = NetworkRequest.Builder()
-            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
-            .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .build()
-        // Throws if CHANGE_NETWORK_STATE is not effective. That is a reason to
-        // fall through to the other routes, not to fail the whole read.
-        runCatching { cm.requestNetwork(request, cb, 10_000) }.onFailure { return null }
-        return try {
-            latch.await(11, TimeUnit.SECONDS)
-            found.get()
-        } finally {
-            runCatching { cm.unregisterNetworkCallback(cb) }
-        }
     }
 
     /**

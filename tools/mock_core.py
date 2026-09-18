@@ -313,6 +313,120 @@ SIM = None
 PATH_RE = re.compile(r"^/(switch|number|select|button|light|fan)/([^/]+)/([^/?]+)$")
 
 
+# ---------------------------------------------------------------------------
+# A stand-in for components/soak_log: /soak/status and /soak/log.csv.
+#
+# Without this there is no way to build the app's History tab (the analyses,
+# the charts, the incremental sync) except in a van, which is exactly the
+# problem this file exists to solve for the page.
+#
+# The rows are generated backwards from now, so a sync always has something
+# recent to fetch, and they are internally consistent in the way the analyses
+# care about: SOC integrates the net power, the station's own ~50 W of overhead
+# is present in that balance but in no column, and the fridge runs in blocks
+# with a cabinet temperature that follows them. Anything derived from this is
+# therefore checkable by hand.
+# ---------------------------------------------------------------------------
+LOG_COLUMNS = [
+    ("t_fridge", 2), ("t_cabin", 2), ("fridge_w", 1), ("fridge_kwh", 4),
+    ("soc", 1), ("in_w", 0), ("out_w", 0), ("ac_in_w", 0), ("dc_in_w", 0),
+    ("ac_out_w", 0), ("reg21", 0),
+    ("ac_on", 0), ("force_on", 0), ("fridge_req", 0), ("manual_req", 0),
+    ("surplus_req", 0), ("parked", 0), ("sleep_mode", 0), ("drive_inhibit", 0),
+    ("manual_min", 0), ("ble_up", 0), ("die_c", 1),
+    ("heap_int", 0), ("heap_int_min", 0),
+]
+
+LOG_INTERVAL_S = 10
+LOG_HOURS = 30
+STATION_OVERHEAD_W = 50.0      # what the analyses must recover from the balance
+PACK_WH = 3900.0               # measurements.md M2
+
+
+def _log_rows():
+    """Generate (epoch, values) oldest-first. Deterministic for one process."""
+    n = int(LOG_HOURS * 3600 / LOG_INTERVAL_S)
+    now = int(time.time())
+    start = now - n * LOG_INTERVAL_S
+    soc = 62.0
+    kwh = 0.0
+    t_fridge = 5.2
+    rows = []
+    for i in range(n):
+        epoch = start + i * LOG_INTERVAL_S
+        hour = ((epoch % 86400) / 3600.0)
+
+        # Solar: a bell over the middle of the day, with a cloud notch.
+        sun = max(0.0, math.sin((hour - 6.5) / 11.0 * math.pi))
+        if 13.2 < hour < 13.8:
+            sun *= 0.25
+        dc_in = round(620.0 * sun, 1) if sun > 0 else 0.0
+
+        # The compressor runs in 40 min blocks separated by 25 min rests, which
+        # is what gives the episode analysis something to find.
+        phase = (i * LOG_INTERVAL_S) % (65 * 60)
+        running = phase < 40 * 60
+        fridge_w = 21.8 if running else 0.05
+        kwh += fridge_w * LOG_INTERVAL_S / 3600.0 / 1000.0
+
+        # Cabinet follows the compressor with a first-order response, so a tau
+        # fit has a true value to land on.
+        cabin = 21.0 + 4.0 * math.sin((hour - 9.0) / 12.0 * math.pi)
+        target = 3.6 if running else cabin
+        tau_s = 27 * 60 if running else 9 * 3600
+        t_fridge += (target - t_fridge) * (LOG_INTERVAL_S / tau_s)
+
+        other = 18.0 + (12.0 if 18 <= hour < 22 else 0.0)
+        out_w = fridge_w + other
+        in_w = dc_in
+
+        # SOC integrates in - out - overhead. The overhead appears in NO
+        # column: recovering it from this balance is the whole job of
+        # Analysis.overhead(), and 50 W is the answer it should return.
+        net_w = in_w - out_w - STATION_OVERHEAD_W
+        soc += net_w * LOG_INTERVAL_S / 3600.0 / PACK_WH * 100.0
+        soc = max(5.0, min(100.0, soc))
+
+        rows.append((epoch, {
+            "t_fridge": t_fridge,
+            "t_cabin": cabin,
+            "fridge_w": fridge_w,
+            "fridge_kwh": kwh,
+            # Quantised to 0.1 % exactly as the station reports it - the reason
+            # overhead() bins by SOC tick rather than by wall clock.
+            "soc": round(soc, 1),
+            "in_w": in_w,
+            "out_w": out_w,
+            "ac_in_w": 0.0,
+            "dc_in_w": dc_in,
+            "ac_out_w": out_w,
+            "reg21": 19.0,
+            "ac_on": 1.0,
+            "force_on": 0.0,
+            "fridge_req": 1.0 if running else 0.0,
+            "manual_req": 0.0,
+            "surplus_req": 0.0,
+            "parked": 0.0,
+            "sleep_mode": 0.0,
+            "drive_inhibit": 0.0,
+            "manual_min": 0.0,
+            "ble_up": 1.0,
+            "die_c": 58.0,
+            "heap_int": 102000.0,
+            "heap_int_min": 98000.0,
+        }))
+    return rows
+
+
+_LOG_CACHE = {"rows": None}
+
+
+def log_rows():
+    if _LOG_CACHE["rows"] is None:
+        _LOG_CACHE["rows"] = _log_rows()
+    return _LOG_CACHE["rows"]
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -330,9 +444,71 @@ class Handler(BaseHTTPRequestHandler):
         if path in STATIC:
             f, ctype = STATIC[path]
             return self._file(f, ctype)
+        if path == "/soak/status":
+            return self._soak_status()
+        if path == "/soak/log.csv":
+            return self._soak_csv()
         if path in PROBE_PATHS:
             return self._file(UI / "portal.html", "text/html; charset=utf-8")
         self.send_error(404)
+
+    def _soak_status(self):
+        rows = log_rows()
+        body = json.dumps({
+            "rows": len(rows),
+            "capacity": 40000,
+            "seq": len(rows),
+            "interval_s": float(LOG_INTERVAL_S),
+            "boot": 1,
+            "reset": "POWERON",
+            "kept": True,
+            "clock": 1,
+            "epoch": int(time.time()),
+            "psram_free": 8275164,
+            "remotes": [],
+            "boots": [{"boot": 1, "reason": "POWERON",
+                       "epoch": rows[0][0] if rows else 0, "seq": 0}],
+        }).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _soak_csv(self):
+        """Byte-for-byte the shape soak_log.cpp emits, NAN fields included."""
+        q = parse_qs(urlparse(self.path).query)
+        rows = log_rows()
+        last = int(q.get("last", ["0"])[0] or 0)
+        if 0 < last < len(rows):
+            rows = rows[-last:]
+        names = [c[0] for c in LOG_COLUMNS]
+        out = [
+            f"# van-core soak log. rows={len(rows)} interval_s={LOG_INTERVAL_S:.1f}"
+            f" boot=1 tz_min=0",
+            "# clock: 0=unknown 1=phone-synced 2=carried across reboot",
+            "# boot 1 reset=POWERON at_row=0 time=mock",
+            "local_time,epoch,uptime_s,boot,clock," + ",".join(names),
+        ]
+        for epoch, v in rows:
+            lt = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(epoch))
+            cells = []
+            for name, dp in LOG_COLUMNS:
+                x = v.get(name)
+                # An absent value is an EMPTY field, not a zero - the one
+                # convention the parser must not get wrong.
+                cells.append("" if x is None else f"{x:.{dp}f}")
+            out.append(f"{lt},{epoch},{epoch % 100000},1,1," + ",".join(cells))
+        body = ("\n".join(out) + "\n").encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/csv")
+        self.send_header("Content-Disposition",
+                         'attachment; filename="soak-mock.csv"')
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
 
     def _file(self, p, ctype):
         try:
@@ -402,6 +578,14 @@ class Handler(BaseHTTPRequestHandler):
     # -- POST ----------------------------------------------------------
     def do_POST(self):
         u = urlparse(self.path)
+        # The app and the /soak page both hand the node a clock. There is
+        # nothing to set here, but answering 200 keeps the client's log clean.
+        if u.path in ("/soak/clock", "/soak/clear"):
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
         m = PATH_RE.match(u.path)
         if not m:
             return self.send_error(404)

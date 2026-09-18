@@ -97,6 +97,75 @@ class AnalysisTest {
         assertTrue(hard.errW > 5f)
     }
 
+    /**
+     * A full pack curtails rather than absorbing, so input no longer has to
+     * equal output plus storage plus overhead. On the mock log five hours
+     * pinned at 100 % reported 334 W against a true 50 W, and it dominated the
+     * mean. Such intervals are excluded, never clamped: no answer beats a
+     * confident wrong one.
+     */
+    @Test
+    fun `an interval pinned at a full pack is excluded, not clamped`() {
+        val cols = listOf("soc", "in_w", "out_w")
+        val rows = (0..1080).map { i ->
+            // Three hours at 100 %, 500 W of surplus going nowhere measurable.
+            (HOUR + i * 10L) to floatArrayOf(100f, 540f, 40f)
+        }
+        assertTrue(Analysis.overhead(table(cols, *rows.toTypedArray())).isEmpty())
+    }
+
+    @Test
+    fun `charging into the top of the pack is still measured`() {
+        val cols = listOf("soc", "in_w", "out_w")
+        // 97 -> 99.8: at the top, but genuinely still absorbing.
+        val rows = (0..360).map { i ->
+            val soc = 97f + 2.8f * (i / 360f)
+            (HOUR + i * 10L) to floatArrayOf(Math.round(soc * 10f) / 10f, 300f, 100f)
+        }
+        assertTrue(
+            "the rail guard must not swallow a real charge",
+            Analysis.overhead(table(cols, *rows.toTypedArray()), minSpanS = 300).isNotEmpty(),
+        )
+    }
+
+    @Test
+    fun `the weighted estimate trusts the quiet bins over the noisy ones`() {
+        fun bin(w: Float, err: Float) = Analysis.OverheadBin(
+            from = 0, to = 900, overheadW = w, errW = err, errRandomW = err,
+            inW = 0f, outW = 0f, battW = 0f, dSocPct = 0f, samples = 90,
+        )
+        // Three precise bins near 50, one wild one that a plain mean would let
+        // drag the answer 30 W away.
+        val bins = listOf(bin(50f, 1f), bin(51f, 1f), bin(49f, 1f), bin(200f, 60f))
+        val plain = Analysis.summarise(bins.map { it.overheadW })!!
+        val weighted = Analysis.overheadEstimate(bins)!!
+        assertTrue("a plain mean is dragged", plain.mean > 80f)
+        assertEquals("the weighted one is not", 50f, weighted.watts, 1.5f)
+        assertTrue("and it reports its own standard error", weighted.se in 0.01f..2f)
+        assertEquals(4, weighted.n)
+    }
+
+    /**
+     * The capacity band is common to every bin, so more bins must not shrink
+     * it. Quoting only the statistical error on a number this dominates is
+     * exactly the false precision CLAUDE.md keeps calling out.
+     */
+    @Test
+    fun `the capacity band does not average away`() {
+        fun bin(n: Int) = List(n) {
+            Analysis.OverheadBin(
+                from = 0, to = 900, overheadW = 50f, errW = 11f, errRandomW = 2f,
+                inW = 300f, outW = 100f, battW = 150f, dSocPct = 1f, samples = 90,
+            )
+        }
+        val few = Analysis.overheadEstimate(bin(4))!!
+        val many = Analysis.overheadEstimate(bin(400))!!
+        assertTrue("statistical error shrinks with n", many.se < few.se / 5f)
+        assertEquals("the capacity band does not", few.systematicW, many.systematicW, 0.01f)
+        // 3 % of a 150 W battery flow.
+        assertEquals(4.5f, many.systematicW, 0.1f)
+    }
+
     @Test
     fun `overhead needs the station columns and says nothing without them`() {
         val t = table(listOf("t_fridge"), 1_758_000_000L to floatArrayOf(7.5f))

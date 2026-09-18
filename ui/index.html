@@ -475,6 +475,22 @@ table.raw td:first-child{color:var(--muted);padding-right:10px;word-break:break-
   </div>
 
   <div class="card">
+    <h2>History log</h2>
+    <div class="note" style="margin:0 0 8px">The node keeps its own rolling log
+      in PSRAM - it survives a crash, a watchdog and an OTA, and is <b>lost on a
+      power cut</b>. Depth below. The phone app's History tab archives it
+      permanently and does the sums; this link is the raw CSV.</div>
+    <div class="grid">
+      <div class="cell"><div class="k">Rows</div><div class="v" id="d_log_rows">--</div></div>
+      <div class="cell"><div class="k">Depth</div><div class="v" id="d_log_span">--</div></div>
+      <div class="cell"><div class="k">Clock</div><div class="v" id="d_log_clock">--</div></div>
+    </div>
+    <div class="btnrow">
+      <button class="btn" id="btn_log">Open log page</button>
+    </div>
+  </div>
+
+  <div class="card">
     <h2>All entities</h2>
     <div class="note" style="margin:0 0 8px">Everything the node publishes, as
       received. Amber ids are ones this page does not know about - that is where
@@ -698,6 +714,29 @@ $("#btn_restart").onclick    = function () {
     cmd.btn(E.btn_restart);
 };
 $("#btn_default").onclick    = function () { location.href = "/"; };
+$("#btn_log").onclick        = function () { location.href = "/soak"; };
+
+/* The node's log depth, polled only while Diag is open.
+   This is a view onto soak_log's own /soak/status - the page deliberately does
+   not parse the CSV itself. Reducing days of samples in a phone browser over
+   SoftAP is the app's job (docs/decisions.md D-22); the page's job is to say
+   whether there is anything there and how far back it goes. A node without
+   soak_log simply 404s, and the card stays on dashes. */
+function logStatus() {
+  fetch("/soak/status", { cache: "no-store" }).then(function (r) {
+    return r.ok ? r.json() : null;
+  }).then(function (j) {
+    if (!j) return;
+    var secs = (j.rows || 0) * (j.interval_s || 10);
+    $("#d_log_rows").textContent = (j.rows || 0).toLocaleString();
+    $("#d_log_span").textContent = secs >= 86400 ? (secs / 86400).toFixed(1) + " d"
+                                 : secs >= 3600  ? (secs / 3600).toFixed(1) + " h"
+                                 : Math.round(secs / 60) + " min";
+    /* Clock 0 means no phone has ever handed this node the time, and every row
+       logged so far is undateable. Worth saying, not hiding. */
+    $("#d_log_clock").textContent = ["unset", "synced", "carried"][j.clock] || "--";
+  }).catch(function () { /* no log on this build; dashes are correct */ });
+}
 
 /* --- render ------------------------------------------------------------- */
 function fmtW(v) {
@@ -851,6 +890,7 @@ function render() {
   $("#d_ver").textContent = "ESPHome " + (txt("version") || "--");
 
   if (!$("#tab-diag").hidden) {
+    logStatus();
     var known = {};
     Object.keys(E).forEach(function (k) { known[E[k]] = 1; });
     Object.keys(NUMS).forEach(function (k) { known[NUMS[k][0]] = 1; });

@@ -85,6 +85,28 @@ class SoakCsvTest {
         assertTrue(t.col("fridge_w")!![0].isNaN())
     }
 
+    /**
+     * A streaming consumer stores rows as they arrive, so it needs the column
+     * names before the first one. Taking them from the returned Result instead
+     * means they land after the last callback — and every batch but the final
+     * one is written against an empty column list, i.e. thrown away. That was
+     * a real bug in HistorySync, and this is the assertion that would have
+     * caught it.
+     */
+    @Test
+    fun `columns are announced before the first row`() {
+        var columnsAt = -1
+        var rowsSeen = 0
+        var seen: List<String>? = null
+        SoakCsv.parse(
+            sample.reader().buffered(),
+            onColumns = { seen = it; columnsAt = rowsSeen },
+        ) { rowsSeen++ }
+        assertEquals("header must precede every row", 0, columnsAt)
+        assertEquals(listOf("t_fridge", "t_cabin", "fridge_w"), seen)
+        assertEquals(4, rowsSeen)
+    }
+
     @Test
     fun `an empty log is empty, not an exception`() {
         val (t, _) = parse("# van-core soak log. rows=0 interval_s=10.0 boot=1 tz_min=0\n")

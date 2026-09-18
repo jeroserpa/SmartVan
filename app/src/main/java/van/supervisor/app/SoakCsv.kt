@@ -82,12 +82,23 @@ object SoakCsv {
     /**
      * Parse [reader], calling [onRow] for each dateable row in file order.
      *
+     * [onColumns] fires once, when the header is read and **before the first
+     * row**. A streaming consumer needs the names to store a row at all, and
+     * taking them from the returned [Result] instead means they arrive after
+     * the last callback — which silently discards every batch but the final
+     * one. That is not hypothetical: it is what the first version of
+     * `HistorySync.insertStreaming` did.
+     *
      * Returns what the preamble and header said, and how many rows were
      * dropped for having no clock — a number worth showing rather than
      * swallowing, because a log full of them means nobody ever opened the
      * page to sync the node's clock.
      */
-    fun parse(reader: BufferedReader, onRow: (Row) -> Unit): Result {
+    fun parse(
+        reader: BufferedReader,
+        onColumns: (List<String>) -> Unit = {},
+        onRow: (Row) -> Unit,
+    ): Result {
         var intervalS = 0f
         var tzMin = 0
         var boot = 0
@@ -118,6 +129,7 @@ object SoakCsv {
                 if (head.size <= FIXED || head[0] != "local_time") continue
                 columns = head.subList(FIXED, head.size).map { it.trim() }
                 ncol = columns.size
+                onColumns(columns)
                 continue
             }
 

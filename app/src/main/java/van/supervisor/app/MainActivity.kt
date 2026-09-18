@@ -34,13 +34,21 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.Lifecycle
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.tabs.TabLayout
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * A window onto van-core's web UI, and nothing more (D-15).
+ * A window onto van-core's web UI (D-15), plus the one screen that cannot be
+ * a page at all (D-22).
+ *
+ * The Dashboard tab is the node's own `ui/index.html`, unchanged and still the
+ * source of truth for everything live. The History tab is native, for a
+ * structural reason rather than a cosmetic one: `soak_log`'s ring is volatile
+ * PSRAM holding ~4.3 days, so the archive has to live somewhere that survives
+ * a power cut and works out of range. See [HistoryScreen].
  *
  * The whole point is routing: with mobile data on, Android sends unbound traffic
  * to cellular, where 192.168.4.1 does not exist. This activity binds *its own
@@ -92,6 +100,11 @@ class MainActivity : AppCompatActivity() {
     private val main = Handler(Looper.getMainLooper())
     private val startedAt = SystemClock.elapsedRealtime()
 
+    private lateinit var tabs: TabLayout
+    private lateinit var pageDashboard: View
+    private lateinit var pageHistory: View
+    private var history: HistoryScreen? = null
+
     private var boundNetwork: Network? = null
     private var callback: ConnectivityManager.NetworkCallback? = null
     private var phase = Phase.SEARCHING
@@ -136,6 +149,7 @@ class MainActivity : AppCompatActivity() {
         btnDetails = findViewById(R.id.btn_details)
 
         setupWebView()
+        setupTabs()
 
         swipe.setColorSchemeResources(R.color.warn)
         swipe.setProgressBackgroundColorSchemeResource(R.color.card)
@@ -150,12 +164,76 @@ class MainActivity : AppCompatActivity() {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (phase == Phase.READY && web.canGoBack()) web.goBack() else finish()
+                // History is a tab, not a screen on a stack, so Back out of it
+                // lands on the dashboard rather than leaving the app - which
+                // is what anyone who got there by tapping a tab expects.
+                if (tabs.selectedTabPosition != 0) {
+                    tabs.getTabAt(0)?.select()
+                } else if (phase == Phase.READY && web.canGoBack()) {
+                    web.goBack()
+                } else {
+                    finish()
+                }
             }
         })
 
         setPhase(Phase.SEARCHING)
         requestVanNetwork()
+    }
+
+    private fun setupTabs() {
+        tabs = findViewById(R.id.tabs)
+        pageDashboard = findViewById(R.id.page_dashboard)
+        pageHistory = findViewById(R.id.page_history)
+        tabs.addTab(tabs.newTab().setText(R.string.tab_dashboard))
+        tabs.addTab(tabs.newTab().setText(R.string.tab_history))
+        tabs.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: TabLayout.Tab) = showTab(tab.position)
+            override fun onTabUnselected(tab: TabLayout.Tab) = Unit
+            override fun onTabReselected(tab: TabLayout.Tab) = Unit
+        })
+        showTab(0)
+    }
+
+    private fun showTab(index: Int) {
+        val onHistory = index == 1
+        pageDashboard.visibility = if (onHistory) View.GONE else View.VISIBLE
+        pageHistory.visibility = if (onHistory) View.VISIBLE else View.GONE
+        if (onHistory) {
+            // Built on first use: it opens a database and starts a worker
+            // thread, and most launches never leave the dashboard.
+            val h = history ?: HistoryScreen(pageHistory).also { history = it }
+            h.onShown()
+        }
+        // A WebView that is not being looked at should not be running timers
+        // or holding an SSE stream open on a node that also runs BLE.
+        if (onHistory) {
+            web.onPause()
+            web.pauseTimers()
+        } else {
+            web.onResume()
+            web.resumeTimers()
+        }
+    }
+
+    /**
+     * The save path, shared with the page's `window.VanApp.saveFile`.
+     *
+     * [HistoryScreen] exports through here rather than through DownloadManager
+     * for the same reason the page does: DownloadManager runs outside this
+     * process's network binding. The origin check does not apply — this text
+     * came from our own database, not from a page.
+     */
+    fun saveText(name: String, text: String): String {
+        val file = safeName(name)
+        val bytes = text.toByteArray(Charsets.UTF_8)
+        return try {
+            val where = if (Build.VERSION.SDK_INT >= 29) saveToDownloads(file, bytes)
+                        else saveToAppDownloads(file, bytes)
+            "Saved $where (${Math.round(bytes.size / 1024.0)} kB)"
+        } catch (e: Exception) {
+            "Save failed: ${e.message ?: e.javaClass.simpleName}"
+        }
     }
 
     private fun setupWebView() {
@@ -378,15 +456,7 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun saveFile(name: String, text: String): String {
             if (!fromVanCore()) return "Refused: saving is only available to van-core pages"
-            val file = safeName(name)
-            val bytes = text.toByteArray(Charsets.UTF_8)
-            return try {
-                val where = if (Build.VERSION.SDK_INT >= 29) saveToDownloads(file, bytes)
-                            else saveToAppDownloads(file, bytes)
-                "Saved $where (${Math.round(bytes.size / 1024.0)} kB)"
-            } catch (e: Exception) {
-                "Save failed: ${e.message ?: e.javaClass.simpleName}"
-            }
+            return saveText(name, text)
         }
     }
 
@@ -461,10 +531,16 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        web.onResume()
-        web.resumeTimers()
-        // Back from Wi-Fi settings, or from the home screen: try at once.
-        if (phase == Phase.NO_WIFI || phase == Phase.UNREACHABLE) load(quiet = true)
+        if (tabs.selectedTabPosition == 0) {
+            web.onResume()
+            web.resumeTimers()
+            // Back from Wi-Fi settings, or from the home screen: try at once.
+            if (phase == Phase.NO_WIFI || phase == Phase.UNREACHABLE) load(quiet = true)
+        } else {
+            // Returning straight into History: pick up whatever the node has
+            // logged since, without waking the page behind it.
+            history?.onShown()
+        }
     }
 
     override fun onPause() {
@@ -478,6 +554,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        history?.close()
+        history = null
         main.removeCallbacksAndMessages(null)
         callback?.let { runCatching { cm.unregisterNetworkCallback(it) } }
         callback = null
