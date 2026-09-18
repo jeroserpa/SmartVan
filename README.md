@@ -18,7 +18,7 @@ This file is just how to build and test it.
 | `common/base.yaml` | Logger, OTA, web server, diagnostics. Shared by every node. |
 | `tools/fbot_probe.py` | Laptop-side BLE client. Protocol validation and 24h logging with no microcontroller. |
 | `ui/index.html` | The web UI that replaces the BrightEMS app. One self-contained file: no framework, no build step, no asset from the internet. |
-| `components/soak_log/` | The node's own rolling log, in PSRAM, downloadable as CSV. On `van-core.yaml` at 10s: ~4.3 days. **Lost on a power cut** — see `app/` for the archive that is not. |
+| `components/soak_log/` | The node's own rolling log, in PSRAM, downloadable as CSV. On `van-core.yaml` at 10s: ~4 days. **Lost on a power cut** — see `app/` for the archive that is not. |
 | `app/` | The Android wrapper (D-15). Two tabs: the page above, and a **native History screen** that archives the node's log permanently and computes what `docs/measurements.md` has been doing by hand (D-22). |
 | `components/van_ui/` | Serves that page, gzipped, from flash on the web server ESPHome already runs. |
 | `tools/pack_ui.py` | Packs `ui/index.html` into `components/van_ui/van_ui_html.h`. Run it after every UI edit. |
@@ -151,7 +151,7 @@ else.
 
 ## The history log
 
-`van-core` keeps a rolling log in PSRAM (25 columns, 10s, ~4.3 days) and serves
+`van-core` keeps a rolling log in PSRAM (25 columns, 10s, ~4 days) and serves
 it at `http://192.168.4.1/soak`. **It survives a crash, a watchdog and an OTA,
 and is lost on a power cut** — so the phone app's History tab keeps its own
 copy, forever, and works out of range.

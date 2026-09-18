@@ -944,7 +944,7 @@ The split is by **data lifetime**, not by looks, and the deciding fact is in
 `components/soak_log/soak_log.h`: the ring buffer lives in `.ext_ram_noinit`
 PSRAM. It survives a crash, a watchdog reset, an OTA and the restart button,
 and it is **lost on a power cut** — a 12 V bus dropout erases days of
-measurement. It also holds only ~4.3 days at 10 s before it wraps.
+measurement. It also holds only ~4 days at 10 s before it wraps.
 
 So:
 

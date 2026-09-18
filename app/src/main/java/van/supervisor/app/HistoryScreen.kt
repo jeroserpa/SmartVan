@@ -20,7 +20,7 @@ import kotlin.math.roundToInt
  *
  * It is native rather than another page for one structural reason
  * (docs/decisions.md D-22): `soak_log`'s ring is volatile PSRAM, lost on a
- * power cut, and holds ~4.3 days. This archive survives both, and it works
+ * power cut, and holds ~4 days. This archive survives both, and it works
  * with the van 200 km away — which is when you actually sit down to read it.
  *
  * Every panel leads with a **sentence**, not a chart. A plot nobody can

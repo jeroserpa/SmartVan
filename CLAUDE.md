@@ -947,7 +947,7 @@ None of the following needs the ESP32, and several could still change the design
 ### Data logging (Phase 1)
 
 > **`LANDED 2026-09-18`, but not as an SD card.** `van-core.yaml` now carries
-> `soak_log` — a 4 MB PSRAM ring at 10s, 25 columns, ~4.3 days, served as CSV
+> `soak_log` — a 4 MB PSRAM ring at 10s, 25 columns, ~4 days, served as CSV
 > at `/soak`. It is the stand-in this section's card was meant to be, and it
 > cost nothing new: M12/M14 measured 8.27 MB of PSRAM free with BLE, the
 > display, SoftAP and the web server all running.

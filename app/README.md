@@ -21,7 +21,7 @@ an app-level bottom bar would stack two rows of tabs on one screen.
 
 **Why this one is not a page.** `soak_log`'s ring lives in `.ext_ram_noinit`
 PSRAM: it survives a crash, a watchdog and an OTA, and is **lost on a power
-cut**, and it holds only ~4.3 days at 10 s before it wraps. The phone keeps its
+cut**, and it holds only ~4 days at 10 s before it wraps. The phone keeps its
 own copy forever and reads it with the van 200 km away. Nothing served from the
 node can do either, and that asymmetry — not looks — is why this screen is
 native.

@@ -11,7 +11,7 @@ import android.database.sqlite.SQLiteOpenHelper
  * `soak_log`'s ring lives in `.ext_ram_noinit` PSRAM. It survives a crash, a
  * watchdog, an OTA and the restart button, and is **lost on a power cut**
  * (`components/soak_log/soak_log.h`). A 12 V bus dropout erases days of
- * measurement. The node also only holds ~4.3 days at 10 s before it starts
+ * measurement. The node also only holds ~4 days at 10 s before it starts
  * overwriting itself.
  *
  * So the phone keeps its own copy, and keeps it forever. Everything the web

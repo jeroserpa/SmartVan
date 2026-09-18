@@ -661,7 +661,7 @@ van_ui:
 # 10s, not the 30s of CLAUDE.md section 9. The blocked measurements are the
 # reason this exists - coast dT/dt, the pulldown penalty, duty cycle - and at
 # 30s a cool-down block is a dozen points. 24 columns at 10s is ~930 kB/day,
-# so 4 MB holds about 4.3 days: longer than any single measurement run, and a
+# so 4 MB holds about 4 days: longer than any single measurement run, and a
 # phone that opens the app once a week is what makes it an archive.
 #
 # `serve_at_ui` stays FALSE: van_ui owns /ui above. This registers /soak only.

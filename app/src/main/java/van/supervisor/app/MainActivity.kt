@@ -47,7 +47,7 @@ import java.util.concurrent.atomic.AtomicReference
  * The Dashboard tab is the node's own `ui/index.html`, unchanged and still the
  * source of truth for everything live. The History tab is native, for a
  * structural reason rather than a cosmetic one: `soak_log`'s ring is volatile
- * PSRAM holding ~4.3 days, so the archive has to live somewhere that survives
+ * PSRAM holding ~4 days, so the archive has to live somewhere that survives
  * a power cut and works out of range. See [HistoryScreen].
  *
  * The whole point is routing: with mobile data on, Android sends unbound traffic

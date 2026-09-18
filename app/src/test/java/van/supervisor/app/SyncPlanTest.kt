@@ -33,7 +33,7 @@ class SyncPlanTest {
 
     @Test
     fun `a gap wider than the node's buffer asks for everything`() {
-        // Three weeks away. The node holds ~4.3 days, so there is no point
+        // Three weeks away. The node holds ~4 days, so there is no point
         // naming a number larger than its capacity.
         assertEquals(0, SyncPlan.rowsNeeded(now - 21 * 86_400, 10f, 30_000, now))
     }
