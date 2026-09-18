@@ -1035,12 +1035,44 @@ that reading the code had not:
    overhead at all. Such intervals are now **excluded, not clamped** — the
    same rule §9 applies to out-of-band tank readings, in a different
    subsystem. Mean 50.8 → 49.7 W, SD 18.2 → 3.9.
+
+   **This was not a new finding, and it should not be recorded as one.**
+   `tools/soak_report.py` §5 already skipped pinned packs, at the same 99.5 %
+   threshold, before any of this was written. It was new to the Kotlin, which
+   is a different and much less flattering thing. The thresholds are now
+   deliberately identical: **two tools computing the same quantity from the
+   same CSV must not disagree about which rows are usable.**
 2. **The weighted estimate read 47.9 ±0.21 W** — worse than a plain mean, while
    claiming a fifth of a watt. The error model assumed ΔSOC was exact because
    both ends of a bin sit on a SOC tick. Near a turning point that is false:
    the pack can drift across one 0.1 % boundary and back having moved no
    energy. Those bins claimed ±0.9 W while being 26 W out, and were therefore
    the *most heavily weighted* in the estimate.
+
+### Kept in step with `tools/soak_report.py`
+
+Comparing the two was worth more than either alone, and turned up a third
+thing neither test had caught. `soak_report.py` uses **only windows with no AC
+input**; the Kotlin did not. Charging from AC puts the station's own
+conversion losses into the same residual as its idle draw, so the app would
+have reported a higher "overhead" whenever the alternator or shore power was
+running — a number that is not wrong so much as **a different quantity wearing
+the same name**. The ~48 W of M2 is the idle figure. The filter now matches.
+
+Solar is deliberately *not* excluded, also matching: MPPT losses land in the
+residual in both tools, and a convention shared with the existing one beats a
+third invented here.
+
+Where the two still differ, knowingly:
+
+| | `soak_report.py` §5 | the app |
+|---|---|---|
+| Window | fixed 2 h | between SOC ticks, grouped to ≥5 min |
+| Why | 0.1 % over 2 h is only ±2 W, so quantisation is bounded by the window length | shorter runs still yield bins; quantisation is carried per bin instead |
+| Best for | a long soak downloaded to a laptop | whatever is on the phone, including a single evening |
+
+They should agree on the same long dataset. If they ever do not, that is a
+finding, not a rounding difference.
 
 **And the pack-capacity tolerance is reported separately from the statistical
 error, never averaged down.** It is the same 3 900 Wh in every bin, so it

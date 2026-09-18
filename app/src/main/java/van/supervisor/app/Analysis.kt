@@ -44,9 +44,13 @@ object Analysis {
      * figure to be had from them, and a plausible-looking wrong one is worse
      * than a gap — this is the §9 rule about out-of-band tank readings, in a
      * different subsystem.
+     *
+     * The thresholds match `tools/soak_report.py` §5, which reached the same
+     * conclusion first. Two tools computing the same quantity from the same
+     * CSV must not disagree about which rows are usable.
      */
     const val SOC_FULL = 99.5f
-    const val SOC_EMPTY = 1.0f
+    const val SOC_EMPTY = 5.5f
 
     // -----------------------------------------------------------------------
     // Station overhead
@@ -106,6 +110,16 @@ object Analysis {
         val soc = t.col("soc") ?: return emptyList()
         val inW = t.col("in_w") ?: return emptyList()
         val outW = t.col("out_w") ?: return emptyList()
+        // Charging from AC puts the station's own conversion losses into the
+        // same residual as its idle draw, and the figure everyone quotes (~48 W,
+        // M2) is the idle one. `tools/soak_report.py` §5 handles this by using
+        // only windows with no AC input; this does the same, so the two tools
+        // answer the same question rather than two questions with one name.
+        //
+        // Solar is deliberately NOT excluded, matching soak_report.py: MPPT
+        // losses land in the residual in both, and a convention shared with the
+        // existing tool beats a third one of my own.
+        val acIn = t.col("ac_in_w")
         val ep = t.epochs()
         if (ep.size < 3) return emptyList()
 
@@ -158,6 +172,8 @@ object Analysis {
             // top is still measured.
             if (minOf(soc[a], soc[b]) >= SOC_FULL) continue
             if (maxOf(soc[a], soc[b]) <= SOC_EMPTY) continue
+            // Any AC input inside the interval disqualifies it.
+            if (acIn != null && (a..b).any { (acIn[it]) > 1f }) continue
 
             val dSoc = soc[b] - soc[a]
             val battW = dSoc / 100f * capacityWh / hours

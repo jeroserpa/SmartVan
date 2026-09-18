@@ -114,6 +114,39 @@ class AnalysisTest {
         assertTrue(Analysis.overhead(table(cols, *rows.toTypedArray())).isEmpty())
     }
 
+    /**
+     * Charging from AC puts the station's conversion losses into the same
+     * residual as its idle draw. The ~48 W everyone quotes (M2) is the idle
+     * figure, and `tools/soak_report.py` §5 gets it by using only windows
+     * with no AC input. This must agree, or the two tools answer different
+     * questions under one name.
+     */
+    @Test
+    fun `intervals with AC input are excluded, matching soak_report`() {
+        val cols = listOf("soc", "in_w", "out_w", "ac_in_w")
+        fun run(acIn: Float): List<Analysis.OverheadBin> {
+            val rows = (0..360).map { i ->
+                val soc = 50f + 3.846f * (i / 360f)
+                (HOUR + i * 10L) to
+                    floatArrayOf(Math.round(soc * 10f) / 10f, 300f, 100f, acIn)
+            }
+            return Analysis.overhead(table(cols, *rows.toTypedArray()), minSpanS = 300)
+        }
+        assertTrue("solar only: measured", run(0f).isNotEmpty())
+        assertTrue("charging from AC: not measured", run(400f).isEmpty())
+    }
+
+    /** A log with no such column must still work — the soak builds lack it. */
+    @Test
+    fun `a log without an AC input column is still measured`() {
+        val cols = listOf("soc", "in_w", "out_w")
+        val rows = (0..360).map { i ->
+            val soc = 50f + 3.846f * (i / 360f)
+            (HOUR + i * 10L) to floatArrayOf(Math.round(soc * 10f) / 10f, 300f, 100f)
+        }
+        assertTrue(Analysis.overhead(table(cols, *rows.toTypedArray()), minSpanS = 300).isNotEmpty())
+    }
+
     @Test
     fun `charging into the top of the pack is still measured`() {
         val cols = listOf("soc", "in_w", "out_w")
