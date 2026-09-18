@@ -76,10 +76,15 @@ jobs:
 
       # A fixed download link for the phone:
       #   https://github.com/<repo>/releases/download/app-latest/van-core.apk
-      # One rolling pre-release, replaced by every build of the app branches.
+      # One rolling pre-release, replaced by every build of main.
       # The repo is public, so the APK is too; it holds no secrets.
+      #
+      # To test an app branch on the phone, add it here as
+      # `|| github.ref_name == '<branch>'` - and TAKE IT OUT when it merges.
+      # A merged branch left in this list still overwrites main's release from
+      # any later push to it, which is a confusing way to install an old build.
       - name: Publish to the app-latest release
-        if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'claude/widget-temp-battery-animation-4hmgib')
+        if: github.event_name == 'push' && github.ref_name == 'main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
