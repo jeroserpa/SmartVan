@@ -18,6 +18,8 @@ This file is just how to build and test it.
 | `common/base.yaml` | Logger, OTA, web server, diagnostics. Shared by every node. |
 | `tools/fbot_probe.py` | Laptop-side BLE client. Protocol validation and 24h logging with no microcontroller. |
 | `ui/index.html` | The web UI that replaces the BrightEMS app. One self-contained file: no framework, no build step, no asset from the internet. |
+| `components/soak_log/` | The node's own rolling log, in PSRAM, downloadable as CSV. On `van-core.yaml` at 10s: ~4.3 days. **Lost on a power cut** — see `app/` for the archive that is not. |
+| `app/` | The Android wrapper (D-15). Two tabs: the page above, and a **native History screen** that archives the node's log permanently and computes what `docs/measurements.md` has been doing by hand (D-22). |
 | `components/van_ui/` | Serves that page, gzipped, from flash on the web server ESPHome already runs. |
 | `tools/pack_ui.py` | Packs `ui/index.html` into `components/van_ui/van_ui_html.h`. Run it after every UI edit. |
 | `tools/mock_core.py` | A fake van-core on the laptop. Same `/events` + REST surface, so the UI is developed and tested with no hardware. |
@@ -79,10 +81,11 @@ The AP is a network with no internet, so the phone will say so. That is
 deliberate — see `docs/decisions.md` D-10. It keeps mobile data as its default
 route, so the rest of the phone still works while parked at the van.
 
-> **Known problem (2026-09-16):** on Android with mobile data on, the page does
-> not load at all — the browser's traffic goes to cellular. The fix planned is a
-> small wrapper app that binds itself to the van network; see
-> `docs/decisions.md` D-15. Until then, the UI needs mobile data off.
+> **Known problem (2026-09-16), fixed by the app:** on Android with mobile data
+> on, this page does not load in a browser at all — the browser's traffic goes to
+> cellular, where 192.168.4.1 does not exist. The wrapper app binds its own
+> process to the van Wi-Fi and is the answer (`docs/decisions.md` D-15); in a
+> plain browser the UI still needs mobile data off.
 
 1. Join the van AP. When the phone asks, **stay connected** despite no internet.
    Android: also turn off "switch to mobile data automatically" for this
@@ -145,6 +148,34 @@ Open **Diag > All entities**. Anything in amber is an entity the page does not
 know about. If something the page needs is missing, the entity id is wrong:
 fix it in the single `ENTITIES` block at the top of the `<script>`, nowhere
 else.
+
+## The history log
+
+`van-core` keeps a rolling log in PSRAM (25 columns, 10s, ~4.3 days) and serves
+it at `http://192.168.4.1/soak`. **It survives a crash, a watchdog and an OTA,
+and is lost on a power cut** — so the phone app's History tab keeps its own
+copy, forever, and works out of range.
+
+That screen computes the numbers `CLAUDE.md` §8 is blocked on, rather than
+leaving them to a text editor: station overhead from the SOC balance (§8.2),
+coast rate and τ (§8.5), duty cycle (§8.4) and Wh/K per run block — the raw
+material for the pulldown penalty the whole saving rests on (§6).
+
+Develop it with no hardware, same as the page:
+
+```bash
+python tools/mock_core.py --fast 60
+```
+
+The mock now serves `/soak/status` and `/soak/log.csv` with a synthetic log
+whose answers are known: a 50W station draw hidden in the SOC balance, 40/25
+min compressor blocks, and a 27 min cabinet time constant. The analyses are
+tested against exactly those.
+
+The parser and the analyses are plain Kotlin with no Android types, so they are
+host-tested the way the arbiter is. Pushing anything under `app/` runs
+`.github/workflows/android-app.yml`, which builds the APK and runs them — there
+is no Gradle wrapper in the repo and the workflow pins the version instead.
 
 ## Flashing and OTA, without a router
 

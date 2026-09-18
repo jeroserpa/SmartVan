@@ -9,9 +9,61 @@ not answering) with Retry, a Wi-Fi settings shortcut and a Details view of
 the bound network. Errors retry by themselves every 5 s, and again on return
 to the app. Pull down on the page to reload it.
 
-A WebView onto `http://192.168.4.1/ui`, with this app's traffic bound to the
-van Wi-Fi so the rest of the phone keeps using mobile data. No logic here —
-the web UI stays the source of truth.
+Two tabs, at the **top** — `ui/index.html` carries its own fixed bottom nav, so
+an app-level bottom bar would stack two rows of tabs on one screen.
+
+| Tab | What it is |
+|---|---|
+| **Dashboard** | A WebView onto `http://192.168.4.1/ui`, with this app's traffic bound to the van Wi-Fi so the rest of the phone keeps using mobile data. No logic here — the web UI stays the source of truth. |
+| **History** | Native. The node's log, archived on the phone, with the analyses. See below. |
+
+## History (D-22)
+
+**Why this one is not a page.** `soak_log`'s ring lives in `.ext_ram_noinit`
+PSRAM: it survives a crash, a watchdog and an OTA, and is **lost on a power
+cut**, and it holds only ~4.3 days at 10 s before it wraps. The phone keeps its
+own copy forever and reads it with the van 200 km away. Nothing served from the
+node can do either, and that asymmetry — not looks — is why this screen is
+native.
+
+- **Sync** is incremental and over-requests on purpose: `?last=N` is derived
+  from *time*, not from row numbers the two sides cannot agree on across a
+  reboot. `epoch` is the store's primary key, so overlap dedupes itself. Too
+  many rows costs seconds of Wi-Fi; too few leaves a hole that can never be
+  filled. It syncs once automatically per visit to the tab.
+- **The store is column-agnostic.** Each column name is handed a numbered slot
+  on first sight, so a firmware that logs a new column needs no new APK. This
+  is deliberately *not* how `VanFeed.kt` works — that one really does duplicate
+  the page's entity ids, and this is the file written not to repeat it.
+- **The analyses** are what `docs/measurements.md` has been doing by hand:
+  - **Station overhead** (CLAUDE.md §8.2) from the SOC balance — no register
+    reports it. Binned by **SOC tick**, not wall clock: SOC resolution is 0.1 %
+    = 3.9 Wh, which over a fixed 15-minute window is ±15 W of quantisation on a
+    number worth ~48. Intervals with the pack **pinned at 100 %** are excluded
+    entirely — a full pack curtails rather than stores, so the balance is not
+    measuring overhead at all.
+  - **Coast rate and τ** (§8.5), from an exponential fit that *declines* when
+    there is no curve to fit. A flat coast reads flat, not "τ = 4 minutes".
+  - **Duty cycle** (§8.4), with a long gap counted as missing data rather than
+    as idle time.
+  - **Wh per kelvin per run block** — the raw material for the pulldown
+    penalty §6 marks `UNVERIFIED` and the whole saving rests on. Compare blocks
+    after long and short rests; the difference is the penalty.
+- **Both error terms are quoted.** The statistical one shrinks with more bins;
+  the pack-capacity band does not, because it is the same 3 900 Wh in every bin
+  and shifts them all at once. Showing only the first would claim a fifth of a
+  watt on a figure the second dominates.
+- **Export** writes the *visible range*, not the whole archive — the archive is
+  unbounded by design, and rendering all of it into one string is an
+  out-of-memory kill on the day it finally matters. It goes through the same
+  save path as the page's `window.VanApp.saveFile`.
+- **No hardware needed:** `python tools/mock_core.py` now serves `/soak/status`
+  and `/soak/log.csv` from a synthetic log with known answers — a 50 W station
+  draw hidden in the SOC balance, 40/25 min compressor blocks, a 27 min cabinet
+  time constant. The analyses are tested against exactly those.
+- **Charts are Canvas**, like `LiquidFill.kt` and for the same reason: the
+  release APK is deliberately shrunk. A gap in the log draws as a gap — joining
+  across a reboot would draw a trend that never happened.
 
 ## Saving files: `window.VanApp.saveFile(name, text)`
 
