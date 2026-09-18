@@ -83,8 +83,14 @@ jobs:
       # `|| github.ref_name == '<branch>'` - and TAKE IT OUT when it merges.
       # A merged branch left in this list still overwrites main's release from
       # any later push to it, which is a confusing way to install an old build.
+      # TAKE THE BRANCH OUT WHEN IT MERGES. Left in, any later push to a
+      # merged branch overwrites main's release, which is a confusing way to
+      # install an old build.
       - name: Publish to the app-latest release
-        if: github.event_name == 'push' && github.ref_name == 'main'
+        if: >-
+          github.event_name == 'push' &&
+          (github.ref_name == 'main' ||
+           github.ref_name == 'claude/esp-app-graphics-design-0cj8r4')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
