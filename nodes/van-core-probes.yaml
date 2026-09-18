@@ -32,7 +32,7 @@ substitutions:
   friendly_name: Van core
   p310_mac: "E8:06:90:C7:AD:F6"
   pin_onewire: GPIO4
-  plug_ip: "192.168.4.12"
+  plug_ip: "192.168.4.13"
 
 esphome:
   name: ${node_name}

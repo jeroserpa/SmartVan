@@ -21,6 +21,11 @@ substitutions:
   # POWER-0183, found by tools/fbot_probe.py scan on 2026-08-18.
   p310_mac: "E8:06:90:C7:AD:F6"
 
+  # The fridge-power plug, polled by soak_log below. CLAUDE.md section 4 hands
+  # .12 to the heater, so the plug takes .13 - both had .12 hardcoded until
+  # 2026-09-18, which would have collided the first time they were up together.
+  plug_ip: "192.168.4.13"
+
   # --- pins: display (onboard, plain SPI ST7789) ---
   pin_lcd_sclk: GPIO40
   pin_lcd_mosi: GPIO45
@@ -278,20 +283,40 @@ binary_sensor:
     lambda: return id(arbiter)->ac_on();
   - platform: template
     name: "Force on (fail-safe)"
+    id: bs_force_on
     lambda: return id(arbiter)->force_on();
   - platform: template
     name: "Fridge request"
+    id: bs_fridge_req
     lambda: return id(arbiter)->fridge_req();
   - platform: template
     name: "Manual request"
+    id: bs_manual_req
     lambda: return id(arbiter)->manual_req();
   - platform: template
     name: "Surplus request"
+    id: bs_surplus_req
     lambda: return id(arbiter)->surplus_req();
   - platform: template
     name: "Parked"
     id: bs_parked
     lambda: return id(arbiter)->parked();
+
+  # --- mode mirrors, for the log only ---
+  # soak_log takes a sensor or a binary_sensor, and these two modes live in
+  # switches. `internal` keeps them out of /events and the stock entity list:
+  # the web UI reads the switches themselves, and a second copy of a control
+  # in the UI is exactly the ambiguity section 5.3 exists to prevent.
+  - platform: template
+    name: "Sleep mode (log)"
+    id: bs_sleep_mode
+    internal: true
+    lambda: return id(sw_sleep_mode).state;
+  - platform: template
+    name: "Drive inhibit (log)"
+    id: bs_drive_inhibit
+    internal: true
+    lambda: return id(sw_drive_inhibit).state;
 
 sensor:
   - platform: fbot
@@ -314,6 +339,12 @@ sensor:
     dc_input_power:
       name: "Solar input power"
       id: dc_input_watts
+    total_power:
+      # Reg 20: AC output only (M1). Two subtractions earn its place in the
+      # log: out_w - ac_out_w is the 12V + USB load, and ac_out_w - fridge_w
+      # cross-checks the plug against the station.
+      name: "AC output power"
+      id: ac_output_watts
     remaining_time:
       name: "Remaining minutes"
       id: remaining_minutes
@@ -383,6 +414,27 @@ sensor:
     id: cabin_temp
     update_interval: 30s
     accuracy_decimals: 1
+
+  # --- diagnostics. Internal RAM only: M12's "free heap" was PSRAM-dominated
+  # and could not have shown a leak in the pool the BLE stack actually uses.
+  # M14 measured 102 kB minimum against 145 kB at boot, which is the headroom
+  # any future addition to this node has to fit inside.
+  - platform: template
+    name: "Free internal heap"
+    id: heap_int
+    unit_of_measurement: "B"
+    accuracy_decimals: 0
+    update_interval: 30s
+    entity_category: diagnostic
+    lambda: return heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+  - platform: template
+    name: "Min free internal heap"
+    id: heap_int_min
+    unit_of_measurement: "B"
+    accuracy_decimals: 0
+    update_interval: 30s
+    entity_category: diagnostic
+    lambda: return heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
 
   - platform: template
     name: "Parked for"
@@ -593,6 +645,93 @@ van_ui:
   # those URLs back to the captive_portal component above. See
   # docs/decisions.md 2026-08-24.
   captive_landing: true
+
+# -----------------------------------------------------------------------------
+# History. The PSRAM ring logger, promoted from the soak configs to the node
+# that actually runs the van.
+#
+# Why this node can afford it now: M12/M14 measured 8.27 MB of PSRAM free with
+# the display, BLE, SoftAP and the web server all up. Nothing else here wants
+# it - the st7789 framebuffer is 110 kB of that - so 4 MB of ring is headroom
+# that was otherwise going to sit idle. The number that does constrain this
+# node is free INTERNAL heap (M14: 102 kB min, 145 kB at boot), and soak_log
+# deliberately keeps off it: the buffer is PSRAM, and so are the CSV output
+# buffer and the row batch in send_csv_().
+#
+# 10s, not the 30s of CLAUDE.md section 9. The blocked measurements are the
+# reason this exists - coast dT/dt, the pulldown penalty, duty cycle - and at
+# 30s a cool-down block is a dozen points. 24 columns at 10s is ~930 kB/day,
+# so 4 MB holds about 4.3 days: longer than any single measurement run, and a
+# phone that opens the app once a week is what makes it an archive.
+#
+# `serve_at_ui` stays FALSE: van_ui owns /ui above. This registers /soak only.
+#
+# WHAT THIS LOSES: PSRAM is volatile. A crash, a watchdog, an OTA and the
+# restart button all keep the buffer; a power cut or a brownout wipes it
+# (soak_log.h). That is precisely why the phone keeps its own copy - see
+# docs/decisions.md D-22 - and why the microSD of CLAUDE.md section 9 is still
+# the eventual answer rather than this.
+# -----------------------------------------------------------------------------
+soak_log:
+  id: history
+  interval: 10s
+  buffer_size: 4000000
+  remote:
+    # The Athom plug between the P310 and the fridge (nodes/van-fridge-plug.yaml).
+    # Polled from soak_log's own FreeRTOS task: ESPHome's http_request runs in
+    # the main loop and blocks for its whole timeout when the peer is absent,
+    # on the node holding the BLE link. The plug is also the only direct
+    # measurement of what the fridge draws, so the pulldown penalty cannot be
+    # computed without it.
+    - url: "http://${plug_ip}/sensor/Fridge%20power"
+      sensor:
+        name: "Fridge power (plug)"
+        id: fridge_watts
+        unit_of_measurement: "W"
+        accuracy_decimals: 1
+    - url: "http://${plug_ip}/sensor/Fridge%20energy"
+      sensor:
+        name: "Fridge energy (plug)"
+        id: fridge_kwh
+        unit_of_measurement: "kWh"
+        accuracy_decimals: 4
+  columns:
+    # --- temperatures. Both the raw probe and what the arbiter actually sees:
+    # the difference between them IS the EMA and the timeout, and tuning those
+    # filters is one of the things this dataset exists to settle.
+    - {name: t_fridge, sensor: fridge_temp_raw, accuracy_decimals: 2}
+    - {name: t_fridge_ctl, sensor: fridge_temp, accuracy_decimals: 2}
+    - {name: t_cabin, sensor: cabin_temp, accuracy_decimals: 2}
+    # --- the fridge itself, from the plug
+    - {name: fridge_w, sensor: fridge_watts, accuracy_decimals: 1}
+    - {name: fridge_kwh, sensor: fridge_kwh, accuracy_decimals: 4}
+    # --- the station. Station overhead is not reported by any register (M11),
+    # so it is only recoverable as the SOC balance these columns do not
+    # account for - which is the sum the history page computes.
+    - {name: soc, sensor: battery_percent, accuracy_decimals: 1}
+    - {name: in_w, sensor: input_watts, accuracy_decimals: 0}
+    - {name: out_w, sensor: output_watts, accuracy_decimals: 0}
+    - {name: ac_in_w, sensor: ac_input_watts, accuracy_decimals: 0}
+    - {name: dc_in_w, sensor: dc_input_watts, accuracy_decimals: 0}
+    - {name: ac_out_w, sensor: ac_output_watts, accuracy_decimals: 0}
+    - {name: reg21, sensor: system_watts, accuracy_decimals: 0}
+    # --- the arbiter's reasoning, so a block in the data can be attributed to
+    # the flag that caused it rather than guessed at afterwards.
+    - {name: ac_on, binary_sensor: bs_ac_on}
+    - {name: force_on, binary_sensor: bs_force_on}
+    - {name: fridge_req, binary_sensor: bs_fridge_req}
+    - {name: manual_req, binary_sensor: bs_manual_req}
+    - {name: surplus_req, binary_sensor: bs_surplus_req}
+    - {name: parked, binary_sensor: bs_parked}
+    - {name: sleep_mode, binary_sensor: bs_sleep_mode}
+    - {name: drive_inhibit, binary_sensor: bs_drive_inhibit}
+    - {name: manual_min, sensor: manual_remaining, accuracy_decimals: 0}
+    # --- the node. A saving computed from a log the node was struggling to
+    # write is worth knowing about.
+    - {name: ble_up, binary_sensor: p310_connected}
+    - {name: die_c, sensor: board_temp, accuracy_decimals: 1}
+    - {name: heap_int, sensor: heap_int, accuracy_decimals: 0}
+    - {name: heap_int_min, sensor: heap_int_min, accuracy_decimals: 0}
 
 # -----------------------------------------------------------------------------
 # The arbiter. One component, one writer, one decision.

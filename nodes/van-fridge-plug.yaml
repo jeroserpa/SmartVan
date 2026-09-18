@@ -61,7 +61,11 @@ wifi:
     - ssid: !secret wifi_ssid
       password: !secret wifi_password
       manual_ip:
-        static_ip: 192.168.4.12
+        # .13, not .12: CLAUDE.md section 4 assigns .12 to van-heater, which
+        # also hardcoded it. Both plugs claiming one address only shows up as
+        # a fault the first time they are powered together - and then as an
+        # intermittent one, which is the worst kind to chase in a van.
+        static_ip: 192.168.4.13
         gateway: 192.168.4.1
         subnet: 255.255.255.0
     - ssid: !secret home_ssid
