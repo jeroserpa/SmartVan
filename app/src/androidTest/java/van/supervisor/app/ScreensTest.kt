@@ -7,12 +7,15 @@ import android.os.ParcelFileDescriptor
 import android.view.LayoutInflater
 import android.view.View
 import android.widget.FrameLayout
+import android.widget.TextView
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.google.android.material.tabs.TabLayout
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.FixMethodOrder
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -43,6 +46,7 @@ class ScreensTest {
     fun reset() {
         MainActivity.baseUrlOverride = null
         VanFeed.eventsUrlOverride = null
+        HistorySync.baseOverride = null
         shell("svc wifi enable")
     }
 
@@ -88,6 +92,82 @@ class ScreensTest {
         }
         shell("svc wifi enable")
         Thread.sleep(8_000)
+    }
+
+    /**
+     * The History tab, end to end on a device image.
+     *
+     * This is the widest test in the suite and the cheapest: one launch
+     * exercises the layout inflating, the sync pulling ~10 800 rows of CSV
+     * over real HTTP, the SQLite store swallowing them in batches, every
+     * analysis in [Analysis] running on an ARM-less emulator, and [ChartView]
+     * drawing the results. None of that is reachable from a JVM test, and all
+     * of it is new.
+     *
+     * The mock's log has KNOWN answers — a 50 W station draw hidden in the SOC
+     * balance, 40/25 min compressor blocks, a 27 min cabinet time constant —
+     * so the assertions below are about the pipeline being connected, and the
+     * numbers themselves are pinned by the host tests in `app/src/test`.
+     */
+    @Test
+    fun a4_appHistoryTab() {
+        MainActivity.baseUrlOverride = mock
+        HistorySync.baseOverride = "http://10.0.2.2:8080"
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            Thread.sleep(6_000)
+            scenario.onActivity { it.findViewById<TabLayout>(R.id.tabs).getTabAt(1)?.select() }
+
+            // Wait for the outcome, not for a guessed duration. A fixed sleep
+            // here is a coin toss on a cold emulator - too short and a working
+            // screen is reported broken, too long and every run pays for it.
+            val synced = await { text(scenario, R.id.h_archive).contains("rows") }
+            save("app-7-history", screen())
+            assertTrue(
+                "the archive should hold rows after a sync. Archive line reads " +
+                    "\"${text(scenario, R.id.h_archive)}\", status " +
+                    "\"${text(scenario, R.id.h_status)}\"",
+                synced,
+            )
+
+            // Overhead is the reason this screen exists. If it still reads the
+            // waiting text, the analysis never ran on the rows that arrived.
+            val computed = await { cardRead(scenario, R.id.card_overhead).contains(" W") }
+            assertTrue(
+                "overhead should be computed, got \"${cardRead(scenario, R.id.card_overhead)}\"",
+                computed,
+            )
+
+            // All-time range: a different read path, and the one that has to
+            // cope with the largest table.
+            scenario.onActivity { it.findViewById<View>(R.id.h_range_all).performClick() }
+            Thread.sleep(6_000)
+            save("app-8-history-all", screen())
+        }
+    }
+
+    /** Poll until [cond] holds, up to 90 s. False on timeout; the caller reports why. */
+    private fun await(timeoutMs: Long = 90_000, cond: () -> Boolean): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (cond()) return true
+            Thread.sleep(500)
+        }
+        return false
+    }
+
+    private fun text(scenario: ActivityScenario<MainActivity>, id: Int): String {
+        var out = ""
+        scenario.onActivity { out = it.findViewById<TextView>(id).text.toString() }
+        return out
+    }
+
+    private fun cardRead(scenario: ActivityScenario<MainActivity>, cardId: Int): String {
+        var out = ""
+        scenario.onActivity {
+            out = it.findViewById<View>(cardId)
+                .findViewById<TextView>(R.id.c_read).text.toString()
+        }
+        return out
     }
 
     // --- widget ------------------------------------------------------------
