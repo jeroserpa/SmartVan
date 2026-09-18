@@ -419,3 +419,115 @@ AC on throughout, no AC input, solar 472 W falling to 0.
 - CLAUDE.md §1/§6 say the compressor never stops (M6). Two natural stops now
   argue for "rarely", and the block scheduler already ends a block on a
   genuine stop. Revisit the wording once the 24 h run shows how often.
+
+## M15 — 2026-09-17/18 — soak 2: natural stops, overhead with and without load, probe offset
+
+Two logs. `soak-20260917-2048.csv`: previous firmware, 17 Sep 15:49–20:48.
+`soak-20260918-1129.csv`: new firmware (AC-output column, board temperature,
+probes by address), 17 Sep 23:45 → 18 Sep 11:29. The new log starts with a
+**power-on reset at ~23:45**, not at the 20:51 flash; 20:51–23:45 is lost.
+Cause not established. Thermostat at the default setting throughout.
+
+### Compressor: it stops regularly at the default setting
+| Stop | Length | Probe at stop → restart | Coast | Cabin − probe |
+|---|---|---|---|---|
+| 17 Sep ≤13:36–14:00 (M14) | ≥24 min | 7.6 → 8.1 °C | +0.4 K/h | ~17 K |
+| 17 Sep 20:01–20:27 | 26 min | 7.7 → 8.9 °C | +3.2 K/h (cooking time; cause of the fast rise not established) | 21 K |
+| 18 Sep 02:28–03:08 | 40 min | 7.6 → 7.9 °C | +0.7 K/h | 16 K |
+| 18 Sep 07:28–08:24 | 56 min | 4.7 → 5.6 °C | +1.0 K/h | 16 K |
+| 18 Sep 10:13–10:54 | 40 min | 3.5 → 4.4 °C | +1.2 K/h | 18 K |
+
+- Overnight (23:45–11:29): running 81 % of the time. Runs of 36–260 min.
+- **Stop and restart points on the wall probe vary widely** (stops at
+  3.5–7.7 °C, restarts at 4.4–8.9 °C), so the thermostat is not tracking what
+  this probe sees.
+- Running power: **~22 W** (17.1–24 W) on 17 Sep afternoon, cabin 26–30 °C;
+  **29–33 W median** (up to ~41 W) overnight, cabin 21–24 °C.
+- CLAUDE.md §1's "100 % duty, it does not cycle" (M6) does not hold at the
+  default setting.
+
+### Hot evening: the cabinet did not hold
+17 Sep, AC on, compressor running continuously at ~22 W from 15:49 to 20:01:
+probe 6.4 → 7.9 °C while the cabin went 26.5 → 30.5 °C, flat at ~7.9 °C once
+the cabin passed ~29 °C. After the 20:01 stop and a 1.7 kW load (cooking), the
+probe reached **10.4 °C at 20:48** and was still **9.2 °C at 23:45**. The
+arbiter's 10 °C override could not have helped: AC was already on.
+
+### Fridge energy
+Plug integrator (flash-backed, so it covers the van-core gap if the plug
+stayed powered): 0.0400 kWh at 17 Sep 15:49 → 0.4874 kWh at 18 Sep 11:29 =
+**447 Wh in 19.7 h, 22.7 W average, ~550 Wh/day** at cabin 21–30 °C.
+Overnight alone 24.4 W average, which includes pulling down from 9.2 °C.
+Rated 114 kWh/yr = 312 Wh/day (EU test, 25 °C). §8.6 (condenser airflow) is the
+documented first check when consumption runs this far above the rating.
+
+### Station overhead, night, no solar (SOC-crossing method, 3,900 Wh)
+| Window | AC load | Overhead |
+|---|---|---|
+| 00:00–07:28, compressor running | ~28–32 W (plug) | **54.5 W** (164 SOC ticks) |
+| 02:29–03:08, compressor stopped | ~2.6 W (plug self-draw) | **43.4 W** (±6) |
+| 07:29–08:23, compressor stopped | ~2.6 W | **42.7 W** (±4) |
+
+- **With AC on and nothing drawing, the station uses ~43 W.** That is
+  inverter idle + station base; splitting the two still needs AC off
+  (§8.2, CLAUDE.md §1's ~11 W break-even).
+- **Running the fridge adds ~12 W of overhead** on top of its ~30 W AC draw
+  (range ~7–17 W given the stop windows' uncertainty): low-load inverter
+  conversion loss.
+
+### Meters agree
+`ac_out_w` (P310 reg 20) − `fridge_w` (plug), with the fridge the only AC
+load: **median 2.6 W** (p10 1.8, p90 3.2, n = 4,092), about the plug's own
+draw. `out_w` − `ac_out_w` (DC + USB): median 0 W.
+
+### Probe offset (glass of water, "Cuisy" kitchen probe, 1 °C resolution)
+The user's DS18B20 readings match the log to ±0.05 °C.
+| Time | Probe (log) | Water | Water − probe | Compressor |
+|---|---|---|---|---|
+| 09:40 | 5.67 | 7 | +1.3 | running; excluded: probe recovering from a +3 K spike at 09:30 |
+| 10:47 | 3.69 | 4 | +0.3 | stopped 34 min |
+| 11:12 | 3.85 | 4 | +0.15 | running |
+| 11:17 | 3.59 | 4 | +0.4 | running |
+| 11:23 | 3.20 | 4 | +0.8 | running |
+| 11:28 | 2.90 | 3 | +0.1 | running |
+
+**Working figure: water ≈ probe + 0.5 °C (±0.5, set by the reference's 1 °C
+steps).** During a run the gap grows: the wall probe cools faster than the
+water.
+
+### Node
+BLE 0 drops (both logs). Internal heap min-ever 106 kB; −90 B/h over 11.7 h,
+not significant. **Board temperature 59–68 °C with the backlight off, ~43 K
+above cabin** (M12: 71–75 °C with backlight at 100 %).
+
+### Open
+- Inverter idle vs station base inside the 43 W: needs a night AC-off block.
+- Pulldown penalty: the same block, if AC stays off long enough.
+- Why the board power-cycled at ~23:45.
+
+### M15 addendum — 18 Sep afternoon: thermostat turned toward warmer at 14:30
+
+Same run, extended to 19:02 (`soak-20260918-1902.csv`, 19.3 h, one boot).
+User turned the thermostat from the default to a less cold setting at 14:30,
+because the cabinet was running too cold.
+
+| Period | Probe | Cabin | Fridge |
+|---|---|---|---|
+| 12:05–14:25, default setting | 1.4–2.5 °C | 23.5 → 27.7 °C | running, ~29–30 W |
+| 14:30–16:17, after the change | 1.7–2.1 °C | 28.6 → 30.6 °C | still running, ~30 W |
+| 16:17–17:01 | 2.1 → 5.2 °C | ~29.5 °C | stopped (44 min) |
+| 17:01–19:02 | 5.2 → **−0.3 °C** (min, 18:55) | ~30.5 °C | running, 30–35 W |
+
+- **After the change the cabinet got colder, not warmer**, over the ~4.5 h
+  logged. One restart after the change is not enough to judge the new setting.
+- During the 16:17 stop the probe rose ~3 °C in the first 20 min, then
+  flattened at ~5.2 °C. The overnight stops rose steadily at 0.7–1.2 K/h with
+  no such jump. The water in the glass lags the wall probe, so read the jump as
+  the probe settling, not the food warming at that rate.
+- **Same default setting, similar cabin, very different cabinet:** 17 Sep
+  afternoon (cabin 26–30 °C) held ~7.9 °C at ~22 W; 18 Sep midday (cabin
+  23.5–27.7 °C) held 1.4–2.5 °C at ~30 W. What set the ~22 W vs ~30 W
+  compressor power is not known.
+- Plug energy over the whole 19.3 h run: 492 Wh, 25.5 W average.
+- Node: 0 BLE drops over 19.3 h; internal heap flat (+89 B/h, min 106 kB);
+  board 59–71 °C, ~42 K above cabin.
