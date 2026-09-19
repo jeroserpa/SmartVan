@@ -107,9 +107,11 @@ To hand the connectivity-probe URLs back to ESPHome's own captive portal, set
 python tools/mock_core.py --fast 60
 ```
 
-Then open `http://127.0.0.1:8080/`. The mock speaks ESPHome's `/events` SSE
-stream and `POST /<domain>/<object_id>/<action>`, so the page runs unchanged on
-the ESP32 afterwards. Edit `ui/index.html`, reload the browser — no rebuild.
+Then open `http://127.0.0.1:8080/`. The mock speaks ESPHome 2026.8's `/events`
+SSE stream and `POST /<domain>/<entity name>/<action>`, so the page runs
+unchanged on the ESP32 afterwards (`--legacy-ids` gives the older object-id
+form; see `docs/measurements.md` M16). Edit `ui/index.html`, reload the
+browser — no rebuild.
 
 The states worth designing for are the broken ones, so they are one flag away:
 

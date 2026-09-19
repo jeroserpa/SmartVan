@@ -14,10 +14,15 @@
      numbers, large touch targets, no animation.
    * It talks to ESPHome's own web_server API and nothing else:
        GET  /events                      server-sent events, all entity state
-       POST /switch/<oid>/turn_on|turn_off
-       POST /number/<oid>/set?value=X
-       POST /select/<oid>/set?option=X
-       POST /button/<oid>/press
+       POST /switch/<name>/turn_on|turn_off
+       POST /number/<name>/set?value=X
+       POST /button/<name>/press
+     <name> is the entity NAME, URL-encoded ("Parked%20mode"), and the event
+     ids are "<domain>/<name>". Verified against ESPHome 2026.8.0 source
+     (web_server.cpp set_json_id, UrlMatch::match_entity), 2026-09-17; see
+     docs/measurements.md M16. Builds before that used "<domain>-<object_id>"
+     for both, and min_version still admits them, so the page speaks either
+     form - see key() and path() below.
    * It is a VIEW. No control logic lives here. The arbiter is the single
      writer of ac_switch (CLAUDE.md 5.3) and this page must never grow into a
      second one - it may only nudge the same request flags the physical
@@ -478,7 +483,8 @@ table.raw td:first-child{color:var(--muted);padding-right:10px;word-break:break-
     <h2>All entities</h2>
     <div class="note" style="margin:0 0 8px">Everything the node publishes, as
       received. Amber ids are ones this page does not know about - that is where
-      an ENTITIES mismatch shows up after the first flash.</div>
+      an ENTITIES mismatch shows up after the first flash. Red means two node
+      ids normalise to the same key, so that reading cannot be trusted.</div>
     <table class="raw"><tbody id="d_raw"></tbody></table>
   </div>
 </section>
@@ -490,85 +496,122 @@ table.raw td:first-child{color:var(--muted);padding-right:10px;word-break:break-
 /* ---------------------------------------------------------------------------
  * Entity map.
  *
- * ESPHome derives each web_server id as "<domain>-<slugified name>". The names
- * are in nodes/van-core.yaml. They are ALL declared here, in one block, on
- * purpose: after the first flash, open Diag > All entities, compare, and fix
- * any mismatch in exactly one place instead of hunting through the markup.
+ * ESPHome 2026.8 sends each web_server id as "<domain>/<entity name>", with
+ * the name exactly as written in nodes/van-core.yaml (or common/base.yaml,
+ * where it is "${friendly_name} ..."). Exact means exact: case, spaces and
+ * punctuation - "Force on (fail-safe)" - are part of the id, and the name is
+ * also what the node matches command URLs against. Names must not contain
+ * "/": it is the id's separator, and the node decodes %2F before splitting.
+ *
+ * They are ALL declared here, in one block, on purpose: after the first flash,
+ * open Diag > All entities, compare, and fix any mismatch in exactly one place
+ * instead of hunting through the markup.
  * ------------------------------------------------------------------------ */
 const E = {
-  soc:        "sensor-battery",
-  in:         "sensor-input_power",
-  out:        "sensor-output_power",
-  solar_in:   "sensor-solar_input_power",
-  ac_in:      "sensor-ac_input_power",
-  left:       "sensor-remaining_minutes",
-  ac_level:   "sensor-ac_input_level",
-  fridge:     "sensor-fridge_temperature",
-  cabin:      "sensor-cabin_temperature",
-  man_left:   "sensor-manual_ac_remaining",
-  uptime:     "sensor-van_core_uptime",
-  board:      "sensor-van_core_board_temperature",
+  soc:        "sensor/Battery",
+  in:         "sensor/Input power",
+  out:        "sensor/Output power",
+  solar_in:   "sensor/Solar input power",
+  ac_in:      "sensor/AC input power",
+  left:       "sensor/Remaining minutes",
+  ac_level:   "sensor/AC input level",
+  fridge:     "sensor/Fridge temperature",
+  cabin:      "sensor/Cabin temperature",
+  man_left:   "sensor/Manual AC remaining",
+  uptime:     "sensor/Van core uptime",
+  board:      "sensor/Van core board temperature",
 
-  ble:        "binary_sensor-p310_connected",
-  ac_on:      "binary_sensor-ac_on",
-  f_force:    "binary_sensor-force_on_fail_safe",
-  f_fridge:   "binary_sensor-fridge_request",
-  f_manual:   "binary_sensor-manual_request",
-  f_surplus:  "binary_sensor-surplus_request",
-  f_parked:   "binary_sensor-parked",
-  ac_out:     "binary_sensor-p310_ac_output_active",
-  dc_out:     "binary_sensor-p310_dc_output_active",
-  parked_d:   "sensor-parked_for",
+  ble:        "binary_sensor/P310 connected",
+  ac_on:      "binary_sensor/AC on",
+  f_force:    "binary_sensor/Force on (fail-safe)",
+  f_fridge:   "binary_sensor/Fridge request",
+  f_manual:   "binary_sensor/Manual request",
+  f_surplus:  "binary_sensor/Surplus request",
+  f_parked:   "binary_sensor/Parked",
+  ac_out:     "binary_sensor/P310 AC output active",
+  dc_out:     "binary_sensor/P310 DC output active",
+  parked_d:   "sensor/Parked for",
 
-  reason:     "text_sensor-ac_reason",
-  version:    "text_sensor-van_core_esphome_version",
+  reason:     "text_sensor/AC reason",
+  version:    "text_sensor/Van core esphome version",
 
-  sw_ac:      "switch-p310_ac_inverter",
-  sw_dc:      "switch-p310_dc_output",
-  sw_usb:     "switch-p310_usb_output",
-  sw_silent:  "switch-p310_silent_charging",
-  sw_sleep:   "switch-sleep_mode",
-  sw_inhibit: "switch-drive_inhibit_test",
-  sw_parked:  "switch-parked_mode",
+  sw_ac:      "switch/P310 AC inverter",
+  sw_dc:      "switch/P310 DC output",
+  sw_usb:     "switch/P310 USB output",
+  sw_silent:  "switch/P310 silent charging",
+  sw_sleep:   "switch/Sleep mode",
+  sw_inhibit: "switch/Drive inhibit (test)",
+  sw_parked:  "switch/Parked mode",
 
 
-  btn_man:        "button-manual_ac_start",
-  btn_man_ext:    "button-manual_ac_extend",
-  btn_man_cancel: "button-manual_ac_cancel",
-  btn_restart:    "button-van_core_restart",
+  btn_man:        "button/Manual AC start",
+  btn_man_ext:    "button/Manual AC extend",
+  btn_man_cancel: "button/Manual AC cancel",
+  btn_restart:    "button/Van core restart",
 };
 
 /* Number entities: [id, step, unit, decimals]. Steps mirror the YAML so the UI
  * cannot ask for a value the node will refuse. */
 const NUMS = {
-  thr_charge:    ["number-charge_max",                1,   "%",   0],
-  thr_discharge: ["number-discharge_min",             1,   "%",   0],
-  temp_on:       ["number-fridge_on_above",           0.5, "°C", 1],
-  temp_off:      ["number-fridge_off_below",          0.5, "°C", 1],
-  temp_hard:     ["number-fridge_hard_override",      0.5, "°C", 1],
-  sleep_ceiling: ["number-sleep_ceiling",             0.5, "°C", 1],
-  sleep_target:  ["number-sleep_coast_target",        0.5, "°C", 1],
-  min_on:        ["number-minimum_inverter_on_time",  1,   "min", 0],
-  min_off:       ["number-minimum_inverter_off_time", 1,   "min", 0],
-  idle_w:        ["number-compressor_idle_threshold", 1,   "W",   0],
-  idle_s:        ["number-compressor_idle_debounce",  5,   "s",   0],
-  man_min:       ["number-manual_ac_duration",        5,   "min", 0],
-  man_w:         ["number-manual_ac_release_power",   10,  "W",   0],
-  sur_w:         ["number-surplus_margin",            50,  "W",   0],
-  sur_soc:       ["number-surplus_minimum_soc",       5,   "%",   0],
-  park_soc:      ["number-parked_charge_max",         5,   "%",   0],
+  thr_charge:    ["number/Charge max",                1,   "%",   0],
+  thr_discharge: ["number/Discharge min",             1,   "%",   0],
+  temp_on:       ["number/Fridge on above",           0.5, "°C", 1],
+  temp_off:      ["number/Fridge off below",          0.5, "°C", 1],
+  temp_hard:     ["number/Fridge hard override",      0.5, "°C", 1],
+  sleep_ceiling: ["number/Sleep ceiling",             0.5, "°C", 1],
+  sleep_target:  ["number/Sleep coast target",        0.5, "°C", 1],
+  min_on:        ["number/Minimum inverter on time",  1,   "min", 0],
+  min_off:       ["number/Minimum inverter off time", 1,   "min", 0],
+  idle_w:        ["number/Compressor idle threshold", 1,   "W",   0],
+  idle_s:        ["number/Compressor idle debounce",  5,   "s",   0],
+  man_min:       ["number/Manual AC duration",        5,   "min", 0],
+  man_w:         ["number/Manual AC release power",   10,  "W",   0],
+  sur_w:         ["number/Surplus margin",            50,  "W",   0],
+  sur_soc:       ["number/Surplus minimum SOC",       5,   "%",   0],
+  park_soc:      ["number/Parked charge max",         5,   "%",   0],
 };
 
+/* --- id normalisation --------------------------------------------------
+ * State is stored under ONE key per entity whichever id form the node sends,
+ * so the maps above work against a pre-2026.8 build too:
+ *   "sensor/Battery" | "sensor-battery"  ->  "sensor-battery"
+ * The name is slugged the way ESPHome built object ids (lower case, anything
+ * outside [a-z0-9_-] -> "_"), and a sub-device segment is dropped. This is the
+ * same rule as VanFeed.key() in the Android widget; keep the two identical, and
+ * app/src/test/.../VanFeedKeyTest.kt has the cases.
+ */
+function key(id) {
+  var slash = id.indexOf("/"), domain, name;
+  if (slash >= 0) {
+    domain = id.slice(0, slash);
+    name = id.slice(id.lastIndexOf("/") + 1);
+  } else {
+    var dash = id.indexOf("-");
+    if (dash < 0) return id;
+    domain = id.slice(0, dash);
+    name = id.slice(dash + 1);
+  }
+  return domain + "-" + name.toLowerCase().replace(/[^a-z0-9_-]/g, "_");
+}
+
 /* --- state ------------------------------------------------------------- */
-const S = Object.create(null);   // entity id -> {value, state, at}
+const S = Object.create(null);   // key(id) -> {id, value, state, at}
+const CLASH = Object.create(null); // key -> true if two node ids share it
 const STALE_MS = 45000;          // matches the arbiter's own sensor_max_age
 let linkUp = null, lastMsg = 0;
+// Which id form the node speaks, learned from its own events. Decides the
+// command URL form; the pinned ESPHome (2026.8) form until told otherwise.
+let legacyIds = false;
 
 const $  = function (s, r) { return (r || document).querySelector(s); };
 const $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
 
-function ent(k)  { return S[E[k] || k]; }
+function ent(k)  { return S[key(E[k] || k)]; }
+// 2026.8 sends a number entity's value as a JSON string ("7.5", NaN as
+// "\"NaN\""); sensors still send a JSON number. Accept both, and nothing that
+// does not parse to a finite number.
 function num(k)  { var e = ent(k); var v = e && e.value;
+                   if (typeof v === "string" && v.trim() !== "") v = Number(v);
                    return (typeof v === "number" && isFinite(v)) ? v : null; }
 function bool(k) { var e = ent(k); if (!e) return null;
                    if (typeof e.value === "boolean") return e.value;
@@ -590,9 +633,18 @@ function connect() {
   stream = es;
   es.addEventListener("state", function (ev) {
     var d; try { d = JSON.parse(ev.data); } catch (err) { return; }
-    if (!d || !d.id) return;
-    S[d.id] = { value: d.value, state: d.state, name: d.name,
-                options: d.option || d.options, at: Date.now() };
+    if (!d || typeof d.id !== "string" || !d.id) return;
+    legacyIds = d.id.indexOf("/") < 0;
+    var k = key(d.id);
+    // Two node entities slugging to one key would make a widget flip between
+    // them. Nothing here can tell which one was meant, so say so in Diag.
+    // Same-form ids only: one entity seen in both forms is a reflash under an
+    // open page, not a clash.
+    var prev = S[k];
+    if (prev && prev.id !== d.id && (prev.id.indexOf("/") < 0) === legacyIds)
+      CLASH[k] = true;
+    S[k] = { id: d.id, value: d.value, state: d.state, name: d.name,
+             options: d.option || d.options, at: Date.now() };
     lastMsg = Date.now(); setLink(true); render();
   });
   es.addEventListener("ping", function () { lastMsg = Date.now(); setLink(true); });
@@ -629,11 +681,19 @@ document.addEventListener("visibilitychange", function () {
 function post(path) {
   return fetch(path, { method: "POST" }).catch(function () { setLink(false); });
 }
-function oid(id) { return id.slice(id.indexOf("-") + 1); }
+// The entity part of a command URL, in the form the node matches against.
+// 2026.8 matches the name only, so "switch/Parked mode" -> "Parked%20mode";
+// an object id there is a 404. Older builds matched the object id, which is
+// the slug key() already computes. Built from the map's own id, never from a
+// received one, so an id clash can garble a reading but not redirect a command.
+function path(id) {
+  if (legacyIds) { var k = key(id); return k.slice(k.indexOf("-") + 1); }
+  return id.slice(id.indexOf("/") + 1).split("/").map(encodeURIComponent).join("/");
+}
 var cmd = {
-  sw:  function (id, on) { return post("/switch/" + oid(id) + "/turn_" + (on ? "on" : "off")); },
-  n:   function (id, v)  { return post("/number/" + oid(id) + "/set?value=" + v); },
-  btn: function (id)     { return post("/button/" + oid(id) + "/press"); }
+  sw:  function (id, on) { return post("/switch/" + path(id) + "/turn_" + (on ? "on" : "off")); },
+  n:   function (id, v)  { return post("/number/" + path(id) + "/set?value=" + v); },
+  btn: function (id)     { return post("/button/" + path(id) + "/press"); }
 };
 
 /* --- tabs --------------------------------------------------------------- */
@@ -758,7 +818,7 @@ function render() {
   /* --- switches --- */
   Object.keys(SW).forEach(function (k) {
     var b = $('[data-sw="' + k + '"]');
-    var st = S[E[SW[k]]];
+    var st = ent(SW[k]);
     var on = st ? (st.value === true || st.state === "ON") : false;
     b.setAttribute("aria-checked", String(on));
     b.disabled = !st;
@@ -813,7 +873,7 @@ function render() {
     : "For the van standing at home with the fridge emptied. Asks twice, and never arms itself - but it cannot tell whether the fridge is empty, so that part is on you.";
 
   var sleeping = bool("sw_sleep") === true;
-  var ceil = num("number-sleep_ceiling");
+  var ceil = num(NUMS.sleep_ceiling[0]);
   $("#sleep_sub").textContent = sleeping
     ? "coasting to a " + (ceil === null ? "--" : ceil.toFixed(1)) + " °C ceiling"
     : "normal thresholds";
@@ -852,13 +912,21 @@ function render() {
 
   if (!$("#tab-diag").hidden) {
     var known = {};
-    Object.keys(E).forEach(function (k) { known[E[k]] = 1; });
-    Object.keys(NUMS).forEach(function (k) { known[NUMS[k][0]] = 1; });
-    $("#d_raw").innerHTML = Object.keys(S).sort().map(function (id) {
-      var e = S[id];
-      var style = known[id] ? "" : ' style="color:var(--warn)"';
+    Object.keys(E).forEach(function (k) { known[key(E[k])] = 1; });
+    Object.keys(NUMS).forEach(function (k) { known[key(NUMS[k][0])] = 1; });
+    // Ids are free-text entity names now, so escape them like the values.
+    var esc = function (s) {
+      return String(s).replace(/[&<>"]/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+      });
+    };
+    $("#d_raw").innerHTML = Object.keys(S).sort().map(function (k) {
+      var e = S[k];
+      var style = CLASH[k] ? ' style="color:var(--bad)"'
+                : known[k] ? "" : ' style="color:var(--warn)"';
       var v = e.state != null ? e.state : e.value;
-      return "<tr><td" + style + ">" + id + "</td><td>" + v + "</td></tr>";
+      return "<tr><td" + style + ">" + esc(e.id) + (CLASH[k] ? " (id clash)" : "") +
+             "</td><td>" + esc(v) + "</td></tr>";
     }).join("");
   }
 }

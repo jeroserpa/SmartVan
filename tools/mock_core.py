@@ -5,15 +5,20 @@ Speaks the same surface `ui/index.html` speaks to the real node:
 
     GET  /                         ui/index.html
     GET  /events                   SSE stream of `state` events
-    POST /switch/<oid>/turn_on|turn_off|toggle
-    POST /number/<oid>/set?value=X
-    POST /select/<oid>/set?option=X
-    POST /button/<oid>/press
+    POST /switch/<name>/turn_on|turn_off|toggle
+    POST /number/<name>/set?value=X
+    POST /select/<name>/set?option=X
+    POST /button/<name>/press
 
-The entity ids and the JSON shape are ESPHome's web_server v3 format, so a page
-developed against this runs unchanged on the ESP32. What it is NOT is a model of
-the arbiter: the plant simulation below is deliberately crude, just lively enough
-that every widget moves. The real control logic is host-tested in test/.
+The entity ids, URLs and JSON shape follow ESPHome 2026.8.0's web_server, the
+version the nodes are built with (docs/measurements.md M16): ids are
+"<domain>/<entity name>", URLs match the URL-decoded name and nothing else,
+and a number's `value` is a string. `--legacy-ids` switches to the older
+"<domain>-<object_id>" form for both, to exercise the page's fallback.
+
+What it is NOT is a model of the arbiter: the plant simulation below is
+deliberately crude, just lively enough that every widget moves. The real
+control logic is host-tested in test/.
 
 Fault injection, because the states worth designing for are the broken ones:
 
@@ -37,7 +42,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, unquote_plus
 
 ROOT = Path(__file__).resolve().parent.parent
 UI = ROOT / "ui"
@@ -62,15 +67,19 @@ PROBE_PATHS = (
 # --------------------------------------------------------------------------
 # Entity table. id -> dict. Mirrors nodes/van-core.yaml; if a name changes
 # there, change it here too and the UI's ENTITIES block stays the arbiter of
-# truth for both.
+# truth for both. The keys below are internal handles only, not necessarily
+# ESPHome's object ids; what goes on the wire is derived from the NAME
+# (see _wire_id).
 # --------------------------------------------------------------------------
 STATE = {}
 LOCK = threading.RLock()
 SUBS = []  # list of queue.Queue, one per connected browser
+LEGACY_IDS = False  # --legacy-ids: speak the pre-2026.8 id and URL form
 
 
 def define(eid, name, value, unit="", options=None):
-    STATE[eid] = {"id": eid, "name": name, "value": value, "unit": unit}
+    STATE[eid] = {"id": eid, "domain": eid.split("-", 1)[0], "name": name,
+                  "value": value, "unit": unit}
     if options is not None:
         STATE[eid]["options"] = options
 
@@ -102,7 +111,8 @@ def _init_entities():
     define("binary_sensor-surplus_request", "Surplus request", False)
 
     define("text_sensor-ac_reason", "AC reason", "boot")
-    define("text_sensor-van_core_esphome_version", "Van core esphome version", "2025.7.0 (mock)")
+    define("text_sensor-van_core_esphome_version", "Van core esphome version",
+           "2025.7.0 (mock)" if LEGACY_IDS else "2026.8.0 (mock)")
 
     define("switch-p310_ac_inverter", "P310 AC inverter", True)
     define("switch-p310_dc_output", "P310 DC output", True)
@@ -110,6 +120,11 @@ def _init_entities():
     define("switch-p310_silent_charging", "P310 silent charging", False)
     define("switch-sleep_mode", "Sleep mode", False)
     define("switch-drive_inhibit_test", "Drive inhibit (test)", False)
+    # Parked mode: switch state is read back from the arbiter, so an armed but
+    # unconfirmed request still shows off (CLAUDE.md section 6, D-14).
+    define("switch-parked_mode", "Parked mode", False)
+    define("binary_sensor-parked", "Parked", False)
+    define("sensor-parked_for", "Parked for", 0.0, "d")
 
     define("sensor-ac_input_level", "AC input level", 800.0, "W")
 
@@ -129,6 +144,7 @@ def _init_entities():
         ("number-manual_ac_release_power", "Manual AC release power", 150, "W"),
         ("number-surplus_margin", "Surplus margin", 200, "W"),
         ("number-surplus_minimum_soc", "Surplus minimum SOC", 85, "%"),
+        ("number-parked_charge_max", "Parked charge max", 80, "%"),
     ]:
         define(eid, name, val, unit)
 
@@ -163,6 +179,35 @@ def put(eid, value):
             pass
 
 
+def _object_id(name):
+    """ESPHome's pre-2026.8 object id: snake case, then anything outside
+    [a-z0-9_-] -> '_'. Derived, not hand-written: the hand-written keys above
+    got "Force on (fail-safe)" wrong, and so did the page they were copied to."""
+    return re.sub(r"[^a-z0-9_-]", "_", name.lower())
+
+
+def _wire_id(e):
+    """The id the node sends: web_server.cpp set_json_id() in 2026.8."""
+    if LEGACY_IDS:
+        return f"{e['domain']}-{_object_id(e['name'])}"
+    return f"{e['domain']}/{e['name']}"
+
+
+def _find(domain, seg):
+    """The entity a URL segment addresses, or None.
+
+    2026.8 (UrlMatch::match_entity) compares the decoded segment to the entity
+    name, exactly, and nothing else - an object id there is a 404, which is the
+    failure this mock exists to reproduce.
+    """
+    for e in STATE.values():
+        if e["domain"] != domain:
+            continue
+        if (_object_id(e["name"]) if LEGACY_IDS else e["name"]) == seg:
+            return e
+    return None
+
+
 def _event(e):
     """One SSE `state` frame in ESPHome web_server v3 shape."""
     v = e["value"]
@@ -174,7 +219,11 @@ def _event(e):
         state = ""
     else:
         state = f"{v} {e['unit']}".strip()
-    d = {"id": e["id"], "name": e["name"], "value": v, "state": state}
+    # 2026.8 number_json_() puts the value in as a string, not a number.
+    # Decimals here are Python's, not step-derived as on the node.
+    if e["domain"] == "number" and not LEGACY_IDS and v is not None:
+        v = str(v)
+    d = {"id": _wire_id(e), "name": e["name"], "value": v, "state": state}
     if "options" in e:
         d["option"] = e["options"]
     return "event: state\ndata: " + json.dumps(d) + "\n\n"
@@ -193,6 +242,21 @@ class Sim(threading.Thread):
         self.t = 0.0
         self.manual_until = 0.0
         self.boot_until = 20.0
+        self.park_armed_at = None   # wall clock: the window is human-timed
+        self.parked_since = None    # simulated time
+
+    def park(self, on):
+        """D-14 caricature: one request arms, a second within 30s commits."""
+        if not on:
+            self.park_armed_at = self.parked_since = None
+            self.boot_until = self.t + 20          # exit re-arms boot force-on
+        elif self.parked_since is not None:
+            pass
+        elif self.park_armed_at is not None and time.time() - self.park_armed_at <= 30:
+            self.park_armed_at = None
+            self.parked_since = self.t
+        else:
+            self.park_armed_at = time.time()
 
     def press(self, which):
         if which == "start":
@@ -265,14 +329,21 @@ class Sim(threading.Thread):
         put("binary_sensor-surplus_request", surplus)
         put("binary_sensor-fridge_request", fridge_req)
 
-        force = (t < self.boot_until) or (not ble) or (not probe_ok)
+        # Parked outranks everything, the fail-safe included (CLAUDE.md 6).
+        parked = self.parked_since is not None
+        put("switch-parked_mode", parked)
+        put("binary_sensor-parked", parked)
+        put("sensor-parked_for", round((t - self.parked_since) / 86400, 2) if parked else 0.0)
+
+        force = not parked and ((t < self.boot_until) or (not ble) or (not probe_ok))
         put("binary_sensor-force_on_fail_safe", force)
 
         inhibit = get("switch-drive_inhibit_test")
-        on = force or hard or (
-            (fridge_req or manual or surplus) and not inhibit)
+        on = not parked and (force or hard or (
+            (fridge_req or manual or surplus) and not inhibit))
 
-        reason = ("boot" if t < self.boot_until else
+        reason = ("parked" if parked else
+                  "boot" if t < self.boot_until else
                   "ble lost" if not ble else
                   "temp stale" if not probe_ok else
                   "fridge hard" if hard else
@@ -402,16 +473,20 @@ class Handler(BaseHTTPRequestHandler):
     # -- POST ----------------------------------------------------------
     def do_POST(self):
         u = urlparse(self.path)
-        m = PATH_RE.match(u.path)
+        # Decoded before splitting, as web_server_idf's url_to() does.
+        m = PATH_RE.match(unquote_plus(u.path))
         if not m:
             return self.send_error(404)
-        domain, oid, action = m.groups()
+        domain, seg, action = m.groups()
         args = parse_qs(u.query)
-        eid = f"{domain}-{oid}"
-        if eid not in STATE:
-            return self.send_error(404, f"unknown entity {eid}")
+        e = _find(domain, seg)
+        if e is None:
+            return self.send_error(404, f"unknown entity {domain}/{seg}")
+        eid = e["id"]
 
-        if domain == "switch":
+        if eid == "switch-parked_mode" and action in ("turn_on", "turn_off"):
+            SIM.park(action == "turn_on")
+        elif domain == "switch":
             if action == "turn_on":
                 put(eid, True)
             elif action == "turn_off":
@@ -444,9 +519,13 @@ def main():
                     default="none", help="inject a failure mode")
     ap.add_argument("--fast", type=float, default=60.0,
                     help="simulated seconds per real second (default 60)")
+    ap.add_argument("--legacy-ids", action="store_true",
+                    help="pre-2026.8 ids and URLs (<domain>-<object_id>)")
     ap.add_argument("--verbose", action="store_true")
     a = ap.parse_args()
 
+    global LEGACY_IDS
+    LEGACY_IDS = a.legacy_ids
     _init_entities()
     global SIM
     SIM = Sim(a.fault, a.fast)
@@ -456,7 +535,8 @@ def main():
 
     srv = ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
     srv.flags = ["--verbose"] if a.verbose else []
-    print(f"mock van-core on http://127.0.0.1:{a.port}/   fault={a.fault} fast={a.fast}x")
+    print(f"mock van-core on http://127.0.0.1:{a.port}/   fault={a.fault} fast={a.fast}x"
+          f"   ids={'legacy' if LEGACY_IDS else '2026.8'}")
     print("serving", INDEX)
     try:
         srv.serve_forever()

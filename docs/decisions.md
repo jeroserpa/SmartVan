@@ -167,6 +167,16 @@ provides `beginResponse(code, type, const uint8_t *, size_t)` and
 the handler compiles under esp-idf. `WebServer::canHandle` does not claim
 `/ui`.
 
+**`AMENDED 2026-09-17` — the API surface above is 2025.7's, not 2026.8's.**
+ESPHome 2026.8.0, which the nodes are built with, sends ids as
+`<domain>/<entity name>`, matches command URLs on the URL-decoded name only
+(`POST /<domain>/<entity name>/<action>`), and sends number values as strings.
+The page had never been updated and could neither read nor command anything
+on 2026.8. Fixed to speak both forms; see `docs/measurements.md` M16. The
+lesson for this decision: "drives ESPHome's existing API" is a dependency on
+an interface ESPHome does change, and the mock is only a check if it tracks
+the pinned version rather than the version the page was written against.
+
 ---
 
 ## 2026-08-21 — D-09: parked mode inverts the fail-safe, and the safety lives at the entry gate

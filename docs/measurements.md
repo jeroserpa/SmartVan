@@ -531,3 +531,68 @@ because the cabinet was running too cold.
 - Plug energy over the whole 19.3 h run: 492 Wh, 25.5 W average.
 - Node: 0 BLE drops over 19.3 h; internal heap flat (+89 B/h, min 106 kB);
   board 59–71 °C, ~42 K above cabin.
+
+## M16 — 2026-09-17 — ESPHome 2026.8 web_server addresses entities by name: ui/index.html was dead
+
+Source reading, not a hardware test. ESPHome 2026.8.0 as compiled into
+`nodes/.esphome/build/van-core-soak/` (`src/esphome/core/version.h`),
+`components/web_server/web_server.cpp` and `components/web_server_idf/`.
+
+| | What the page assumed | ESPHome 2026.8.0 |
+|---|---|---|
+| SSE / JSON `id` | `sensor-battery` | `sensor/Battery` — `set_json_id()`; `<domain>/<device>/<name>` with sub-devices |
+| Entity segment of a POST URL | object id, `parked_mode` | exact name, compared after URL decoding — `UrlMatch::match_entity()`, `url_to()` → `url_decode()`. An object id is a 404 |
+| `number` `value` | JSON number | **JSON string**, `"7.5"`; NaN is `"\"NaN\""` — `number_json_()` |
+| sensor / binary_sensor / switch `value` | number / bool | unchanged |
+| Actions `turn_on` `turn_off` `set` `press` | | unchanged |
+
+Consistent with the D-15 widget, which saw `sensor/Battery` from
+van-core-soak on 2026-09-16 (`app/.../VanFeed.kt`).
+
+**Consequence: on a 2026.8 build the page showed nothing and could command
+nothing.** Every lookup missed, so every value stayed `--`, every switch was
+disabled, and every POST would have been a 404 — the parked-mode double
+confirmation and Manual AC included. Reproduced with the pre-fix page against
+`tools/mock_core.py` in its new 2026.8 mode: link up, 55 entities received,
+nothing rendered.
+
+Two further defects found on the way:
+- **Number rows stay `--` even with correct ids**, because `num()` accepted
+  only a JSON number. With no current value, `+`/`−` did nothing.
+- **Two slugs in the old map were wrong on every version.** ESPHome's object id
+  for "Force on (fail-safe)" is `force_on__fail-safe_` and for "Drive inhibit
+  (test)" `drive_inhibit__test_`; the map had `force_on_fail_safe` and
+  `drive_inhibit_test`. The fail-safe chip, the forced-ON header colour and
+  the inhibit switch never matched. The mock had copied the same wrong slugs,
+  which is why it never showed.
+
+**Fix (same commit):** ids in `ui/index.html` are now the 2026.8 names. State
+is stored under one normalised key (`key()`, same rule as `VanFeed.key()`),
+and command URLs are built from the map's own name with `encodeURIComponent`
+— or from the object id if the node's events are in the old form.
+`min_version: 2025.7.0` is a floor, not a pin, so a build that still sends the
+old form is legal. `tools/mock_core.py` now emulates 2026.8 by default
+(`--legacy-ids` for the old form, object ids derived from names) and has the
+parked-mode entities.
+
+Checked against the mock, both modes, in the browser pane: every value
+renders, the four entities the page does not use show amber in Diag, and each
+command reaches its entity — number set, sleep, inhibit, Manual AC
+start/extend/cancel, and parked mode arm → commit → exit. In 2026.8 mode an
+object-id URL returns 404; in legacy mode a name URL does.
+
+Notes:
+- `url_decode()` also maps `+` to space. `encodeURIComponent` sends `%2B`,
+  which decodes once to `+`, so that is safe. **A `/` in an entity name is
+  not safe**: it is decoded before the path is split. No current name has one.
+- A failed POST is silent in the page: `fetch` resolves on a 404, and the
+  next SSE render reverts the optimistic switch state. That is how an
+  all-404 page went unnoticed.
+
+**Still `UNVERIFIED`:**
+- **The custom page has not yet run on any 2026.8 node.** van-core-soak does
+  not include `van_ui`, and `nodes/van-core.yaml` has never been built. First
+  flash: open Diag → All entities. An amber id the page should know about
+  means a name mismatch.
+- The legacy path is tested against the mock's reconstruction of the old
+  format, not against a real 2025.x build.
