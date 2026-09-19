@@ -419,9 +419,19 @@ class Handler(BaseHTTPRequestHandler):
 
     def _events(self):
         q = queue.Queue(maxsize=500)
+        query = parse_qs(urlparse(self.path).query)
+        # ?cut / ?rst (below) test how a reader survives the stream dying, which
+        # only means something if it is still reading when it dies. VanFeed
+        # stops early once every role it wants has arrived, and since the mock
+        # gained parked mode (M16) the burst carries all of them - the reset
+        # would never be read and the regression test would pass on nothing.
+        # So hold `Parked` back on those two, as the soak node (no arbiter, no
+        # Parked entity) did on the phone that first showed the bug.
+        ending = bool(query.get("cut") or query.get("rst"))
         with LOCK:
             SUBS.append(q)
-            initial = "".join(_event(e) for e in STATE.values())
+            initial = "".join(_event(e) for eid, e in STATE.items()
+                              if not (ending and eid == "binary_sensor-parked"))
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -442,8 +452,11 @@ class Handler(BaseHTTPRequestHandler):
             #           it had already collected, and the widget then reported
             #           that van-core had not answered. A clean EOF would not
             #           have caught it - only a reset does.
-            query = parse_qs(urlparse(self.path).query)
             if query.get("cut"):
+                # Without this the HTTP/1.1 keep-alive loop holds the socket
+                # open waiting for a next request, and the client sees a read
+                # timeout rather than the EOF this case exists to produce.
+                self.close_connection = True
                 return
             if query.get("rst"):
                 time.sleep(3.0)

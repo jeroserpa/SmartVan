@@ -102,9 +102,9 @@ class ScreensTest {
         // The burst used to be cut at the first quiet window, which kept the
         // station sensors (declared first) and dropped everything after them.
         // These three are what that lost, so they are what guards it.
-        // (Not PARKED: tools/mock_core.py does not define it - the whole of
-        // parked mode is missing from the mock, which is why the web UI's
-        // parked switch sits disabled against it.)
+        // (PARKED is in this stream since the mock gained parked mode, M16,
+        // but the ?cut/?rst streams below withhold it on purpose - with every
+        // wanted role present the reader stops before the stream dies.)
         assertNotNull("fridge temperature missing from the burst", states[VanFeed.FRIDGE])
         assertNotNull("cabin temperature missing from the burst", states[VanFeed.CABIN])
         assertNotNull("AC reason missing from the burst", states[VanFeed.REASON])
