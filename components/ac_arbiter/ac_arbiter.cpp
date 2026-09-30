@@ -10,6 +10,8 @@ static const char *const TAG = "ac_arbiter";
 // The P310 can drop and re-establish BLE, or be poked from its own front panel;
 // the arbiter is the authority and says so once a minute.
 static const uint32_t REASSERT_MS = 60000;
+// Minimum gap between re-sends while the station's readback disagrees.
+static const uint32_t RESEND_MS = 10000;
 
 void AcArbiter::set_fridge_temperature(sensor::Sensor *s) {
   s->add_on_state_callback([this](float v) { this->fridge_temp_.set(v); });
@@ -81,9 +83,22 @@ void AcArbiter::update() {
 
   const bool changed = !this->written_once_ || out.ac_on != this->last_written_;
   const bool due = (now - this->last_write_ms_) >= REASSERT_MS;
-  if (this->ac_switch_ != nullptr && (changed || due)) {
-    if (changed)
+  // Closed loop on the station's own readback. `MEASURED` twice (M17): the
+  // reconnect edge above fires before ESP-FBot can send ("Cannot send command:
+  // not connected"), the write is dropped, and AC waited up to REASSERT_MS for
+  // the next re-assert. Re-send while the station disagrees, no faster than
+  // RESEND_MS so the readback (one 5 s poll behind) has had its chance.
+  const bool disagrees = in.ble_connected && this->written_once_ && this->ac_state_ != nullptr &&
+                         this->ac_state_->has_state() && this->ac_state_->state != out.ac_on;
+  const bool resend = disagrees && (now - this->last_write_ms_) >= RESEND_MS;
+  if (this->ac_switch_ != nullptr && (changed || due || resend)) {
+    if (changed) {
       ESP_LOGI(TAG, "AC %s (%s)", out.ac_on ? "ON" : "OFF", van::ac_reason_str(out.reason));
+    } else if (resend) {
+      this->resends_++;
+      ESP_LOGW(TAG, "station reports AC %s, commanded %s: re-sending (%u)",
+               this->ac_state_->state ? "ON" : "OFF", out.ac_on ? "ON" : "OFF", (unsigned) this->resends_);
+    }
     if (out.ac_on)
       this->ac_switch_->turn_on();
     else
@@ -99,6 +114,9 @@ void AcArbiter::dump_config() {
   ESP_LOGCONFIG(TAG, "AC arbiter:");
   ESP_LOGCONFIG(TAG, "  fridge on/off/hard: %.1f / %.1f / %.1f C", c.temp_on_c, c.temp_off_c,
                 c.temp_hard_c);
+  ESP_LOGCONFIG(TAG, "  probe filter: %u s (thresholds only; hard override on raw)",
+                (unsigned) (c.probe_filter_ms / 1000u));
+  ESP_LOGCONFIG(TAG, "  station readback: %s", this->ac_state_ != nullptr ? "re-send until it agrees" : "none");
   ESP_LOGCONFIG(TAG, "  sleep ceiling/target: %.1f / %.1f C", c.sleep_ceiling_c, c.sleep_target_c);
   ESP_LOGCONFIG(TAG, "  compressor idle: <%.0f W for %u s", c.compressor_idle_w,
                 c.compressor_idle_ms / 1000u);

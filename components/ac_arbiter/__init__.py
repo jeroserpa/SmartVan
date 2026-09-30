@@ -27,6 +27,7 @@ CONF_INPUT_POWER = "input_power"
 CONF_BATTERY_LEVEL = "battery_level"
 CONF_BLE_CONNECTED = "ble_connected"
 CONF_AC_SWITCH = "ac_switch"
+CONF_AC_STATE = "ac_state"
 CONF_SENSOR_MAX_AGE = "sensor_max_age"
 CONF_LINK_STALE = "link_stale"
 
@@ -46,6 +47,10 @@ CONFIG_SCHEMA = cv.Schema(
         # a working one, and "cannot tell" is a refusal.
         cv.Optional(CONF_CABIN_TEMPERATURE): cv.use_id(sensor.Sensor),
         cv.Optional(CONF_BATTERY_LEVEL): cv.use_id(sensor.Sensor),
+        # The station's own AC report (ESP-FBot ac_active). With it, a dropped
+        # write is re-sent within ~10 s instead of waiting for the 60 s
+        # re-assert (measurements.md M17).
+        cv.Optional(CONF_AC_STATE): cv.use_id(binary_sensor.BinarySensor),
         # How old a reading may be before it counts as missing. Must comfortably
         # exceed the slowest feeding sensor's update_interval.
         cv.Optional(CONF_SENSOR_MAX_AGE, default="30s"): cv.positive_time_period_milliseconds,
@@ -70,6 +75,8 @@ async def to_code(config):
         cg.add(var.set_cabin_temperature(await cg.get_variable(config[CONF_CABIN_TEMPERATURE])))
     if CONF_INPUT_POWER in config:
         cg.add(var.set_input_power(await cg.get_variable(config[CONF_INPUT_POWER])))
+    if CONF_AC_STATE in config:
+        cg.add(var.set_ac_state(await cg.get_variable(config[CONF_AC_STATE])))
     if CONF_BATTERY_LEVEL in config:
         cg.add(var.set_battery_level(await cg.get_variable(config[CONF_BATTERY_LEVEL])))
 

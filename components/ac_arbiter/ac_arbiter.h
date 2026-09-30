@@ -60,6 +60,9 @@ class AcArbiter : public PollingComponent {
   void set_input_power(sensor::Sensor *s);
   void set_battery_level(sensor::Sensor *s);
   void set_ble_connected(binary_sensor::BinarySensor *s);
+  // The station's own report of the inverter (reg 41). Optional; with it the
+  // arbiter re-sends until the station agrees instead of trusting one write.
+  void set_ac_state(binary_sensor::BinarySensor *s) { ac_state_ = s; }
   void set_ac_switch(switch_::Switch *s) { ac_switch_ = s; }
   void set_sensor_max_age(uint32_t ms) { sensor_max_age_ms_ = ms; }
   void set_link_stale(uint32_t ms) { core_.config().link_stale_ms = ms; }
@@ -95,6 +98,11 @@ class AcArbiter : public PollingComponent {
   uint32_t parked_for_s() const { return core_.outputs().parked_for_s; }
   uint32_t manual_remaining_s() const { return core_.outputs().manual_remaining_s; }
   const char *reason() const { return van::ac_reason_str(core_.outputs().reason); }
+  float fridge_filtered() const {
+    return core_.outputs().fridge_filtered_valid ? core_.outputs().fridge_filtered_c : NAN;
+  }
+  // Writes sent because the station's readback disagreed with the command.
+  uint32_t resends() const { return resends_; }
 
   van::ArbiterConfig &config() { return core_.config(); }
 
@@ -108,6 +116,7 @@ class AcArbiter : public PollingComponent {
   FreshValue soc_;
 
   binary_sensor::BinarySensor *ble_connected_{nullptr};
+  binary_sensor::BinarySensor *ac_state_{nullptr};
   switch_::Switch *ac_switch_{nullptr};
 
   uint32_t sensor_max_age_ms_{30000};
@@ -118,6 +127,7 @@ class AcArbiter : public PollingComponent {
   bool written_once_{false};
   bool ble_was_connected_{false};
   uint32_t last_write_ms_{0};
+  uint32_t resends_{0};
 };
 
 }  // namespace ac_arbiter

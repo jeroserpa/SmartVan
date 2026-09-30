@@ -26,6 +26,16 @@ struct ArbiterConfig {
   float temp_off_c = 4.0f;   // release below this
   float temp_hard_c = 10.0f; // hard override: cool regardless of everything
 
+  // Time constant of the first-order filter between the probe and the on/off
+  // thresholds; 0 = unfiltered. `ADDED 2026-09-30` (measurements.md M17): the
+  // wall probe rebounds at ~9 K/h in the first half hour after the compressor
+  // stops while the contents warm at 0.5-1 K/h, so unfiltered 7/4 C thresholds
+  // tracked the wall and cycled ~29 times a day. The hard override stays on the
+  // RAW reading: filtering may delay a release, never a safety response.
+  // Off by default here so every threshold test below means what it says; the
+  // node sets it (van-core.yaml, 10 min, `UNVERIFIED` until a logged run).
+  uint32_t probe_filter_ms = 0;
+
   // --- sleep mode / drive inhibit coasting (section 6 "Sleep mode") ---
   float sleep_ceiling_c = 6.0f; // raised ceiling while coasting
   float sleep_target_c = 1.0f;  // when a coast cycle does run, go all the way down
@@ -154,6 +164,9 @@ struct ArbiterOutputs {
   bool park_pending = false;   // armed by one request, waiting for the confirming one
   uint32_t parked_for_s = 0;   // since entry, or since the last reboot while parked
   AcReason reason = AcReason::BOOT;
+  // What the on/off thresholds compared against (see probe_filter_ms).
+  bool fridge_filtered_valid = false;
+  float fridge_filtered_c = 0.0f;
 };
 
 const char *ac_reason_str(AcReason r);
@@ -192,6 +205,7 @@ class ArbiterCore {
   const ArbiterOutputs &outputs() const { return out_; }
 
  private:
+  void update_filter_(uint32_t now_ms, const ArbiterInputs &in);
   void update_fridge_(uint32_t now_ms, const ArbiterInputs &in);
   void update_manual_(uint32_t now_ms, const ArbiterInputs &in);
   void update_surplus_(uint32_t now_ms, const ArbiterInputs &in);
@@ -204,6 +218,9 @@ class ArbiterCore {
   uint32_t last_tick_ms_ = 0;
 
   // fridge
+  float temp_filt_ = 0.0f;          // filtered probe, see probe_filter_ms
+  bool filt_init_ = false;
+  uint32_t filt_ms_ = 0;            // last sample folded into temp_filt_
   uint32_t fridge_since_ms_ = 0;    // last fridge_req transition
   uint32_t temp_fresh_ms_ = 0;      // last time temp_valid was true
   uint32_t link_fresh_ms_ = 0;      // last time the station sent anything

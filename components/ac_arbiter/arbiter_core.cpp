@@ -47,6 +47,7 @@ const ArbiterOutputs &ArbiterCore::tick(uint32_t now_ms, const ArbiterInputs &in
   last_tick_ms_ = now_ms;
 
   last_in_ = in;
+  update_filter_(now_ms, in);
 
   // --- parked mode. The one place in this firmware where the section 5.2
   // fail-safe direction is deliberately inverted. ---
@@ -180,12 +181,36 @@ const ArbiterOutputs &ArbiterCore::tick(uint32_t now_ms, const ArbiterInputs &in
 // So the supervisor picks the cycles now. Temperature is an override ceiling
 // rather than the primary input - the inversion is the point of the rewrite.
 // Prefer fewer, longer blocks: the restart penalty scales with cycle count.
+// First-order filter between the probe and the thresholds. Rate-independent:
+// the weight is dt/(tau+dt), so a late tick folds in proportionally more. A
+// gap longer than the stale timeout restarts it from the raw reading - a
+// filter that remembers a probe from before an outage is worse than none.
+void ArbiterCore::update_filter_(uint32_t now_ms, const ArbiterInputs &in) {
+  if (!in.temp_valid)
+    return;
+  const bool restart =
+      !filt_init_ || cfg_.probe_filter_ms == 0 || elapsed(now_ms, filt_ms_, cfg_.temp_stale_ms);
+  if (restart) {
+    temp_filt_ = in.fridge_temp_c;
+  } else {
+    const float dt = static_cast<float>(static_cast<uint32_t>(now_ms - filt_ms_));
+    const float tau = static_cast<float>(cfg_.probe_filter_ms);
+    temp_filt_ += (dt / (tau + dt)) * (in.fridge_temp_c - temp_filt_);
+  }
+  filt_init_ = true;
+  filt_ms_ = now_ms;
+  out_.fridge_filtered_valid = true;
+  out_.fridge_filtered_c = temp_filt_;
+}
+
 void ArbiterCore::update_fridge_(uint32_t now_ms, const ArbiterInputs &in) {
   if (!in.temp_valid)
     return;  // hold the previous request; force_on is already covering this
 
   // Hard override outranks the anti-short-cycle timer. Food beats compressor
-  // wear, and it applies in sleep mode too - silence is a preference.
+  // wear, and it applies in sleep mode too - silence is a preference. It reads
+  // the RAW probe: the filter exists to stop the wall's rebound from cycling
+  // the compressor, and must never be what delays a safety response.
   if (in.fridge_temp_c >= cfg_.temp_hard_c) {
     if (!out_.fridge_req) {
       out_.fridge_req = true;
@@ -202,6 +227,7 @@ void ArbiterCore::update_fridge_(uint32_t now_ms, const ArbiterInputs &in) {
   const bool coasting = in.sleep_mode || in.drive_inhibit;
   const float ceiling = coasting ? cfg_.sleep_ceiling_c : cfg_.temp_on_c;
   const float floor_c = coasting ? cfg_.sleep_target_c : cfg_.temp_off_c;
+  const float temp = temp_filt_;  // every threshold below is on the filtered probe
 
   if (!out_.fridge_req) {
     // Anti-short-cycle first: nothing starts a block before the rest floor,
@@ -212,9 +238,9 @@ void ArbiterCore::update_fridge_(uint32_t now_ms, const ArbiterInputs &in) {
     // Two ways in. The ceiling is the safety net; the schedule is the normal
     // path and is suppressed while coasting, which is what makes sleep mode
     // "pre-cool, then nothing until the ceiling" rather than a cycle count.
-    const bool too_warm = in.fridge_temp_c > ceiling;
+    const bool too_warm = temp > ceiling;
     const bool scheduled = !coasting && elapsed(now_ms, fridge_since_ms_, cfg_.rest_block_ms) &&
-                           in.fridge_temp_c > floor_c;
+                           temp > floor_c;
     // The floor test on `scheduled` matters: starting a block on a cabinet
     // already at target would burn min_on_ms of inverter for no cooling, every
     // rest period, forever.
@@ -230,7 +256,7 @@ void ArbiterCore::update_fridge_(uint32_t now_ms, const ArbiterInputs &in) {
   if (!settled)
     return;
 
-  const bool cold = in.fridge_temp_c < floor_c;
+  const bool cold = temp < floor_c;
 
   // A run that started as the hard override runs properly back down to the
   // floor: once it has been let go that far, ending on a block timer would

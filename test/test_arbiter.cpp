@@ -781,9 +781,87 @@ static void test_parked() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Probe filter (M17): thresholds see the contents, the hard override sees the
+// raw wall.
+// ---------------------------------------------------------------------------
+static void test_filter() {
+  CASE("a short wall rebound does not start a block");
+  {
+    Sim s;
+    s.core.config().probe_filter_ms = 10 * MIN;
+    // Isolate the ceiling: no scheduled block, and a compressor that is
+    // drawing, so neither the schedule nor the stopped-compressor exit moves.
+    s.core.config().rest_block_ms = 3 * 60 * MIN;
+    s.in.output_power_w = 30.0f;
+    s.settle();
+    CHECK(!s.core.outputs().fridge_req);
+    // The M17 rebound: the wall jumps well past 7 C within minutes of a stop.
+    s.in.fridge_temp_c = 7.5f;
+    s.run(5 * MIN);
+    CHECK(!s.core.outputs().fridge_req);
+    CHECK(s.core.outputs().fridge_filtered_c < 5.0f);
+    // Sustained, it gets through: ~4.5 K step, crosses 7 C after ~20 min.
+    s.run(25 * MIN);
+    CHECK(s.core.outputs().fridge_req);
+  }
+
+  CASE("a run block is not ended by a brief dip of the raw probe");
+  {
+    Sim s;
+    s.core.config().probe_filter_ms = 10 * MIN;
+    s.core.config().run_block_ms = 3 * 60 * MIN;  // isolate the cold exit
+    s.in.output_power_w = 30.0f;
+    s.in.fridge_temp_c = 8.0f;
+    s.settle();
+    s.run(15 * MIN);
+    CHECK(s.core.outputs().fridge_req);
+    s.in.fridge_temp_c = 3.5f;
+    s.run(2 * MIN);
+    CHECK(s.core.outputs().fridge_req);  // filtered still well above 4 C
+    s.run(30 * MIN);
+    CHECK(!s.core.outputs().fridge_req);
+  }
+
+  CASE("the hard override acts on the raw probe, not the filter");
+  {
+    Sim s;
+    s.core.config().probe_filter_ms = 30 * MIN;
+    s.settle();
+    s.in.fridge_temp_c = 10.5f;
+    const ArbiterOutputs &o = s.run(5 * SEC);
+    CHECK(o.fridge_hard);
+    CHECK(o.ac_on);
+    CHECK(o.fridge_filtered_c < 5.0f);
+  }
+
+  CASE("after a probe outage the filter restarts from the raw reading");
+  {
+    Sim s;
+    s.core.config().probe_filter_ms = 10 * MIN;
+    s.settle();
+    s.in.temp_valid = false;
+    s.run(6 * MIN);
+    CHECK(s.core.outputs().reason == AcReason::TEMP_STALE);
+    s.in.temp_valid = true;
+    s.in.fridge_temp_c = 8.0f;
+    s.run(5 * SEC);
+    CHECK(s.core.outputs().fridge_filtered_c > 7.99f);
+  }
+
+  CASE("filter off tracks the raw probe exactly");
+  {
+    Sim s;
+    s.settle();
+    s.in.fridge_temp_c = 6.25f;
+    CHECK(s.run(5 * SEC).fridge_filtered_c == 6.25f);
+  }
+}
+
 int main() {
   test_failsafe();
   test_fridge();
+  test_filter();
   test_sleep();
   test_manual();
   test_surplus();
