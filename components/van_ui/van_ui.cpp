@@ -48,7 +48,7 @@ void VanUi::dump_config() {
                             VAN_UI_MANIFEST_LEN + VAN_UI_ICON_LEN));
 }
 
-const VanUi::Asset *VanUi::match_(const std::string &url) const {
+const VanUi::Asset *VanUi::match_(AsyncWebServerRequest *request) const {
   static const Asset INDEX{"text/html", VAN_UI_INDEX, VAN_UI_INDEX_LEN, true,
                            CACHE_PAGE};
   static const Asset PORTAL{"text/html", VAN_UI_PORTAL, VAN_UI_PORTAL_LEN, true,
@@ -57,6 +57,12 @@ const VanUi::Asset *VanUi::match_(const std::string &url) const {
                               VAN_UI_MANIFEST_LEN, true, CACHE_ASSET};
   static const Asset ICON{"image/png", VAN_UI_ICON, VAN_UI_ICON_LEN, false,
                           CACHE_ASSET};
+
+  // A stack buffer, not a std::string: canHandle() runs for every request the
+  // server takes - /events and the REST calls included - so matching should
+  // not allocate.
+  char buf[AsyncWebServerRequest::URL_BUF_SIZE];
+  StringRef url = request->url_to(buf);
 
   // Exact matches only. No prefix matching: a greedy handler registered ahead
   // of web_server would swallow /events and the REST endpoints the page itself
@@ -80,11 +86,11 @@ const VanUi::Asset *VanUi::match_(const std::string &url) const {
 bool VanUi::canHandle(AsyncWebServerRequest *request) const {
   if (request->method() != HTTP_GET)
     return false;
-  return this->match_(request->url()) != nullptr;
+  return this->match_(request) != nullptr;
 }
 
 void VanUi::handleRequest(AsyncWebServerRequest *request) {
-  const Asset *a = this->match_(request->url());
+  const Asset *a = this->match_(request);
   if (a == nullptr) {
     // Unreachable - canHandle() said yes using the same table. Answer rather
     // than leaving the request dangling: an unanswered request on this server

@@ -46,8 +46,6 @@
 
 #pragma once
 
-#include <string>
-
 #include "esphome/core/component.h"
 #include "esphome/components/web_server_base/web_server_base.h"
 
@@ -83,8 +81,9 @@ class VanUi : public Component, public AsyncWebHandler {
     const char *cache_control;
   };
 
-  // Returns the asset for a URL, or nullptr if this handler does not own it.
-  const Asset *match_(const std::string &url) const;
+  // Returns the asset for a request's URL, or nullptr if this handler does not
+  // own it.
+  const Asset *match_(AsyncWebServerRequest *request) const;
 
   web_server_base::WebServerBase *base_{nullptr};
   const char *path_{"/ui"};
