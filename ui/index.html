@@ -629,6 +629,20 @@ document.addEventListener("visibilitychange", function () {
 function post(path) {
   return fetch(path, { method: "POST" }).catch(function () { setLink(false); });
 }
+
+// The node has no RTC and no internet, so the phone is its only clock. The log
+// (and the SD card's per-day file names) need it after every power cut, and
+// this page is the one that actually gets opened. 404 on builds without the
+// log - harmless, so the failure is ignored.
+function syncClock() {
+  fetch("/soak/clock", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: "ms=" + Date.now() + "&tz=" + (-new Date().getTimezoneOffset())
+  }).catch(function () {});
+}
+syncClock();
+document.addEventListener("visibilitychange", function () { if (!document.hidden) syncClock(); });
 function oid(id) { return id.slice(id.indexOf("-") + 1); }
 var cmd = {
   sw:  function (id, on) { return post("/switch/" + oid(id) + "/turn_" + (on ? "on" : "off")); },

@@ -14,6 +14,13 @@
 #
 # BEFORE THIS GOES IN THE VAN: run nodes/van-core-soak.yaml for 24h.
 # BEFORE EVERY TRIP: pull the BLE antenna, unplug the probe, confirm AC ends ON.
+#
+# LOG: every 10 s into a PSRAM ring (download at /soak) and, from there, onto
+# the microSD card as one CSV per local day under /log (browse at /file). The
+# card copy survives power cuts; the ring bridges a missing or failing card for
+# ~4 days. Clock: the phone sets it whenever /ui or /soak is opened - there is
+# no RTC yet, so rows before the first page load after a power cut land in
+# /log/noclock-bootN.csv (still with uptime_s, so they can be re-timed).
 
 substitutions:
   node_name: van-core
@@ -55,6 +62,7 @@ esphome:
   # mark, flag pill). Shared with the bench rig so the two cannot drift.
   includes:
     - vc_draw.h
+    - soak_includes.h
   on_boot:
     # Priority 800 is before almost everything else. The arbiter's own setup()
     # already commands AC ON; this is the belt to that braces.
@@ -81,15 +89,25 @@ esp32:
   board: esp32-s3-devkitc-1
   variant: esp32s3
   framework:
-    # esp-idf, matching the ESP-FBot examples. `UNVERIFIED`: the sd_mmc_card
-    # component's docs show arduino. Both must build under one framework on this
-    # node - that is what the soak config exists to settle.
+    # esp-idf, matching the ESP-FBot examples. sd_mmc_card builds under it too
+    # (van-core-soak.yaml settled that).
     type: esp-idf
+    advanced:
+      # Required by sd_mmc_card: the real VFS, and fatfs linked in explicitly.
+      include_builtin_idf_components: ["fatfs", "spiffs"]
+      disable_vfs_support_termios: false
+      disable_vfs_support_select: false
+      disable_vfs_support_dir: false
+    sdkconfig_options:
+      CONFIG_FATFS_LFN_STACK: "y"
   flash_size: 16MB
 
 psram:
   mode: octal
   speed: 80MHz
+  # Must be false: the log's noinit PSRAM section is incompatible with "boot
+  # without PSRAM" (IDF Kconfig SPIRAM_IGNORE_NOTFOUND).
+  ignore_not_found: false
 
 packages:
   base: !include ../common/base.yaml
@@ -99,10 +117,16 @@ external_components:
   # P310 BLE protocol, already solved. Apache-2.0.
   - source: github://ylianst/esp-fbot
     refresh: 1d
-  # The arbiter. Pure state machine, host-tested in test/.
+  # The arbiter (pure state machine, host-tested in test/), the log, the UI.
   - source:
       type: local
       path: ../components
+    components: [ac_arbiter, soak_log, van_ui]
+  # Mounts the card and serves /file. soak_log does the writing, off the main
+  # loop; this component's own write actions block it and are not used.
+  - source: github://n-serrette/esphome_sd_card
+    components: [sd_mmc_card, sd_file_server]
+    refresh: 1d
 
 # -----------------------------------------------------------------------------
 # Network. SoftAP only - no router exists in the van, and no station mode is
@@ -278,16 +302,25 @@ binary_sensor:
     lambda: return id(arbiter)->ac_on();
   - platform: template
     name: "Force on (fail-safe)"
+    id: bs_force_on
     lambda: return id(arbiter)->force_on();
   - platform: template
     name: "Fridge request"
+    id: bs_fridge_req
     lambda: return id(arbiter)->fridge_req();
   - platform: template
     name: "Manual request"
+    id: bs_manual_req
     lambda: return id(arbiter)->manual_req();
   - platform: template
     name: "Surplus request"
+    id: bs_surplus_req
     lambda: return id(arbiter)->surplus_req();
+  - platform: template
+    name: "Sleep mode active"
+    id: bs_sleep
+    internal: true
+    lambda: return id(sw_sleep_mode).state;
   - platform: template
     name: "Parked"
     id: bs_parked
@@ -314,6 +347,10 @@ sensor:
     dc_input_power:
       name: "Solar input power"
       id: dc_input_watts
+    total_power:
+      # Reg 20: AC output only (M1). output_power - this = the 12 V + USB load.
+      name: "AC output power"
+      id: ac_output_watts
     remaining_time:
       name: "Remaining minutes"
       id: remaining_minutes
@@ -358,22 +395,28 @@ sensor:
     accuracy_decimals: 2
     update_interval: 10s
     lambda: |-
-      // Pass the raw probe through; the smoothing is in the filters below so
-      // that a NAN from the timeout filter propagates as a NAN.
+      // The raw probe, unsmoothed. `REVISED 2026-09-30`: the smoothing moved
+      // into the arbiter ("Fridge probe filter"), where it is tunable and
+      // applies to the on/off thresholds only - the 10 C hard override must
+      // see the raw wall, not a 10-minute-old average of it.
       return id(fridge_temp_raw).state;
     filters:
-      # ~3 min time constant at a 10s update. This replaces the water bottle the
-      # earlier revision put the probe in: door-opening excursions are damped in
-      # software, and real fridge dynamics are far slower than this.
-      - exponential_moving_average:
-          alpha: 0.05
-          send_every: 1
       # Convention (section 11): every sensor feeding a control decision carries
       # a timeout. Publishing NAN is how the arbiter learns the probe is gone -
       # and 5 min later it forces AC on.
       - timeout:
           timeout: 60s
           value: !lambda return NAN;
+
+  # What the on/off thresholds actually compare against.
+  - platform: template
+    name: "Fridge temperature (filtered)"
+    id: fridge_temp_filtered
+    unit_of_measurement: "°C"
+    device_class: temperature
+    accuracy_decimals: 2
+    update_interval: 10s
+    lambda: return id(arbiter)->fridge_filtered();
 
   # --- cabin ambient, same 1-Wire bus. Correlates directly with duty cycle. ---
   - platform: dallas_temp
@@ -394,6 +437,58 @@ sensor:
     # on reboot. Good enough for the only question it is ever asked, which is
     # "how long has it been sitting there".
     lambda: return id(arbiter)->parked_for_s() / 86400.0f;
+
+  # --- log-only diagnostics ---
+  - platform: template
+    # AcReason as a number for the CSV: 0 off, 1 parked, 2 boot, 3 ble lost,
+    # 4 link stale, 5 probe stale, 6 watchdog, 7 fridge hard, 8 fridge,
+    # 9 manual, 10 surplus.
+    name: "AC reason code"
+    id: ac_reason_code
+    internal: true
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      static const char *const R[] = {"off", "parked", "boot", "ble lost", "link stale", "probe stale",
+                                      "watchdog", "fridge (hard)", "fridge", "manual", "surplus"};
+      for (int i = 0; i < 11; i++)
+        if (strcmp(id(arbiter)->reason(), R[i]) == 0) return i;
+      return NAN;
+  - platform: template
+    # Writes re-sent because the station's readback disagreed (M17). Anything
+    # but a slow trickle means commands are being dropped.
+    name: "AC command re-sends"
+    id: ac_resends
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: 60s
+    lambda: return id(arbiter)->resends();
+  - platform: template
+    name: "Free internal heap"
+    id: heap_int
+    entity_category: diagnostic
+    unit_of_measurement: "B"
+    accuracy_decimals: 0
+    update_interval: 60s
+    lambda: return heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+  - platform: template
+    name: "Min free internal heap"
+    id: heap_int_min
+    entity_category: diagnostic
+    unit_of_measurement: "B"
+    accuracy_decimals: 0
+    update_interval: 60s
+    lambda: return heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+  - platform: template
+    # Rows in memory not yet on the card. Grows only while the card is out or
+    # failing; the ring holds ~4 days of them.
+    name: "SD log behind"
+    id: sd_lag
+    entity_category: diagnostic
+    unit_of_measurement: "rows"
+    accuracy_decimals: 0
+    update_interval: 60s
+    lambda: return id(soak)->sd_lag_rows();
 
   - platform: template
     name: "Manual AC remaining"
@@ -595,6 +690,79 @@ van_ui:
   captive_landing: true
 
 # -----------------------------------------------------------------------------
+# The log. 10 s rows into a PSRAM ring, copied from there to the microSD card.
+# Wiring the card: nothing - the 1.47B's slot is on-board (SDMMC 1-bit,
+# GPIO14 clk / 15 cmd / 16 d0). FAT32.
+# -----------------------------------------------------------------------------
+sd_mmc_card:
+  id: sd_card
+  mode_1bit: true
+  clk_pin: GPIO14
+  cmd_pin: GPIO15
+  data0_pin: GPIO16
+  # Never format on failure. A card that will not mount is a card to look at,
+  # not to erase - it may be holding the only copy of a season's log.
+  format_if_mount_failed: false
+
+sd_file_server:
+  id: file_server
+  url_prefix: "file"
+  root_path: "/"
+  enable_deletion: true
+  enable_download: true
+  enable_upload: false
+
+soak_log:
+  id: soak
+  interval: 10s
+  buffer_size: 4000000
+  sd_dir: /log
+  sd_interval: 60s
+  remote:
+    # The Athom plug in the fridge's supply (van-fridge-plug*.yaml), while it
+    # is there. Polled off the main loop; if it is reflashed as the heater plug
+    # these read NAN and nothing else notices.
+    - url: "http://192.168.4.12/sensor/Fridge%20power"
+      sensor:
+        name: "Fridge power (plug)"
+        id: fridge_w
+        unit_of_measurement: "W"
+        accuracy_decimals: 1
+    - url: "http://192.168.4.12/sensor/Fridge%20energy"
+      sensor:
+        name: "Fridge energy (plug)"
+        id: fridge_kwh
+        unit_of_measurement: "kWh"
+        accuracy_decimals: 4
+  columns:
+    - {name: t_fridge, sensor: fridge_temp_raw, accuracy_decimals: 3}
+    - {name: t_fridge_f, sensor: fridge_temp_filtered, accuracy_decimals: 3}
+    - {name: t_cabin, sensor: cabin_temp, accuracy_decimals: 3}
+    - {name: fridge_w, sensor: fridge_w, accuracy_decimals: 1}
+    - {name: fridge_kwh, sensor: fridge_kwh, accuracy_decimals: 4}
+    - {name: soc, sensor: battery_percent, accuracy_decimals: 1}
+    - {name: in_w, sensor: input_watts, accuracy_decimals: 0}
+    - {name: out_w, sensor: output_watts, accuracy_decimals: 0}
+    - {name: ac_out_w, sensor: ac_output_watts, accuracy_decimals: 0}
+    - {name: ac_in_w, sensor: ac_input_watts, accuracy_decimals: 0}
+    - {name: dc_in_w, sensor: dc_input_watts, accuracy_decimals: 0}
+    - {name: ac_on, binary_sensor: p310_ac_active}
+    - {name: ble_up, binary_sensor: p310_connected}
+    - {name: ac_cmd, binary_sensor: bs_ac_on}
+    - {name: reason, sensor: ac_reason_code, accuracy_decimals: 0}
+    - {name: force_on, binary_sensor: bs_force_on}
+    - {name: fridge_req, binary_sensor: bs_fridge_req}
+    - {name: manual_req, binary_sensor: bs_manual_req}
+    - {name: surplus_req, binary_sensor: bs_surplus_req}
+    - {name: parked, binary_sensor: bs_parked}
+    - {name: sleep, binary_sensor: bs_sleep}
+    - {name: resends, sensor: ac_resends, accuracy_decimals: 0}
+    - {name: heap_int, sensor: heap_int, accuracy_decimals: 0}
+    - {name: heap_int_min, sensor: heap_int_min, accuracy_decimals: 0}
+    - {name: die_c, sensor: board_temp, accuracy_decimals: 1}
+    - {name: sd_lag, sensor: sd_lag, accuracy_decimals: 0}
+
+# -----------------------------------------------------------------------------
 # The arbiter. One component, one writer, one decision.
 # -----------------------------------------------------------------------------
 ac_arbiter:
@@ -608,6 +776,9 @@ ac_arbiter:
   battery_level: battery_percent
   ble_connected: p310_connected
   ac_switch: ac_switch
+  # The station's own report. A dropped write is re-sent within ~10 s instead
+  # of waiting for the 60 s re-assert (M17: the reconnect write was lost twice).
+  ac_state: p310_ac_active
   # Must comfortably exceed the slowest feeding sensor (30s cabin / 10s fridge /
   # 5s BLE poll). Anything older than this counts as missing, and missing never
   # argues for OFF.
@@ -679,6 +850,25 @@ number:
     entity_category: config
     on_value:
       - lambda: id(arbiter)->config().temp_hard_c = x;
+
+  - platform: template
+    # Time constant of the filter between the probe and the on/off thresholds;
+    # 0 = raw. The hard override always reads raw. 10 min is `UNVERIFIED`: M17
+    # shows the wall probe rebounding ~9 K/h after a stop while the contents
+    # move 0.5-1 K/h, and unfiltered that drove ~29 cycles a day. Read the
+    # cycle count off the next log before touching it.
+    name: "Fridge probe filter"
+    id: num_probe_filter_min
+    unit_of_measurement: "min"
+    min_value: 0
+    max_value: 30
+    step: 1
+    initial_value: 10
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value:
+      - lambda: id(arbiter)->config().probe_filter_ms = (uint32_t)(x * 60000);
 
   - platform: template
     name: "Sleep ceiling"

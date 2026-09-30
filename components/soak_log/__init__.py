@@ -41,6 +41,8 @@ CONF_REMOTE = "remote"
 CONF_REMOTE_INTERVAL = "remote_interval"
 CONF_STALE_AFTER = "stale_after"
 CONF_SERVE_AT_UI = "serve_at_ui"
+CONF_SD_DIR = "sd_dir"
+CONF_SD_INTERVAL = "sd_interval"
 
 MAX_COLUMNS = 40
 _COL_NAME = re.compile(r"^[a-z][a-z0-9_]{0,23}$")
@@ -117,6 +119,20 @@ CONFIG_SCHEMA = cv.Schema(
         # Also answer /ui, where the Android app looks. Only on builds without
         # van_ui, which owns that path.
         cv.Optional(CONF_SERVE_AT_UI, default=False): cv.boolean,
+        # Durable copy on the SD card mounted by sd_mmc_card, one CSV per local
+        # day. A directory under the card root, e.g. "/log". Leave out for no SD.
+        cv.Optional(CONF_SD_DIR): cv.All(
+            cv.string_strict,
+            lambda v: v.rstrip("/")
+            if v.startswith("/") and len(v) > 1
+            else cv.Invalid("a directory under the card root, like /log"),
+        ),
+        # Batching: one append per file per interval, not per row. Rows are
+        # never lost to a long interval - they wait in the PSRAM ring.
+        cv.Optional(CONF_SD_INTERVAL, default="60s"): cv.All(
+            cv.positive_time_period_milliseconds,
+            cv.Range(min=cv.TimePeriod(seconds=10)),
+        ),
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
@@ -130,6 +146,9 @@ async def to_code(config):
     cg.add(var.set_stale_after(config[CONF_STALE_AFTER].total_milliseconds))
     cg.add(var.set_remote_interval(config[CONF_REMOTE_INTERVAL].total_milliseconds))
     cg.add(var.set_serve_ui(config[CONF_SERVE_AT_UI]))
+    if CONF_SD_DIR in config:
+        cg.add(var.set_sd_dir(config[CONF_SD_DIR]))
+        cg.add(var.set_sd_interval(config[CONF_SD_INTERVAL].total_milliseconds))
 
     # The buffer is a static array; its size must be a compile-time constant.
     cg.add_define("SOAK_LOG_BUFFER_BYTES", config[CONF_BUFFER_SIZE])

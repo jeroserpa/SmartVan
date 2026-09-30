@@ -927,3 +927,39 @@ and the widget's own message — "Not on van-core Wi-Fi", printed for every
 failure including this one — actively pointed away from the fault. D-20's
 `Miss` values exist so the next fault names itself instead. **When the
 instrument and the observation disagree, suspect the instrument.**
+
+## 2026-09-30 — D-22: after the test day, three changes to the production node
+
+From the unattended test run (measurements.md M17).
+
+**1. The arbiter re-sends until the station agrees.** The re-send on
+reconnect was lost both times it was tested: ESP-FBot reports `connected`
+before it can write, so AC waited for the 60 s re-assert. The adapter now
+takes the station's own AC report (`ac_state`, reg 41) and re-sends every 10 s
+while it disagrees with the command. This is write *delivery*, not a
+decision, so it lives in the adapter rather than `arbiter_core`. Counted in
+`AC command re-sends`: a steady trickle means commands are being dropped.
+
+**2. The probe filter moved into the arbiter core and got longer.** It was a
+~3 min EMA in YAML that also sat in front of the 10 °C hard override. Now it
+is `probe_filter_ms` in the core (default 10 min on the node, a `number`,
+host-tested). It feeds the on/off thresholds only; **the hard override reads
+the raw probe**, so filtering can delay a release but never a safety
+response. Why: unfiltered, the 7/4 °C thresholds tracked the wall probe's
+~9 K/h rebound after each stop and cycled ~29 times a day. 10 min is
+`UNVERIFIED`: judge it by the cycle count in the next log.
+
+**3. The log goes to the SD card, written by `soak_log`, not by
+`sd_mmc_card`.** That component's write actions are blocking `fopen`/`fwrite`
+on the main loop, which is the BLE-starvation risk in CLAUDE.md §11. It is
+used only to mount the card and serve `/file`. `soak_log` copies rows out of
+its PSRAM ring on its own task into `/log/YYYYMMDD.csv`, so a missing, full
+or failing card delays the copy and costs nothing else. The ring holds ~4
+days, so a card swap loses nothing. Boot numbers now come from flash, so
+files from different power-ups never collide. The clock still comes from the
+phone (no RTC): the UI page now sets it on every open.
+
+Also: the ring is flushed from the PSRAM cache after every write. Both
+test-day logs were empty after a deliberate software reboot, and a
+write-back cache that a reset does not flush fits that. `UNVERIFIED` until a
+reboot is seen to keep the ring.

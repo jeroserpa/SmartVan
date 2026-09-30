@@ -9,7 +9,11 @@
 #include <cstring>
 #include <ctime>
 
+#include <cerrno>
+#include <sys/stat.h>
+
 #include <esp_attr.h>
+#include <esp_cache.h>
 #include <esp_heap_caps.h>
 #include <esp_http_client.h>
 #include <esp_rom_crc.h>
@@ -18,13 +22,16 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
+#include "esphome/core/preferences.h"
 
 namespace esphome::soak_log {
 
 static const char *const TAG = "soak_log";
 static constexpr uint32_t MAGIC = 0x4b414f53;  // "SOAK"
-static constexpr uint32_t FORMAT_VERSION = 1;
+// 2: header gained sd_seq, and boot numbers come from flash.
+static constexpr uint32_t FORMAT_VERSION = 2;
 static constexpr size_t HDR_BYTES = (sizeof(Header) + 3) & ~size_t{3};
 
 // Not zeroed at boot. The only thing in this section.
@@ -75,6 +82,16 @@ uint32_t SoakLog::layout_hash_() const {
 
 void SoakLog::seal_() {
   this->hdr_->crc = esp_rom_crc32_le(0, (const uint8_t *) this->hdr_, offsetof(Header, crc));
+  this->persist_(this->hdr_, sizeof(Header));
+}
+
+// PSRAM sits behind a write-back cache. A software reset does not flush it, so
+// the header and the newest rows could exist only in cache when the chip went
+// down - the likely reason both test-day logs came back empty after a
+// deliberate reboot (measurements.md M17). `UNVERIFIED` as the cause; cheap
+// enough to do on every write regardless.
+void SoakLog::persist_(const void *p, size_t n) const {
+  esp_cache_msync(const_cast<void *>(p), n, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED);
 }
 
 bool SoakLog::header_valid_() const {
@@ -100,6 +117,15 @@ void SoakLog::setup() {
   // PSRAM loses its contents without power, and a garbage header could still
   // pass the magic check by luck; the CRC makes that vanishingly unlikely,
   // and a power-type reset skips the question entirely.
+  // Boot number from flash: PSRAM forgets it on every power cut, and then two
+  // power-ups would write the same "boot 1" into the same SD file.
+  ESPPreferenceObject boot_pref = global_preferences->make_preference<uint32_t>(fnv1_hash("soak_log_boot"));
+  uint32_t boot_no = 0;
+  boot_pref.load(&boot_no);
+  boot_no++;
+  boot_pref.save(&boot_no);
+  global_preferences->sync();
+
   bool power_reset = this->reset_reason_ == ESP_RST_POWERON || this->reset_reason_ == ESP_RST_BROWNOUT ||
                      this->reset_reason_ == ESP_RST_UNKNOWN;
   {
@@ -109,7 +135,7 @@ void SoakLog::setup() {
       this->reset_buffer_();
 
     Header *h = this->hdr_;
-    h->boot++;
+    h->boot = (uint16_t) boot_no;
     // Carry the clock across a software reset. The gap is at most one
     // interval plus the boot itself; rows say so with clock=2.
     if (this->kept_ && h->last_epoch != 0) {
@@ -135,6 +161,12 @@ void SoakLog::setup() {
     // and it must never outrank the loop that feeds the BLE client (core 0
     // runs the controller and host).
     xTaskCreatePinnedToCore(SoakLog::remote_task_, "soak_remote", 4096, this, 1, nullptr, 1);
+  }
+  if (!this->sd_dir_.empty()) {
+    // Same core and priority as the remote poller, for the same reason. A slow
+    // FAT allocation blocks this task and nothing else.
+    this->sd_state_ = 2;  // until the first write proves otherwise
+    xTaskCreatePinnedToCore(SoakLog::sd_task_, "soak_sd", 6144, this, 1, nullptr, 1);
   }
 }
 
@@ -174,6 +206,7 @@ void SoakLog::write_row_() {
   h->seq++;
   if (epoch != 0)
     h->last_epoch = epoch;
+  this->persist_(p, this->row_size_());
   this->seal_();
 }
 
@@ -206,6 +239,19 @@ void SoakLog::dump_config() {
                 this->hdr_->boot);
   ESP_LOGCONFIG(TAG, "  Columns: %u, remotes: %u. Page: /soak", (unsigned) this->columns_.size(),
                 (unsigned) this->remotes_.size());
+  if (this->sd_dir_.empty()) {
+    ESP_LOGCONFIG(TAG, "  SD copy: off");
+  } else {
+    ESP_LOGCONFIG(TAG, "  SD copy: %s/YYYYMMDD.csv every %" PRIu32 " s", this->sd_dir_.c_str(),
+                  this->sd_interval_ms_ / 1000);
+  }
+}
+
+uint32_t SoakLog::sd_lag_rows() const {
+  LockGuard lock(this->mutex_);
+  const Header *h = this->hdr_;
+  const uint32_t oldest = h->seq - h->count;
+  return h->seq - std::max(h->sd_seq, oldest);
 }
 
 // ---------------------------------------------------------------------------
@@ -273,6 +319,151 @@ void SoakLog::remote_task_(void *arg) {
 }
 
 // ---------------------------------------------------------------------------
+// SD copy - runs on its own task
+// ---------------------------------------------------------------------------
+
+void SoakLog::sd_task_(void *arg) {
+  auto *self = static_cast<SoakLog *>(arg);
+  // sd_mmc_card mounts in its own setup(); give it, and the clock, a moment.
+  vTaskDelay(pdMS_TO_TICKS(15000));
+  for (;;) {
+    self->sd_flush_();
+    // Catching up after a card swap or a long outage: keep going in hour-sized
+    // batches, yielding between them, rather than one interval per hour.
+    const uint32_t wait = (self->sd_state_ == 1 && self->sd_lag_rows() > 360) ? 200 : self->sd_interval_ms_;
+    vTaskDelay(pdMS_TO_TICKS(wait));
+  }
+}
+
+// Append the rows the card has not seen. The ring is the source of truth: on
+// any failure nothing advances and the same rows are retried next time, so a
+// failure part-way through a batch can duplicate rows in the file. (boot,
+// uptime_s) is unique per row, so deduplicate on that when analysing.
+void SoakLog::sd_flush_() {
+  const size_t rs = this->row_size_();
+  static constexpr uint32_t BATCH = 360;  // one hour of 10 s rows
+  static constexpr size_t OUT = 16384;
+  uint8_t *batch = (uint8_t *) heap_caps_malloc(BATCH * rs, MALLOC_CAP_SPIRAM);
+  char *out = (char *) heap_caps_malloc(OUT, MALLOC_CAP_SPIRAM);
+  if (batch == nullptr || out == nullptr) {
+    free(batch);
+    free(out);
+    return;
+  }
+
+  uint32_t from, n;
+  int32_t tz;
+  {
+    LockGuard lock(this->mutex_);
+    Header *h = this->hdr_;
+    const uint32_t oldest = h->seq - h->count;
+    if (h->sd_seq < oldest || h->sd_seq > h->seq) {
+      // The ring wrapped past rows the card never got (card out for days).
+      if (h->sd_seq < oldest)
+        this->sd_lost_ += oldest - h->sd_seq;
+      h->sd_seq = oldest;
+      this->seal_();
+    }
+    from = h->sd_seq;
+    n = std::min(BATCH, h->seq - from);
+    tz = h->tz_min;
+    const uint32_t cap = h->capacity;
+    for (uint32_t k = 0; k < n; k++) {
+      const uint32_t back = h->seq - (from + k);
+      const uint32_t slot = (h->head + cap - back) % cap;
+      memcpy(batch + k * rs, this->row_ptr_(slot), rs);
+    }
+  }
+  if (n == 0) {
+    free(batch);
+    free(out);
+    return;
+  }
+
+  const std::string root = "/sdcard" + this->sd_dir_;
+  mkdir(root.c_str(), 0777);  // EEXIST is the normal case
+
+  bool ok = true;
+  FILE *f = nullptr;
+  char cur[48] = "";
+  size_t len = 0;
+  auto drain = [&]() {
+    if (ok && len > 0 && (f == nullptr || fwrite(out, 1, len, f) != len))
+      ok = false;
+    len = 0;
+  };
+  for (uint32_t k = 0; k < n && ok; k++) {
+    const uint8_t *p = batch + k * rs;
+    uint32_t epoch;
+    uint16_t rboot;
+    memcpy(&epoch, p, 4);
+    memcpy(&rboot, p + 8, 2);
+    char name[48];
+    if (epoch != 0) {
+      time_t t = (time_t) epoch + (time_t) tz * 60;
+      struct tm tm;
+      gmtime_r(&t, &tm);
+      strftime(name, sizeof(name), "%Y%m%d.csv", &tm);
+    } else {
+      snprintf(name, sizeof(name), "noclock-boot%u.csv", rboot);
+    }
+    if (strcmp(name, cur) != 0) {
+      drain();
+      if (f != nullptr && fclose(f) != 0)
+        ok = false;
+      f = nullptr;
+      if (!ok)
+        break;
+      const std::string path = root + "/" + name;
+      f = fopen(path.c_str(), "a");
+      if (f == nullptr) {
+        ok = false;
+        break;
+      }
+      strncpy(cur, name, sizeof(cur) - 1);
+      // New file: the column header, so every day's file stands on its own.
+      fseek(f, 0, SEEK_END);
+      if (ftell(f) == 0) {
+        len += snprintf(out + len, OUT - len, "local_time,epoch,uptime_s,boot,clock");
+        for (const auto &c : this->columns_)
+          len += snprintf(out + len, OUT - len, ",%s", c.name);
+        out[len++] = '\n';
+      }
+    }
+    if (OUT - len < 1024)
+      drain();
+    len += this->format_row_(p, tz, out + len, OUT - len - 1);
+    out[len++] = '\n';
+  }
+  drain();
+  // fclose is where FAT actually commits; a full or pulled card shows up here.
+  if (f != nullptr && fclose(f) != 0)
+    ok = false;
+
+  {
+    LockGuard lock(this->mutex_);
+    if (ok) {
+      if (this->hdr_->sd_seq == from) {
+        this->hdr_->sd_seq = from + n;
+        this->seal_();
+      }
+      this->sd_rows_written_ += n;
+      this->sd_last_ok_ms_ = now_ms();
+      memcpy(this->sd_file_, cur, sizeof(this->sd_file_));
+    } else {
+      this->sd_fail_++;
+    }
+  }
+  // Log transitions, plus the very first failure: a card that never mounts
+  // starts in the failing state and would otherwise never say so.
+  if (ok != (this->sd_state_ == 1) || (!ok && this->sd_fail_ == 1))
+    ESP_LOGW(TAG, "SD copy %s (%s)", ok ? "writing" : "FAILING - rows stay in PSRAM", root.c_str());
+  this->sd_state_ = ok ? 1 : 2;
+  free(batch);
+  free(out);
+}
+
+// ---------------------------------------------------------------------------
 // HTTP - runs on the httpd task
 // ---------------------------------------------------------------------------
 
@@ -303,6 +494,9 @@ async function load(){
   ['Interval',s.interval_s+' s'],['Boot',s.boot+' (last reset: '+s.reset+', buffer '+(s.kept?'kept':'cleared')+')'],
   ['Clock',c],['Free PSRAM',(s.psram_free/1e6).toFixed(2)+' MB']];
  for(const r of s.remotes)rows.push(['Remote',r.url+'<br>ok '+r.ok+', fail '+r.fail+', age '+(r.age_s<0?'never':r.age_s+' s')]);
+ if(s.sd)rows.push(['SD card',(s.sd.state==1?'writing ':'<b>FAILING</b> - rows kept in memory ')+s.sd.file+
+  '<br>behind '+s.sd.lag+' rows, lost '+s.sd.lost+', failures '+s.sd.fail+', last write '+(s.sd.age_s<0?'never':s.sd.age_s+' s ago')+
+  '<br><a href="/file">browse the card</a>']);
  rows.push(['Reboots',s.boots.map(b=>'#'+b.boot+' '+b.reason+(b.epoch?' '+new Date(b.epoch*1000).toLocaleString():'')).join('<br>')]);
  $('t').innerHTML=rows.map(r=>'<tr><td>'+r[0]+'</td><td>'+r[1]+'</td></tr>').join('');
 }
@@ -426,7 +620,18 @@ void SoakLog::send_status_(AsyncWebServerRequest *request) {
              i ? "," : "", r->url.c_str(), r->ok, r->fail, age);
     s += b;
   }
-  s += "],\"boots\":[";
+  s += "],";
+  if (!this->sd_dir_.empty()) {
+    const uint32_t oldest = h->seq - h->count;
+    long sd_age = this->sd_last_ok_ms_ == 0 ? -1 : (long) ((now - this->sd_last_ok_ms_) / 1000);
+    snprintf(b, sizeof(b),
+             "\"sd\":{\"state\":%u,\"file\":\"%s\",\"lag\":%" PRIu32 ",\"lost\":%" PRIu32
+             ",\"fail\":%" PRIu32 ",\"age_s\":%ld},",
+             this->sd_state_, this->sd_file_, h->seq - std::max(h->sd_seq, oldest), this->sd_lost_, this->sd_fail_,
+             sd_age);
+    s += b;
+  }
+  s += "\"boots\":[";
   uint16_t kept = h->nboots < MAX_BOOTS ? h->nboots : MAX_BOOTS;
   for (uint16_t i = 0; i < kept; i++) {
     // Newest first.
@@ -452,9 +657,34 @@ static void fmt_local(char *out, size_t n, uint32_t epoch, int32_t tz_min) {
   strftime(out, n, "%Y-%m-%d %H:%M:%S", &tm);
 }
 
+size_t SoakLog::format_row_(const uint8_t *p, int32_t tz, char *out, size_t cap) const {
+  uint32_t epoch, uptime;
+  uint16_t rboot, flags;
+  memcpy(&epoch, p, 4);
+  memcpy(&uptime, p + 4, 4);
+  memcpy(&rboot, p + 8, 2);
+  memcpy(&flags, p + 10, 2);
+  char lt[24];
+  fmt_local(lt, sizeof(lt), epoch, tz);
+  size_t len = 0;
+  auto put = [&](int w) {
+    if (w > 0)
+      len += std::min((size_t) w, cap - len - 1);
+  };
+  put(snprintf(out, cap, "%s,%" PRIu32 ",%" PRIu32 ",%u,%u", lt, epoch, uptime, rboot, flags));
+  for (size_t i = 0; i < this->columns_.size(); i++) {
+    float v;
+    memcpy(&v, p + 12 + 4 * i, 4);
+    if (std::isnan(v))
+      put(snprintf(out + len, cap - len, ","));
+    else
+      put(snprintf(out + len, cap - len, ",%.*f", this->columns_[i].decimals, v));
+  }
+  return len;
+}
+
 void SoakLog::send_csv_(AsyncWebServerRequest *request) {
   httpd_req_t *req = *request;
-  const size_t ncol = this->columns_.size();
   const size_t rs = this->row_size_();
 
   uint32_t want = 0;
@@ -568,26 +798,10 @@ void SoakLog::send_csv_(AsyncWebServerRequest *request) {
       }
     }
     for (uint32_t k = 0; k < got && alive; k++) {
-      const uint8_t *p = batch + k * rs;
-      uint32_t epoch, uptime;
-      uint16_t rboot, flags;
-      memcpy(&epoch, p, 4);
-      memcpy(&uptime, p + 4, 4);
-      memcpy(&rboot, p + 8, 2);
-      memcpy(&flags, p + 10, 2);
-      char lt[24];
-      fmt_local(lt, sizeof(lt), epoch, tz);
-      put("%s,%" PRIu32 ",%" PRIu32 ",%u,%u", lt, epoch, uptime, rboot, flags);
-      for (size_t i = 0; i < ncol; i++) {
-        float v;
-        memcpy(&v, p + 12 + 4 * i, 4);
-        if (std::isnan(v)) {
-          put(",");
-        } else {
-          put(",%.*f", this->columns_[i].decimals, v);
-        }
-      }
-      put("\n");
+      if (OUT - len < 1024)
+        flush();
+      len += this->format_row_(batch + k * rs, tz, out + len, OUT - len - 1);
+      out[len++] = '\n';
     }
     done += n;
     // Let the writer and the radio in between batches.
