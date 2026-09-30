@@ -531,3 +531,90 @@ because the cabinet was running too cold.
 - Plug energy over the whole 19.3 h run: 492 Wh, 25.5 W average.
 - Node: 0 BLE drops over 19.3 h; internal heap flat (+89 B/h, min 106 kB);
   board 59–71 °C, ~42 K above cabin.
+
+## M16 — 2026-09-26 — three facts from the user, before the unattended test day
+
+- **Condenser clearance behind and above the fridge: OK** (user inspection).
+  Closes the rear/top clearance TODO. It does not explain the ~550 Wh/day vs
+  312 Wh/day rated in M15.
+- **The thermostat comes back on "medium" after every power loss.** Its
+  setting does not survive losing power, so under imposed cycling the fridge
+  always runs on medium, whatever it was set to before. It does not explain
+  the M15 addendum (turned warmer, got colder): AC stayed on throughout that
+  log.
+- **The 17 Sep ~23:45 power-on reset (M15) was the user**, by accident. Not a
+  node fault. Closes that open item.
+
+Test firmware for the day: `nodes/van-core-test.yaml` + `nodes/van-fridge-plug-test.yaml`.
+
+## M17 — 2026-09-27/30 — unattended test run (`van-core-test.yaml`), 67 h, one boot
+
+`soak-20260930-1154.csv`, 27 Sep 16:37 → 30 Sep 11:54. Restarted from step 0
+after an accidental unplug; the CSV starts at the step-9 deliberate reboot
+(see "Log" below), so steps 1–8 are known only from the web UI verdicts. 2.5 L
+of water in the cabinet, no food. Thermostat on medium (it resets there on
+every power loss, M16). BLE: no drops except the deliberate one.
+
+### Inverter idle, SOC-slope method (3,900 Wh), no solar, fridge unplugged by the relay — `DECISIVE`
+| Phase | Window | Battery drain | − DC/AC out | Station overhead |
+|---|---|---|---|---|
+| AC on, nothing on it | Sun 20:25–23:15 | 43.7 W (31 ticks) | 1.1 W | **43.2 W** |
+| AC off (parked) | Sun 23:25–03:45 | 14.3 W (16 ticks) | 1.0 W | **13.5 W** |
+| AC on, nothing on it | Mon 03:55–06:15 | 43.0 W (26 ticks) | 0.6 W | **42.9 W** |
+
+- **Inverter idle ≈ 29.5 W** (±~1.5 W on tick resolution). **Station base ≈
+  13.5 W** with AC off, which nothing in this project can remove. The two AC-on
+  phases agree to 0.3 W, so there was no drift over the night.
+- Closes §8.2. Break-even for imposed cycling (CLAUDE.md §1) is ~11 W, so the
+  margin is ~2.7×. The 12 V-fridge reopening in ANALYSIS §5 does not trigger.
+- The battery counter resolved the ~14 W AC-off drain without trouble: no dead
+  band at that current.
+- The solar input reads 0–5 W of noise after dark (mean ~0.2–0.5 W). It is
+  included above; if it is spurious, subtract it.
+
+### Coast, fridge unpowered from 4.2 °C (wall probe), cabin 28.6 → 21.2 °C
+Two time constants, not one. First 30 min: +8.8 K/h (τ ≈ 2.5 h), the wall and
+air rebounding. After ~1.5 h: 0.5–1 K/h (τ ≈ 12–15 h), the water and cabinet
+mass. 4.2 → 14.0 °C in 3 h, 16.7 °C after 10 h.
+
+### Production scheduler, 40.6 h (arbiter defaults: 7 / 4 °C, 30 / 30 min blocks)
+- Wall probe 3.9–7.1 °C at night, every cycle; 0.3–7.2 °C overall.
+- **~21 min on / ~28 min off, ~29 cycles a day.** Every run ended on "cold"
+  (4 °C), never on the block timer. The off time is set by the probe's fast
+  rebound (the τ ≈ 2.5 h component above), not by the water. That is more
+  restarts than §6 wants for an inverter compressor.
+- AC duty 42 % (Mon night) / 47 % (Tue night); battery drain **41.5 W /
+  45.4 W**, cabin 24.5 / 25.8 °C. That is below the 43 W the station burns with
+  AC on and **nothing** plugged in, so the scheduler beats continuous AC by at
+  least the whole fridge load plus its conversion loss.
+- Fridge energy delivered: 9.9 / 10.6 W average under cycling.
+- `surplus_req` fired in sun at SOC ≥ 85 % (Tue 10:30–13:56) and drove the
+  cabinet to 0.4 °C. Thermal banking works as specified.
+
+### Fail-safes (steps 9–14, from AC off)
+| Test | Result |
+|---|---|
+| Reboot during OFF | AC on ~70 s after boot (limit 180 s) |
+| BLE dropped 3 min, demand arises meanwhile | reconnect ~immediate; **AC on ~60 s after reconnect (limit 30 s): FAIL** |
+| Probe silent | AC on 5.5 min after the poller stopped |
+
+**Confirmed twice (26 Sep and here): the arbiter's immediate re-send on
+reconnect is lost.** `connected` goes true before ESP-FBot can send
+(`Cannot send command: not connected` on serial). AC returns only on the 60 s
+re-assert. Bounded, so not dangerous, but that code path does not work as
+written. Fix: re-send until the `ac_active` readback matches the command, not
+once on the edge.
+
+### Pulldown A/B — `INVALID`, test bug
+The 10 °C hard override latched during recovery (cabinet started at 16.7 °C
+after the night), and the CYCLE profile's −50 °C floor meant it could never
+release: AC stayed on through all three A/B segments. Fixed in `van_test.cpp`.
+What the segments do show: on medium, continuous AC takes the wall probe to
+−0.8/−1.1 °C (cabin 24–28 °C), with the compressor running 4 h without a stop
+at 17–30 W.
+
+### Log
+Both test-day CSVs start at the step-9 **software** reboot with `boot=1`, so the
+PSRAM log did not survive `App.safe_reboot()`, contrary to `soak_log.h`.
+Suspect dirty PSRAM cache lines lost at reset (header CRC then fails).
+`UNVERIFIED`.
