@@ -45,8 +45,13 @@ test in the same commit.
 ## Build the firmware
 
 ```bash
-pip install esphome
+pip install esphome==2026.8.0
 ```
+
+Pinned on purpose (CLAUDE.md section 11): an ESPHome upgrade is a deliberate
+step, taken at home with time to fix what breaks - never a side effect of
+reinstalling. Before bumping it, read the notes on each `external_components`
+entry in `nodes/van-core.yaml`; the third-party ones are where upgrades break.
 
 Then, **from the `nodes/` directory** (ESPHome resolves `!secret` next to the
 config file, not from the repo root):
