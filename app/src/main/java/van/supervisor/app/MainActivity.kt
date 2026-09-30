@@ -27,17 +27,22 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.ImageView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.annotation.VisibleForTesting
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.Lifecycle
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.concurrent.thread
 
 /**
  * A window onto van-core's web UI, and nothing more (D-15).
@@ -47,9 +52,10 @@ import java.util.concurrent.atomic.AtomicReference
  * process* to the Wi-Fi network, so the WebView reaches the van while every
  * other app on the phone keeps using cellular.
  *
- * No logic lives here. The web UI stays the source of truth. The one addition
- * is [VanBridge], which only saves bytes the page hands it: a WebView has no
- * download path of its own that respects the network binding.
+ * No logic lives here. The web UI stays the source of truth. Two additions:
+ * [VanBridge], which only saves bytes the page hands it (a WebView has no
+ * download path of its own that respects the network binding), and the offer
+ * of a newer app build (D-23) - the work is in [AppUpdate]; this class asks.
  *
  * Everything else in this class is about never showing a blank or a raw
  * WebView error: the page, or a panel that says what is happening and what to
@@ -73,6 +79,9 @@ class MainActivity : AppCompatActivity() {
          */
         @VisibleForTesting
         internal var baseUrlOverride: String? = null
+
+        /** When the last update check started (elapsedRealtime); process-wide, so app switching does not repeat it. */
+        private var lastUpdateCheck: Long? = null
     }
 
     private enum class Phase { SEARCHING, CONNECTING, NO_WIFI, UNREACHABLE, READY }
@@ -101,6 +110,11 @@ class MainActivity : AppCompatActivity() {
 
     /** Whether the current load keeps the screen as it is (see [open]). */
     private var quietLoad = false
+
+    /** Whichever update dialog is up - the question, the permission, or the progress. */
+    private var updateDialog: AlertDialog? = null
+    /** An update is downloading or being handed to Android; nothing may start another. */
+    private var updating = false
 
     /**
      * Out of range is expected; keep trying rather than waiting for a tap.
@@ -459,12 +473,128 @@ class MainActivity : AppCompatActivity() {
         return "${file.name} to ${file.parent}"
     }
 
+    // --- updates (D-23) --------------------------------------------------------
+
+    /**
+     * Ask GitHub, off the UI thread, whether a newer build exists. At most once
+     * per [AppUpdate.CHECK_EVERY_MS], unless [force]d: back from granting the
+     * install permission, the user is waiting on it.
+     */
+    private fun checkForUpdate(force: Boolean = false) {
+        // Instrumented tests run against a mock van-core; a real GitHub check
+        // there would only make the screenshots depend on the network.
+        if (baseUrlOverride != null || updating || updateDialog?.isShowing == true) return
+        val now = SystemClock.elapsedRealtime()
+        val last = lastUpdateCheck
+        if (!force && last != null && now - last < AppUpdate.CHECK_EVERY_MS) return
+        lastUpdateCheck = now
+        thread(name = "update-check", isDaemon = true) {
+            val r = AppUpdate.latest(applicationContext) ?: return@thread
+            main.post { offerUpdate(r) }
+        }
+    }
+
+    private fun offerUpdate(r: AppUpdate.Release) {
+        if (isFinishing || isDestroyed || updating || updateDialog?.isShowing == true) return
+        val installed = AppUpdate.installedBuild(this)
+        val pending = AppUpdate.takePending(this)
+        if (r.build <= installed) return
+        // Back from Android's settings after saying yes: no second question.
+        if (pending > 0L) {
+            if (packageManager.canRequestPackageInstalls()) downloadUpdate(r) else AppUpdate.snooze(this)
+            return
+        }
+        if (!AppUpdate.isOffer(r, installed, AppUpdate.snoozeUntil(this), System.currentTimeMillis())) return
+        updateDialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.upd_title)
+            .setMessage(getString(R.string.upd_body, r.build, installed, "%.1f".format(r.size / 1e6)))
+            .setPositiveButton(R.string.upd_install) { _, _ -> startUpdate(r) }
+            .setNegativeButton(R.string.upd_later) { _, _ -> AppUpdate.snooze(this) }
+            // Back, or a tap outside, is "not now" too.
+            .setOnCancelListener { AppUpdate.snooze(this) }
+            .show()
+    }
+
+    /** Android asks once per phone before an app may install apps; go there first if needed. */
+    private fun startUpdate(r: AppUpdate.Release) {
+        if (packageManager.canRequestPackageInstalls()) {
+            downloadUpdate(r)
+            return
+        }
+        updateDialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.upd_perm_title)
+            .setMessage(R.string.upd_perm_body)
+            .setPositiveButton(R.string.upd_perm_open) { _, _ ->
+                AppUpdate.setPending(this, r.build)
+                runCatching {
+                    startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+                }.onFailure { AppUpdate.takePending(this) }
+            }
+            .setNegativeButton(R.string.upd_later) { _, _ -> AppUpdate.snooze(this) }
+            .setOnCancelListener { AppUpdate.snooze(this) }
+            .show()
+    }
+
+    private fun downloadUpdate(r: AppUpdate.Release) {
+        updating = true
+        val cancelled = AtomicBoolean(false)
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.upd_downloading, r.build))
+            .setMessage(getString(R.string.upd_progress, 0))
+            .setCancelable(false)
+            .setNegativeButton(android.R.string.cancel) { _, _ -> cancelled.set(true) }
+            .show()
+        updateDialog = dialog
+        thread(name = "update-download", isDaemon = true) {
+            var shown = 0
+            val result = runCatching {
+                AppUpdate.download(applicationContext, r, { pct ->
+                    if (pct != shown) {
+                        shown = pct
+                        main.post { dialog.setMessage(getString(R.string.upd_progress, pct)) }
+                    }
+                }, { cancelled.get() })
+            }
+            main.post {
+                runCatching { dialog.dismiss() }
+                val apk = result.getOrElse { e ->
+                    updating = false
+                    if (!cancelled.get()) updateFailed(e)
+                    return@post
+                }
+                // Android's confirmation cannot open over another app, so hand
+                // over only while this one is on screen. Otherwise drop it; the
+                // next open offers it again.
+                if (isDestroyed || !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                    apk.delete()
+                    updating = false
+                    return@post
+                }
+                Toast.makeText(this, R.string.upd_installing, Toast.LENGTH_LONG).show()
+                thread(name = "update-install", isDaemon = true) {
+                    val handed = runCatching { AppUpdate.install(applicationContext, apk) }
+                    main.post {
+                        updating = false
+                        handed.onFailure(::updateFailed)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun updateFailed(e: Throwable) {
+        if (isDestroyed) return
+        val why = e.message ?: e.javaClass.simpleName
+        Toast.makeText(this, getString(R.string.upd_failed, why), Toast.LENGTH_LONG).show()
+    }
+
     override fun onResume() {
         super.onResume()
         web.onResume()
         web.resumeTimers()
         // Back from Wi-Fi settings, or from the home screen: try at once.
         if (phase == Phase.NO_WIFI || phase == Phase.UNREACHABLE) load(quiet = true)
+        checkForUpdate(force = AppUpdate.hasPending(this))
     }
 
     override fun onPause() {
@@ -478,6 +608,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        updateDialog?.dismiss()
         main.removeCallbacksAndMessages(null)
         callback?.let { runCatching { cm.unregisterNetworkCallback(it) } }
         callback = null

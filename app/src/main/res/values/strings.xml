@@ -18,6 +18,19 @@
     <string name="btn_details">Details</string>
     <string name="btn_hide_details">Hide details</string>
 
+    <!-- App updates (D-23) -->
+    <string name="upd_title">Update available</string>
+    <string name="upd_body">Build %1$d is ready; this is build %2$d. About %3$s MB over your internet connection (mobile data in the van). van-core closes while it installs; open it again afterwards.</string>
+    <string name="upd_install">Update</string>
+    <string name="upd_later">Later</string>
+    <string name="upd_perm_title">One permission first</string>
+    <string name="upd_perm_body">To install its own updates, van-core needs Android\'s permission to install apps. Turn on \"Allow from this source\", then come back to van-core.</string>
+    <string name="upd_perm_open">Open settings</string>
+    <string name="upd_downloading">Downloading build %1$d</string>
+    <string name="upd_progress">%1$d %%</string>
+    <string name="upd_installing">Installing. van-core will close; open it again in a moment.</string>
+    <string name="upd_failed">Update failed: %1$s</string>
+
     <string name="w_title">van-core</string>
     <string name="w_updating">Updating…</string>
     <string name="w_refresh">Refresh</string>

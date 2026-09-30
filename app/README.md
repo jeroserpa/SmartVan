@@ -165,6 +165,33 @@ van-core.
   widget fault — check the 1-Wire addresses, which are still `PLACEHOLDER`
   in the YAML.
 
+## Updates (D-23)
+
+The app keeps itself up to date, so the browser download below is needed
+only once: for the first build that has this.
+
+- **On open** (at most every 15 min) it reads `van-core-version.txt` from the
+  `app-latest` release. If that names a newer build, it asks: **Update** or
+  **Later** (quiet for 12 h). It never installs without the tap: Android
+  closes an app to replace it.
+- **Update** downloads `van-core-<build>.apk` inside the app. The download
+  must match the size and sha256 in the version file, and be this app at
+  that build, or it is deleted and nothing is installed. Then Android
+  installs it and closes the app; open it again.
+- **The first time**, Android asks for "Install unknown apps" for van-core:
+  one switch, then back to the app, which carries on without asking again.
+  Android also shows its own "update this app?" screen. From the second
+  in-app update on, Android 12+ may skip that screen.
+- **Over the internet, not the van Wi-Fi.** The app's process is bound to the
+  van network, which has none, so the check and the download each pick a
+  network Android has validated (mobile data in the van, the house Wi-Fi at
+  home) and use it explicitly.
+- **Optional.** No internet, or GitHub not answering: no question, and the
+  app is unchanged. Nothing else in the app waits on it.
+- **CI side:** the publish step writes the version file (`build`, `apk`,
+  `size`, `sha256`, `commit`) and uploads it last, after every apk, so the
+  build it names can always be fetched.
+
 ## Build (cloud)
 
 Any push touching `app/` runs `.github/workflows/android-app.yml`.

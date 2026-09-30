@@ -161,6 +161,18 @@ jobs:
           upload "van-core-${GITHUB_RUN_NUMBER}.apk"
           upload "van-core-${GITHUB_RUN_NUMBER}.zip"
           upload van-core.apk
+          # What the app's own update check reads (D-23, app/AppUpdate.kt).
+          # LAST, and only if every upload above succeeded: a phone that sees
+          # build N named here can always fetch van-core-N.apk. The app checks
+          # the download against this size and sha256 before installing it.
+          printf '%s\n' \
+            "# Latest build of main, read by the app's update check (D-23)." \
+            "build=${GITHUB_RUN_NUMBER}" \
+            "apk=van-core-${GITHUB_RUN_NUMBER}.apk" \
+            "size=$(stat -c %s van-core.apk)" \
+            "sha256=${sha}" \
+            "commit=${GITHUB_SHA::7}" > van-core-version.txt
+          upload van-core-version.txt
           gh release edit app-latest --notes "$notes"
           echo "::notice::APK published: ${link}"
 

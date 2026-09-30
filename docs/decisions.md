@@ -963,3 +963,37 @@ Also: the ring is flushed from the PSRAM cache after every write. Both
 test-day logs were empty after a deliberate software reboot, and a
 write-back cache that a reset does not flush fits that. `UNVERIFIED` until a
 reboot is seen to keep the ring.
+
+## 2026-09-30 — D-23: the app checks GitHub for its own updates, and asks
+
+Getting a new build onto the phone meant a browser download that too often
+stalled at 100 % (app/README.md, "Build (cloud)"). The app now does it itself.
+On open it reads `van-core-version.txt` from the `app-latest` release, and if
+that names a newer build it asks. On **Update** it downloads the apk, checks
+it against the size and sha256 in that file and that it is this app at that
+build, and hands it to Android's PackageInstaller. No browser in the path.
+
+**It asks; it never installs unasked.** Android closes an app to replace it,
+so an unasked update could close the panel under a thumb that was switching
+the inverter. The one tap is the user choosing the moment. "Later" keeps it
+quiet for 12 h. Android shows its own confirmation too, the first time; from
+the second in-app update on, Android 12+ may skip it, because the app then
+installed the build it is replacing.
+
+**Over the internet, deliberately around the process binding.** MainActivity
+binds the process to the van Wi-Fi, which has no internet (D-15). The check
+and the download each pick a network Android has validated - mobile data in
+the van, the house Wi-Fi at home - and go through `Network.openConnection()`.
+
+**Optional, so CLAUDE.md §5.5 still holds.** Nothing waits on it. With no
+internet, GitHub down, or the release half-way through being replaced, the
+check comes back empty and the app is exactly what it was. It is the only
+place the app talks to anything but van-core, and all it does is read a
+public release.
+
+**The version file goes up last.** CI uploads it after every apk, and only
+if those uploads succeeded, so a phone that sees build N named there can
+always fetch `van-core-N.apk`.
+
+**The first build with this has to be installed by hand**, the old way. From
+then on the app offers its own updates.
