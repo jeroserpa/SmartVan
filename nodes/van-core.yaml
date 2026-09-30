@@ -115,8 +115,17 @@ packages:
 external_components:
   # The whole reason this project is ESPHome rather than custom firmware: the
   # P310 BLE protocol, already solved. Apache-2.0.
-  - source: github://ylianst/esp-fbot
-    refresh: 1d
+  #
+  # PINNED to the commit van-core has been built and tested with (upstream
+  # HEAD, unchanged since 2026-04-18). This is the link the fridge depends on,
+  # so an upstream change lands after it has been read and bench-tested, not
+  # on whichever compile happens next (CLAUDE.md section 11). Move `ref` to
+  # take a newer version.
+  - source:
+      type: git
+      url: https://github.com/ylianst/esp-fbot
+      ref: 2b22754e7691c081b403ed46c3c931136b7e4cec
+    refresh: never
   # The arbiter (pure state machine, host-tested in test/), the log, the UI.
   - source:
       type: local
@@ -124,9 +133,22 @@ external_components:
     components: [ac_arbiter, soak_log, van_ui]
   # Mounts the card and serves /file. soak_log does the writing, off the main
   # loop; this component's own write actions block it and are not used.
-  - source: github://n-serrette/esphome_sd_card
+  #
+  # `CHECKED 2026-09-30`: ESPHOME MUST STAY BELOW 2026.9.0 while this is in
+  # the build. sd_file_server.cpp still calls AsyncWebServerRequest::url(),
+  # which 2026.9.0 removed - 2026.8.x compiles it with deprecation warnings,
+  # 2026.9.x does not compile it at all. No fix upstream: main is still v0.2.0
+  # (889073e, 2026-03-12), and issue #41 reporting exactly this has had no
+  # reply since 2026-07-09. Pinned to that commit so a push upstream cannot
+  # change a build that works; a SHA cannot move, hence `refresh: never`. To
+  # go past 2026.8, point `ref` at a fixed commit or vendor sd_file_server
+  # into components/ (MIT) with the url_to() change van_ui and soak_log carry.
+  - source:
+      type: git
+      url: https://github.com/n-serrette/esphome_sd_card
+      ref: 889073e052275aeb9e826b697efe3bbbe09f935d
     components: [sd_mmc_card, sd_file_server]
-    refresh: 1d
+    refresh: never
 
 # -----------------------------------------------------------------------------
 # Network. SoftAP only - no router exists in the van, and no station mode is
