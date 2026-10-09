@@ -471,6 +471,7 @@ table.raw td:first-child{color:var(--muted);padding-right:10px;word-break:break-
     <div class="btnrow">
       <button class="btn" id="btn_default">ESPHome default UI</button>
       <button class="btn danger" id="btn_restart">Restart node</button>
+      <button class="btn" id="btn_flash" hidden>Flash firmware</button>
     </div>
   </div>
 
@@ -712,6 +713,13 @@ $("#btn_restart").onclick    = function () {
     cmd.btn(E.btn_restart);
 };
 $("#btn_default").onclick    = function () { location.href = "/"; };
+/* Only inside the van-core app, which does the flashing itself (D-24): a
+ * browser has no way to speak ESPHome's OTA protocol. The app asks for the
+ * file and confirms; the page only opens the door. */
+if (window.VanApp && VanApp.flashFirmware) {
+  $("#btn_flash").hidden = false;
+  $("#btn_flash").onclick = function () { VanApp.flashFirmware(); };
+}
 
 /* --- render ------------------------------------------------------------- */
 function fmtW(v) {

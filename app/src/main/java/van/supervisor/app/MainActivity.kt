@@ -52,10 +52,11 @@ import kotlin.concurrent.thread
  * process* to the Wi-Fi network, so the WebView reaches the van while every
  * other app on the phone keeps using cellular.
  *
- * No logic lives here. The web UI stays the source of truth. Two additions:
+ * No logic lives here. The web UI stays the source of truth. Three additions:
  * [VanBridge], which only saves bytes the page hands it (a WebView has no
- * download path of its own that respects the network binding), and the offer
- * of a newer app build (D-23) - the work is in [AppUpdate]; this class asks.
+ * download path of its own that respects the network binding), the offer of a
+ * newer app build (D-23) - the work is in [AppUpdate]; this class asks - and
+ * flashing van-core's firmware (D-24), which is all in [FirmwareFlash].
  *
  * Everything else in this class is about never showing a blank or a raw
  * WebView error: the page, or a panel that says what is happening and what to
@@ -70,7 +71,13 @@ class MainActivity : AppCompatActivity() {
     private val rootUrl = baseUrlOverride ?: "http://192.168.4.1/"
     private val uiUrl = rootUrl + "ui"
 
+    /** Flashing van-core (D-24). A field: it registers the file picker, which must happen before onStart. */
+    private val flash = FirmwareFlash(this, { rootUrl }, { boundNetwork }, { load(quiet = true) })
+
     companion object {
+        /** The launcher shortcut's action (res/xml/shortcuts.xml): straight to the flash file picker. */
+        const val ACTION_FLASH = "van.supervisor.app.FLASH_FIRMWARE"
+
         /**
          * Instrumented tests only: point the app at a mock van-core. A static
          * set from the test's own process, deliberately not an intent extra —
@@ -170,6 +177,13 @@ class MainActivity : AppCompatActivity() {
 
         setPhase(Phase.SEARCHING)
         requestVanNetwork()
+        // Not on a re-creation: the shortcut asked once, not on every rotation.
+        if (savedInstanceState == null && intent?.action == ACTION_FLASH) main.post { flash.start() }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.action == ACTION_FLASH) flash.start()
     }
 
     private fun setupWebView() {
@@ -402,6 +416,18 @@ class MainActivity : AppCompatActivity() {
                 "Save failed: ${e.message ?: e.javaClass.simpleName}"
             }
         }
+
+        /**
+         * Opens the firmware flash flow (D-24): file picker, then the app's own
+         * questions. The page only asks for it; nothing is sent without the
+         * user picking a file and confirming.
+         */
+        @JavascriptInterface
+        fun flashFirmware(): String {
+            if (!fromVanCore()) return "Refused: flashing is only available to van-core pages"
+            main.post { flash.start() }
+            return "ok"
+        }
     }
 
     /**
@@ -484,6 +510,8 @@ class MainActivity : AppCompatActivity() {
         // Instrumented tests run against a mock van-core; a real GitHub check
         // there would only make the screenshots depend on the network.
         if (baseUrlOverride != null || updating || updateDialog?.isShowing == true) return
+        // Installing closes the app, which would cut a firmware upload off.
+        if (flash.busy) return
         val now = SystemClock.elapsedRealtime()
         val last = lastUpdateCheck
         if (!force && last != null && now - last < AppUpdate.CHECK_EVERY_MS) return
@@ -495,7 +523,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun offerUpdate(r: AppUpdate.Release) {
-        if (isFinishing || isDestroyed || updating || updateDialog?.isShowing == true) return
+        if (isFinishing || isDestroyed || updating || updateDialog?.isShowing == true || flash.busy) return
         val installed = AppUpdate.installedBuild(this)
         val pending = AppUpdate.takePending(this)
         if (r.build <= installed) return
@@ -609,6 +637,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         updateDialog?.dismiss()
+        flash.dismiss()
         main.removeCallbacksAndMessages(null)
         callback?.let { runCatching { cm.unregisterNetworkCallback(it) } }
         callback = null

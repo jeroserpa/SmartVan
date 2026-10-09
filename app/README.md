@@ -192,6 +192,56 @@ only once: for the first build that has this.
   `size`, `sha256`, `commit`) and uploads it last, after every apk, so the
   build it names can always be fetched.
 
+## Flashing van-core (D-24)
+
+The app uploads firmware to van-core itself, with ESPHome's own OTA protocol
+(`ota: platform: esphome`, TCP 3232), so no laptop is needed in the van. Two
+ways in:
+
+- **Long-press the app icon → Flash firmware.** Works whatever firmware
+  van-core runs, including one from before this feature.
+- **Diag → Flash firmware**, on van-core builds that carry the button. It is
+  shown only inside the app: a browser cannot speak the OTA protocol.
+
+Then:
+
+1. **Pick the `.ota.bin`** (from Downloads, Drive, wherever). The app reads the
+   ESP-IDF header and refuses anything that is not an application image — a
+   factory image, an `.elf`, a random file. ESPHome's native IDF build writes
+   it as `.esphome/build/<node>/build/<node>.bin`, copied to `firmware.ota.bin`;
+   either is fine.
+2. **Read the question.** It shows what the image says it is (project, ESPHome
+   version, chip, build time, size), warns if the project is not `van-core*`,
+   and gives **the station's own AC state**:
+   - AC **on**: good. The P310 holds its inverter state, so a firmware that
+     does not start leaves the fridge powered (CLAUDE.md 5.2).
+   - AC **off** or unknown: a firmware that does not start leaves the fridge
+     off until someone presses the P310's own AC button. Turn AC on first.
+
+   It warns; it does not refuse. The app decides nothing about the van.
+3. **OTA password**: the `ota_password` from `nodes/secrets.yaml`, typed once
+   and kept in the app's private storage after a successful flash.
+4. **Flash.** About a minute; the screen stays on. Cancel works until the last
+   block is sent — after that van-core is committing, and the button greys out.
+5. **Wait.** The app watches for van-core to come back and then shows the
+   ESPHome version and build time it reports next to the build time of the
+   image it sent. If they do not match, van-core rolled back to its previous
+   firmware.
+
+The upload goes out on the van Wi-Fi's own socket factory, like everything
+else here, so mobile data can stay on. No app update is offered while a flash
+is running: installing closes the app, which would cut the upload off.
+
+**What the app cannot do is build the image.** Compiling needs ESPHome, the
+internet and `nodes/secrets.yaml`, and the result carries the AP and OTA
+passwords in plain text, so CI cannot publish it from this public repo the
+way it publishes the APK. Build it at home, or in a cloud session whose
+network policy allows `dl.espressif.com` and `components.espressif.com`, and
+get the `.ota.bin` onto the phone.
+
+If van-core never comes back: ESPHome's safe mode boots an OTA-only node after
+repeated failed boots, and the app can flash that. A browser could not.
+
 ## Build (cloud)
 
 Any push touching `app/` runs `.github/workflows/android-app.yml`.
@@ -248,6 +298,11 @@ lost, generate a new one and uninstall the app once before updating.
 - Soak page **Download all** with mobile data on: the file shows up in
   Downloads, and the page reports the name and a size that matches the file.
 - Downloading twice: the second copy gets ` (1)`, and the message names it.
+- Flash (D-24), with AC **on**: long-press icon → Flash firmware → pick the
+  `.ota.bin` → the dialog names `van-core`, the chip `ESP32-S3` and AC ON →
+  Flash → progress to 100 % → "van-core is back" with a build time matching
+  the image. Then once with a wrong password: "Wrong OTA password", old
+  firmware still running.
 - Widget: add it with the phone on van-core Wi-Fi — values within a few
   seconds; ↻ shows `updating…` then a time; out of range shows
   `not in range · last …` and grey values after 20 min.

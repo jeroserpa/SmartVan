@@ -31,6 +31,46 @@
     <string name="upd_installing">Installing. van-core will close; open it again in a moment.</string>
     <string name="upd_failed">Update failed: %1$s</string>
 
+    <!-- Firmware flashing (D-24) -->
+    <string name="sc_flash_short">Flash firmware</string>
+    <string name="sc_flash_long">Flash van-core firmware</string>
+    <string name="fl_checking_title">Checking</string>
+    <string name="fl_checking_body">Reading the image and asking van-core whether AC is on…</string>
+    <string name="fl_not_image_title">Not a firmware image</string>
+    <string name="fl_not_image_body">%1$s: %2$s.</string>
+    <string name="fl_title">Flash van-core?</string>
+    <string name="fl_title_foreign">Not a van-core image</string>
+    <string name="fl_image">%1$s · %2$s · %3$s
+Built %4$s · %5$d kB
+%6$s</string>
+    <string name="fl_foreign">This image calls itself "%1$s". Flashing it replaces van-core, and with it the fridge control, until van-core is flashed back.</string>
+    <string name="fl_ac_on">AC is ON. Good: if the new firmware does not start, the station keeps the fridge powered.</string>
+    <string name="fl_ac_off">AC is OFF. If the new firmware does not start, the fridge stays off until someone presses the P310's own AC button. Turn AC on first (kitchen button), then flash.</string>
+    <string name="fl_ac_unknown">AC state unknown: van-core did not say. Flash with AC on, so that a firmware that does not start leaves the fridge powered.</string>
+    <string name="fl_note">About a minute over the van Wi-Fi. van-core restarts at the end; keep this screen open until it is back.</string>
+    <string name="fl_password">OTA password</string>
+    <string name="fl_flash">Flash</string>
+    <string name="fl_no_wifi">Not connected to the van-core Wi-Fi.</string>
+    <string name="fl_uploading">Flashing van-core</string>
+    <string name="fl_progress">%1$d %% sent</string>
+    <string name="fl_cancelled">Cancelled. van-core keeps the firmware it had.</string>
+    <string name="fl_failed_title">Flash failed</string>
+    <string name="fl_failed_body">%1$s.
+
+van-core keeps the firmware it had.</string>
+    <string name="fl_restarting_title">van-core is restarting</string>
+    <string name="fl_restarting_body">The image is in. Waiting for van-core to come back…</string>
+    <string name="fl_restarting_maybe">The link dropped after the whole image was sent, so van-core may be restarting with it. Waiting to see…</string>
+    <string name="fl_stop_waiting">Stop waiting</string>
+    <string name="fl_back_title">van-core is back</string>
+    <string name="fl_back_version">Running: %1$s
+Image sent: built %2$s
+
+If the running build is not the one you sent, van-core rolled back to its previous firmware.</string>
+    <string name="fl_back_noversion">It is answering again. The image sent was built %1$s; Diag shows the version it runs.</string>
+    <string name="fl_gone_title">van-core has not come back</string>
+    <string name="fl_gone_body">Nothing from van-core for %1$d s. Check the phone has rejoined the van Wi-Fi. If the node stays away, its safe mode still accepts a flash. If AC was off, the fridge stays off until the P310's own AC button is pressed.</string>
+
     <string name="w_title">van-core</string>
     <string name="w_updating">Updating…</string>
     <string name="w_refresh">Refresh</string>

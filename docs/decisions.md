@@ -997,3 +997,66 @@ always fetch `van-core-N.apk`.
 
 **The first build with this has to be installed by hand**, the old way. From
 then on the app offers its own updates.
+
+## 2026-10-09 — D-24: the app flashes van-core, over ESPHome's own OTA protocol
+
+The D-22 firmware sat compiled-in-principle and unflashed for want of a
+laptop in the van. Flashing had exactly one path: `esphome upload`, which
+speaks ESPHome's native OTA (`ota: platform: esphome`, TCP 3232, a
+password challenge). A phone browser cannot open a raw socket, and the
+browser upload form needs `ota: platform: web_server`, which no firmware
+flashed so far carries.
+
+**Decision: the app does it** (`app/.../EspOta.kt`, `FirmwareFlash.kt`). Pick
+an `.ota.bin`, read its ESP-IDF header, say what it is and what AC is doing,
+upload, then wait for the node and show what it runs. Details and the user's
+steps are in `app/README.md`; what matters here is why each part is shaped
+the way it is.
+
+**Native OTA, not `web_server` OTA.** Adding browser upload would still need
+this flash to arrive first, it has no password (the AP would become the only
+lock on the firmware, as it already is on the inverter switch), and safe mode
+only runs the native server. A recovery path has to speak the native protocol
+anyway, so one path covers both. The client is a port of
+`esphome/espota2.py` (2026.8.0), app images only. It does not negotiate
+compression (the ESP32 backend never accepts it) or the extended protocol
+(which exists to rewrite the partition table and bootloader — nothing a phone
+should do); the server falls back to the legacy exchange every ESPHome since
+OTA v1 speaks.
+
+**It reads AC first, and warns — it does not refuse.** CLAUDE.md 5.2: the
+P310 latches its inverter, so flashing with AC **on** means a firmware that
+does not start leaves the fridge powered; with AC **off** the fridge stays off
+until someone presses the station's own button. The dialog shows the
+station's own `P310 AC output active` in green or amber. Refusing would put
+the app in charge of a van decision; the page and the arbiter make those.
+
+**It shows the image's own name, and the node's version afterwards.**
+ESPHome's IDF build names the project after the node, so a `van-core*`
+check catches the likeliest mistake: the plug's image picked by accident.
+Afterwards, the running ESPHome version and build time sit next to the build
+time of the image sent; a mismatch is a rollback, made visible rather than
+assumed away.
+
+**Entry points.** A launcher shortcut (long-press the icon), because it works
+on whatever firmware van-core runs today; and a Diag button that only appears
+inside the app, from the firmware that carries it on. No app update is
+offered while a flash runs: installing closes the app mid-upload.
+
+**Verification.** `EspOtaTest` runs the whole exchange against `FakeDevice`,
+transcribed step by step from `ota_esphome.cpp`: SHA-256 auth, no password,
+OTA v1, legacy MD5 auth, an exact block boundary, wrong password, the device
+rejecting the image, the link lost after the last block, and cancel.
+ESPHome's own `espota2.perform_ota` was then run against the same
+`FakeDevice` in eight scenarios, including its extended-protocol path and its
+error strings, and passed every one. The fake therefore matches the
+reference client, and the app's client matches the fake. `UNVERIFIED`
+against real hardware: the first real flash is the test, and it should be
+done with AC on.
+
+**What it does not solve: building the image.** Compiling needs ESPHome, the
+internet and `nodes/secrets.yaml`, and the image carries the AP and OTA
+passwords in plain text, so CI cannot publish it from this public repo the
+way it publishes the APK. Today that means the laptop at home, or a cloud
+session whose network policy allows `dl.espressif.com` and
+`components.espressif.com` (both denied by default; found 2026-10-09).

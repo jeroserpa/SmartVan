@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Long-press the app icon -> "Flash firmware" (D-24). The way in that needs
+     nothing from the firmware currently on van-core; the Diag page's button
+     only exists on builds that carry it. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_flash"
+        android:shortcutId="flash_firmware"
+        android:shortcutLongLabel="@string/sc_flash_long"
+        android:shortcutShortLabel="@string/sc_flash_short">
+        <intent
+            android:action="van.supervisor.app.FLASH_FIRMWARE"
+            android:targetClass="van.supervisor.app.MainActivity"
+            android:targetPackage="van.supervisor.app" />
+    </shortcut>
+</shortcuts>

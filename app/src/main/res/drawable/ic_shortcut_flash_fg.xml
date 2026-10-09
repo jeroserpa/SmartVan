@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 108dp adaptive foreground; the 24-unit glyph scaled into the 72dp safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="2"
+        android:scaleY="2"
+        android:translateX="30"
+        android:translateY="30">
+        <path
+            android:fillColor="#F0A63C"
+            android:pathData="M5,20h14v-2H5V20zM5,10h4v6h6v-6h4l-7,-7L5,10z" />
+    </group>
+</vector>

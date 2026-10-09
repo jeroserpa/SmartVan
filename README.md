@@ -163,6 +163,12 @@ external components come from GitHub and the fonts come from Google Fonts.
 
 Do not discover the ordering of those steps in a car park.
 
+**From the phone, no laptop:** the van-core app flashes van-core itself
+(long-press its icon → Flash firmware; `docs/decisions.md` D-24). Step 1 still
+applies: the app uploads an image, it cannot build one. Get the
+`.ota.bin` onto the phone, flash with AC **on**, and the app says when the
+node is back and what it runs. See `app/README.md`.
+
 ## Before it goes in the van
 
 1. Run `van-core-soak.yaml` for 24h with the inverter permanently on. It proves
