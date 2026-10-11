@@ -1276,7 +1276,9 @@ widget's chip and footer, and the reason words are shared: `VanFeed.reasonText`
 and the page's `REASON` table, held together by `ReasonTextTest`, which reads
 the page. Blue means parked on all three surfaces, as it already did on the
 panel's frame. The fridge scale has the panel's zones, and its status line
-uses the panel's walk-up wording.
+uses the panel's walk-up wording. The app's History charts follow the same
+rule: power out is amber (it was red, the alarm colour) and the cabin is
+grey (it was amber), as they are on the widget.
 
 **What the home screen does not show, on purpose:** water, until van-water
 exists - an empty "not installed" card on the first screen is noise. And no

@@ -230,7 +230,7 @@ class HistoryScreen(private val root: View) {
         temp.chart.setData(
             listOfNotNull(
                 fridge?.let { ChartView.Series("fridge", c(R.color.alt), x, it, unit = "°") },
-                cabin?.let { ChartView.Series("cabin", c(R.color.warn), x, it, unit = "°") },
+                cabin?.let { ChartView.Series("cabin", c(R.color.muted), x, it, unit = "°") },
             ),
             context.getString(R.string.h_no_rows),
         )
@@ -248,7 +248,7 @@ class HistoryScreen(private val root: View) {
         power.chart.setData(
             listOfNotNull(
                 inW?.let { ChartView.Series("in", c(R.color.ok), x, it, unit = "W") },
-                outW?.let { ChartView.Series("out", c(R.color.bad), x, it, unit = "W") },
+                outW?.let { ChartView.Series("out", c(R.color.warn), x, it, unit = "W") },
                 fridgeW?.let { ChartView.Series("fridge", c(R.color.alt), x, it, unit = "W") },
             ),
             context.getString(R.string.h_no_rows),

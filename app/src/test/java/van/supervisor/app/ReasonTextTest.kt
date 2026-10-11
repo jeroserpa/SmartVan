@@ -14,7 +14,7 @@ import java.io.File
 class ReasonTextTest {
 
     private fun page(): String {
-        var dir: File? = File(System.getProperty("user.dir")).absoluteFile
+        var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
         while (dir != null) {
             val f = File(dir, "ui/index.html")
             if (f.isFile) return f.readText()
