@@ -136,6 +136,18 @@ class ScreensTest {
                 "overhead should be computed, got \"${cardRead(scenario, R.id.card_overhead)}\"",
                 computed,
             )
+            // And it should be RIGHT. The mock hides exactly 50 W in the SOC
+            // balance, and its sun follows the clock, so this run sees whatever
+            // time of day CI happens to start at. Checking only that a number
+            // appeared let 227 W through on a run that started near noon,
+            // where the pack sits pinned at 100 % for hours (Analysis.overhead).
+            val read = cardRead(scenario, R.id.card_overhead)
+            val watts = Regex("""^-?\d+(?:[.,]\d+)?""").find(read)?.value
+                ?.replace(',', '.')?.toFloatOrNull()
+            assertTrue(
+                "overhead should recover the mock's 50 W, got \"$read\"",
+                watts != null && watts in 40f..60f,
+            )
 
             // All-time range: a different read path, and the one that has to
             // cope with the largest table.

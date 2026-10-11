@@ -147,6 +147,40 @@ class AnalysisTest {
         assertTrue(Analysis.overhead(table(cols, *rows.toTypedArray()), minSpanS = 300).isNotEmpty())
     }
 
+    /**
+     * The case the end-only rail check missed, and the one a sunny day
+     * produces every afternoon: charge through the top within minutes, sit
+     * pinned at 100 % for hours, tick down at dusk. The ticks either side of
+     * the pinned stretch are 99.4 % and 99.9 %, so neither end is "full" -
+     * and that one bin read ~340 W with a fraction of a watt of random error,
+     * which made it the whole of the weighted estimate (227 W against 50).
+     */
+    @Test
+    fun `an interval that passes through a full pack is excluded`() {
+        val cols = listOf("soc", "in_w", "out_w")
+        val rows = ArrayList<Pair<Long, FloatArray>>()
+        // 650 W in, 100 W out, 50 W of overhead: 500 W into the pack, so it
+        // climbs 99.4 -> 100 % inside one 300 s bin. Starting at 99.4 % makes
+        // that deterministic - the first reading opens the first interval, and
+        // it is below the rail. Then 5 h pinned, then an evening of 150 W out.
+        var soc = 99.4
+        for (i in 0..(6 * 360)) {
+            val evening = i > 5 * 360
+            soc = if (evening) soc - 150.0 * 10 / 3600 / 3900 * 100
+                  else minOf(100.0, soc + 500.0 * 10 / 3600 / 3900 * 100)
+            val q = (Math.round(soc * 10) / 10.0).toFloat()
+            rows.add((HOUR + i * 10L) to floatArrayOf(q, if (evening) 0f else 650f, 100f))
+        }
+        val bins = Analysis.overhead(table(cols, *rows.toTypedArray()), minSpanS = 300)
+        assertTrue("the evening is still measured", bins.isNotEmpty())
+        for (b in bins) {
+            assertTrue("no bin may span the pinned stretch: ${b.overheadW} W", b.overheadW < 120f)
+        }
+        val est = Analysis.overheadEstimate(bins)
+        assertNotNull(est)
+        assertEquals(50f, est!!.watts, 8f)
+    }
+
     @Test
     fun `charging into the top of the pack is still measured`() {
         val cols = listOf("soc", "in_w", "out_w")

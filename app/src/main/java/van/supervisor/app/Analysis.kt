@@ -167,11 +167,15 @@ object Analysis {
             k = m
             val hours = spanS / 3600f
 
-            // Pinned at either rail: nothing can be inferred here (see
-            // SOC_FULL). Both ends, so an interval genuinely charging INTO the
-            // top is still measured.
-            if (minOf(soc[a], soc[b]) >= SOC_FULL) continue
-            if (maxOf(soc[a], soc[b]) <= SOC_EMPTY) continue
+            // At either rail ANYWHERE inside the interval: nothing can be
+            // inferred (see SOC_FULL). Every sample, not just the two ends -
+            // the same rule as soak_report.py §5. Checking only the ends let
+            // one bin charge through 99.5 %, sit pinned at 100 % all afternoon
+            // and tick down to 99.9 % at dusk: five hours reading ~340 W, with
+            // so little random error that it outweighed every honest bin. The
+            // History tab showed 227 W against the mock's true 50 W. Charging
+            // INTO the top is still measured, up to the last bin below 99.5 %.
+            if ((a..b).any { val s = soc[it]; s >= SOC_FULL || s <= SOC_EMPTY }) continue
             // Any AC input inside the interval disqualifies it.
             if (acIn != null && (a..b).any { (acIn[it]) > 1f }) continue
 
