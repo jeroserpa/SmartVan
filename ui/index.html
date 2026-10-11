@@ -14,10 +14,12 @@
      numbers, large touch targets, no animation.
    * It talks to ESPHome's own web_server API and nothing else:
        GET  /events                      server-sent events, all entity state
-       POST /switch/<oid>/turn_on|turn_off
-       POST /number/<oid>/set?value=X
-       POST /select/<oid>/set?option=X
-       POST /button/<oid>/press
+       POST /switch/<name>/turn_on|turn_off
+       POST /number/<name>/set?value=X
+       POST /select/<name>/set?option=X
+       POST /button/<name>/press
+     <name> is the entity's name on ESPHome 2026.8, which matches URLs by name
+     only; older builds took the object id. See key() and target().
    * It is a VIEW. No control logic lives here. The arbiter is the single
      writer of ac_switch (CLAUDE.md 5.3) and this page must never grow into a
      second one - it may only nudge the same request flags the physical
@@ -512,7 +514,7 @@ const E = {
 
   ble:        "binary_sensor-p310_connected",
   ac_on:      "binary_sensor-ac_on",
-  f_force:    "binary_sensor-force_on_fail_safe",
+  f_force:    "binary_sensor-force_on__fail-safe_",
   f_fridge:   "binary_sensor-fridge_request",
   f_manual:   "binary_sensor-manual_request",
   f_surplus:  "binary_sensor-surplus_request",
@@ -529,7 +531,7 @@ const E = {
   sw_usb:     "switch-p310_usb_output",
   sw_silent:  "switch-p310_silent_charging",
   sw_sleep:   "switch-sleep_mode",
-  sw_inhibit: "switch-drive_inhibit_test",
+  sw_inhibit: "switch-drive_inhibit__test_",
   sw_parked:  "switch-parked_mode",
 
 
@@ -561,15 +563,35 @@ const NUMS = {
 };
 
 /* --- state ------------------------------------------------------------- */
-const S = Object.create(null);   // entity id -> {value, state, at}
+const S = Object.create(null);   // entity key -> {value, state, at}
+const P = Object.create(null);   // entity key -> "Name" to post to (2026.8+)
+const CLASH = Object.create(null); // entity key -> true if two node ids share it
 const STALE_MS = 45000;          // matches the arbiter's own sensor_max_age
+
+/* ESPHome up to 2025 sent ids as "sensor-battery" (domain-object_id); 2026.8
+ * sends "sensor/Battery" (domain/name). Keys stay in the old form, slugged the
+ * way object ids were built - the same rule as the app's VanFeed.key() - so
+ * E and NUMS work against either firmware. Missing this left every value
+ * blank on the first 2026.8 flash while the link still showed connected. */
+function key(id) {
+  var slash = id.indexOf("/");
+  if (slash < 0) return id;
+  var name = id.slice(id.lastIndexOf("/") + 1);
+  var k = id.slice(0, slash) + "-" + name.toLowerCase().replace(/[^a-z0-9_-]/g, "_");
+  P[k] = name;
+  return k;
+}
 let linkUp = null, lastMsg = 0;
 
 const $  = function (s, r) { return (r || document).querySelector(s); };
 const $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
 
 function ent(k)  { return S[E[k] || k]; }
+// 2026.8 sends a number entity's value as a JSON string ("7.5", NaN as
+// "\"NaN\""); sensors still send a JSON number. Accept both, and nothing that
+// does not parse to a finite number - else every threshold row reads "--".
 function num(k)  { var e = ent(k); var v = e && e.value;
+                   if (typeof v === "string" && v.trim() !== "") v = Number(v);
                    return (typeof v === "number" && isFinite(v)) ? v : null; }
 function bool(k) { var e = ent(k); if (!e) return null;
                    if (typeof e.value === "boolean") return e.value;
@@ -591,9 +613,15 @@ function connect() {
   stream = es;
   es.addEventListener("state", function (ev) {
     var d; try { d = JSON.parse(ev.data); } catch (err) { return; }
-    if (!d || !d.id) return;
-    S[d.id] = { value: d.value, state: d.state, name: d.name,
-                options: d.option || d.options, at: Date.now() };
+    if (!d || typeof d.id !== "string" || !d.id) return;
+    var k = key(d.id), prev = S[k];
+    // Two node entities slugging to one key would make a widget flip between
+    // them, and nothing here can tell which was meant - so Diag says so. One
+    // entity seen in both forms is a reflash under an open page, not a clash.
+    if (prev && prev.id !== d.id && (prev.id.indexOf("/") < 0) === (d.id.indexOf("/") < 0))
+      CLASH[k] = true;
+    S[k] = { id: d.id, value: d.value, state: d.state, name: d.name,
+             options: d.option || d.options, at: Date.now() };
     lastMsg = Date.now(); setLink(true); render();
   });
   es.addEventListener("ping", function () { lastMsg = Date.now(); setLink(true); });
@@ -644,11 +672,14 @@ function syncClock() {
 }
 syncClock();
 document.addEventListener("visibilitychange", function () { if (!document.hidden) syncClock(); });
-function oid(id) { return id.slice(id.indexOf("-") + 1); }
+// The URL segment for an entity: its name once a 2026.8 node has announced it
+// (every entity, buttons included, arrives on connect), else the object id an
+// older node expects.
+function target(id) { return P[id] != null ? encodeURIComponent(P[id]) : id.slice(id.indexOf("-") + 1); }
 var cmd = {
-  sw:  function (id, on) { return post("/switch/" + oid(id) + "/turn_" + (on ? "on" : "off")); },
-  n:   function (id, v)  { return post("/number/" + oid(id) + "/set?value=" + v); },
-  btn: function (id)     { return post("/button/" + oid(id) + "/press"); }
+  sw:  function (id, on) { return post("/switch/" + target(id) + "/turn_" + (on ? "on" : "off")); },
+  n:   function (id, v)  { return post("/number/" + target(id) + "/set?value=" + v); },
+  btn: function (id)     { return post("/button/" + target(id) + "/press"); }
 };
 
 /* --- tabs --------------------------------------------------------------- */
@@ -876,11 +907,19 @@ function render() {
     var known = {};
     Object.keys(E).forEach(function (k) { known[E[k]] = 1; });
     Object.keys(NUMS).forEach(function (k) { known[NUMS[k][0]] = 1; });
-    $("#d_raw").innerHTML = Object.keys(S).sort().map(function (id) {
-      var e = S[id];
-      var style = known[id] ? "" : ' style="color:var(--warn)"';
+    // Ids are free-text entity names on 2026.8, so escape them like the values.
+    var esc = function (s) {
+      return String(s).replace(/[&<>"]/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+      });
+    };
+    $("#d_raw").innerHTML = Object.keys(S).sort().map(function (k) {
+      var e = S[k];
+      var style = CLASH[k] ? ' style="color:var(--bad)"'
+                : known[k] ? "" : ' style="color:var(--warn)"';
       var v = e.state != null ? e.state : e.value;
-      return "<tr><td" + style + ">" + id + "</td><td>" + v + "</td></tr>";
+      return "<tr><td" + style + ">" + esc(e.id) + (CLASH[k] ? " (id clash)" : "") +
+             "</td><td>" + esc(v) + "</td></tr>";
     }).join("");
   }
 }

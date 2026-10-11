@@ -618,3 +618,71 @@ Both test-day CSVs start at the step-9 **software** reboot with `boot=1`, so the
 PSRAM log did not survive `App.safe_reboot()`, contrary to `soak_log.h`.
 Suspect dirty PSRAM cache lines lost at reset (header CRC then fails).
 `UNVERIFIED`.
+
+---
+
+## M18 — 2026-09-17 / 2026-10-09 — ESPHome 2026.8 web_server addresses entities by name: ui/index.html was dead
+
+First found by reading source (17 Sep, ESPHome 2026.8.0's
+`components/web_server/web_server.cpp` and `components/web_server_idf/`), then
+**confirmed on hardware on 2026-10-09**: the first 2026.8 flash of
+`van-core.yaml` showed every value as `--` and every button dead, while the
+link indicator stayed green.
+
+| | What the page assumed | ESPHome 2026.8.0 |
+|---|---|---|
+| SSE / JSON `id` | `sensor-battery` | `sensor/Battery` — `set_json_id()`; `<domain>/<device>/<name>` with sub-devices |
+| Entity segment of a POST URL | object id, `parked_mode` | exact name, compared after URL decoding — `UrlMatch::match_entity()`, `url_to()`. An object id is a 404 |
+| `number` `value` | JSON number | **JSON string**, `"7.5"`; NaN is `"\"NaN\""` — `number_json_()` |
+| sensor / binary_sensor / switch `value` | number / bool | unchanged |
+| Actions `turn_on` `turn_off` `set` `press` | | unchanged |
+
+Consistent with the D-15 widget, which saw `sensor/Battery` from
+van-core-soak on 2026-09-16 (`app/.../VanFeed.kt`).
+
+**Consequence: on a 2026.8 build the page showed nothing and could command
+nothing.** Every lookup missed, so every value stayed `--`, every switch was
+disabled, and every POST was a 404 — the parked-mode double confirmation and
+Manual AC included.
+
+Two further defects found on the way:
+- **Number rows stay `--` even with correct ids**, because `num()` accepted
+  only a JSON number. With no current value, `+`/`−` did nothing.
+- **Two slugs in the old map were wrong on every version.** ESPHome's object id
+  for "Force on (fail-safe)" is `force_on__fail-safe_` and for "Drive inhibit
+  (test)" `drive_inhibit__test_`; the map had `force_on_fail_safe` and
+  `drive_inhibit_test`. The fail-safe chip, the forced-ON header colour and
+  the inhibit switch never matched. The mock had copied the same wrong slugs,
+  which is why it never showed.
+
+**Fix.** State is stored under one normalised key (`key()`, the same rule as
+`VanFeed.key()`), so the page reads either id form. Command URLs use the name
+the node announced, URL-encoded, or the object id when the node speaks the old
+form. `num()` accepts string values. Diag escapes ids and values and marks two
+node ids that normalise to one key. `tools/mock_core.py` now emulates 2026.8 by
+default — names derived the way ESPHome derives them, numbers as strings,
+parked mode with arm/confirm — and `--legacy-ids` (alias `--legacy`) gives the
+old form.
+
+Checked 2026-10-11 against the mock in the browser, both modes: all 55
+entities arrive, every id the page maps resolves, all 16 number rows read, and
+number set, sleep, drive inhibit, Manual AC and parked mode arm → confirm →
+exit each reach their entity. In 2026.8 mode an object-id URL returns 404.
+Every id the page maps also exists in `nodes/van-core.yaml` (diagnostics via
+`common/`).
+
+Notes:
+- `url_decode()` also maps `+` to space. `encodeURIComponent` sends `%2B`,
+  which decodes once to `+`, so that is safe. **A `/` in an entity name is
+  not safe**: it is decoded before the path is split. No current name has one.
+- A failed POST is silent in the page: `fetch` resolves on a 404, and the
+  next SSE render reverts the optimistic switch state. That is how an
+  all-404 page went unnoticed.
+
+**Still `UNVERIFIED`:**
+- **The fixed page on hardware**, in particular the number rows (the
+  string-value fix landed after the 9 Oct flash). First flash with it: open
+  Diag → All entities. An amber id the page should know about means a name
+  mismatch; a red one an id clash.
+- The legacy path is tested against the mock's reconstruction of the old
+  format, not against a real 2025.x build.
