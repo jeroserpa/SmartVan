@@ -24,6 +24,14 @@
      writer of ac_switch (CLAUDE.md 5.3) and this page must never grow into a
      second one - it may only nudge the same request flags the physical
      kitchen button nudges.
+
+  Layout (D-26). Home answers, in order: is the inverter on and why; the
+  battery and where its power is going; the fridge and how far it is from its
+  next run; the two things done daily (cooking, sleep). Everything else -
+  station outputs, modes, limits, tuning, diagnostics - is one tab further
+  away. The Home battery card is the home-screen widget's card grown up: the
+  same vessel, the same in/out arrows, the same colours, the same words, so the
+  widget, this page and the van-core panel read as one product.
 -->
 
 <!--
@@ -45,459 +53,502 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="van">
-<!-- black-translucent so the page paints under the notch; the body already
-     pads for env(safe-area-inset-*). -->
+<!-- black-translucent so the page paints under the notch; the app bar pads
+     for env(safe-area-inset-top). -->
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#12100e">
 <style>
 :root{
   /* Instrument-dark. Warm near-black so the screen does not wreck dark
-     adaptation at 3am, one amber reserved for the inverter, green for harvest,
-     blue for the vehicle, red only for genuine alarms. Token NAMES are
-     unchanged: the render code below styles by var(--ok)/(--warn)/(--bad). */
+     adaptation at 3am. One meaning per colour, the same on the widget
+     (app/src/main/res/values/colors.xml is converted from these) and on the
+     van-core panel: green = energy in / healthy, amber = energy out / the
+     inverter, blue = cold / parked, red = genuine alarms only. */
   --bg:oklch(0.155 0.006 70); --card:oklch(0.205 0.007 70);
   --card2:oklch(0.245 0.008 70); --line:oklch(0.30 0.008 70);
   --fg:oklch(0.94 0.008 80); --muted:oklch(0.66 0.008 80); --dim:oklch(0.50 0.008 80);
   --ok:oklch(0.78 0.145 155); --warn:oklch(0.78 0.145 72); --bad:oklch(0.68 0.19 27);
   --alt:oklch(0.72 0.13 245);
-  /* No webfont: this node has no internet and never will (CLAUDE.md 5.5), so
-     the design's Space Grotesk / IBM Plex Mono cannot ship. Numerals get the
-     platform mono instead, which is what carried the instrument feel anyway. */
-  --mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
-  --tap:52px;
+  /* The widget's card: 20dp corners, 1dp line. */
+  --r:20px;
+  --tap:48px;
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;background:var(--bg);color:var(--fg)}
 body{
-  font:16px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-  /* Top inset matters only in the standalone home-screen app, where
-     black-translucent puts the header under the iOS status bar. Zero in a
-     normal browser tab. */
-  padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+  /* No webfont (CLAUDE.md 5.5): system-ui IS Roboto on Android, which is what
+     the widget draws in. Tabular figures so live numbers do not jitter. */
+  font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  font-variant-numeric:tabular-nums;
+  padding-bottom:env(safe-area-inset-bottom);
   max-width:560px;margin:0 auto;
 }
-h2{font:600 13px/1 system-ui;letter-spacing:.12em;text-transform:uppercase;
-   color:var(--muted);margin:0 0 10px}
+button{font:inherit;color:inherit}
+.i{width:18px;height:18px;fill:currentColor;flex:none}
+.stale{color:var(--dim) !important}
+.hide{display:none !important}
 
-/* ---- header: always visible, because these two facts always matter ---- */
-header{padding:10px 14px 10px;border-bottom:1px solid var(--line)}
-/* "Is the inverter on, and why" outranks everything else on this page, and it
-   lives in the header so it is true on every tab. A fail-safe that is on for a
-   reason you cannot read is indistinguishable from a bug. */
-.acline{display:flex;align-items:center;gap:8px;margin-bottom:9px}
-.acstate{font:700 15px/1 system-ui;letter-spacing:.08em;color:var(--dim)}
-.acreason{font:11px/1 var(--mono);padding:4px 9px;border-radius:99px;
-  background:var(--card2);color:var(--muted)}
-.acline .link{margin-left:auto;margin-top:0}
-.hrow{display:flex;align-items:baseline;gap:10px}
-.soc{font:600 34px/1 var(--mono);font-variant-numeric:tabular-nums}
-.unit{font:400 18px/1 system-ui;color:var(--muted);margin-left:4px}
-.hsub{margin-left:auto;text-align:right;font:13px/1.35 var(--mono);color:var(--muted);
-      font-variant-numeric:tabular-nums}
-.bar{height:6px;border-radius:3px;background:var(--card2);margin-top:8px;overflow:hidden}
-.bar>i{display:block;height:100%;width:0;background:var(--ok)}
-.link{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);margin-top:6px}
-.dot{width:9px;height:9px;border-radius:50%;background:var(--dim);flex:none}
-.dot.up{background:var(--ok)} .dot.down{background:var(--bad)}
+/* ---- app bar: the one question every tab must answer ------------------- */
+.appbar{position:sticky;top:0;z-index:5;background:var(--bg);
+  padding:calc(env(safe-area-inset-top) + 12px) 16px 10px;border-bottom:1px solid var(--line)}
+.bar1{display:flex;align-items:center;gap:8px}
+.brand{display:flex;align-items:center;gap:5px;color:var(--muted);font-size:14px}
+.brand .i{width:16px;height:16px;color:var(--warn)}
+.state{margin-left:auto;display:flex;align-items:center;gap:7px;font-weight:700;font-size:15px;
+       color:var(--muted)}
+.state .dot{width:9px;height:9px;border-radius:50%;background:currentColor}
+.why{margin-top:3px;font-size:13px;color:var(--muted);
+     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
-/* ---- tabs ---- */
-/* Bottom bar, not top: this is read one-handed, and the thumb does not reach
-   the top of a phone. Symbols carry the identity so the labels can be small. */
-nav{position:fixed;left:0;right:0;bottom:0;z-index:4;max-width:560px;margin:0 auto;
+/* ---- tabs: bottom, for the thumb ---------------------------------------- */
+nav{position:fixed;left:0;right:0;bottom:0;z-index:5;max-width:560px;margin:0 auto;
     display:grid;grid-template-columns:repeat(4,1fr);
     background:oklch(0.18 0.006 70);border-top:1px solid var(--line);
     padding-bottom:env(safe-area-inset-bottom)}
-nav button{appearance:none;border:0;background:none;color:var(--dim);
-  font:500 10px/1 system-ui;letter-spacing:.04em;cursor:pointer;
-  display:flex;flex-direction:column;align-items:center;gap:5px;padding:11px 0 13px}
-nav button svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.5;
-  stroke-linecap:round;stroke-linejoin:round}
+nav button{appearance:none;border:0;background:none;color:var(--dim);cursor:pointer;
+  font-size:11px;font-weight:500;letter-spacing:.02em;
+  display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 0 12px}
+nav .i{width:22px;height:22px}
 nav button[aria-current="true"]{color:var(--warn)}
 
-main{padding:14px 14px 92px}
+main{padding:12px 16px 100px}
 section[hidden]{display:none}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;
-      padding:14px;margin-bottom:12px}
 
-/* ---- values ---- */
-.big{font:600 46px/1 var(--mono);font-variant-numeric:tabular-nums}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.cell{background:var(--card2);border-radius:10px;padding:10px 12px}
-.cell .k{font-size:12px;color:var(--muted)}
-.cell .v{font:600 22px/1.2 var(--mono);font-variant-numeric:tabular-nums;margin-top:3px}
-.stale{color:var(--dim)}
+/* ---- cards: the widget's card ------------------------------------------- */
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);
+      padding:16px;margin-bottom:12px}
+.card-h{display:flex;align-items:baseline;gap:12px;margin-bottom:12px}
+h2{margin:0;font-size:16px;font-weight:600}
+.card > h2{margin-bottom:4px}
+.meta{margin-left:auto;font-size:13px;color:var(--muted);text-align:right}
+.hint{margin:12px 0 0;font-size:13px;color:var(--muted)}
+h3{margin:16px 0 4px;font-size:12px;font-weight:600;letter-spacing:.08em;
+   text-transform:uppercase;color:var(--dim)}
 
-/* ---- rows / controls ---- */
-.row{display:flex;align-items:center;gap:12px;min-height:var(--tap);
-     border-top:1px solid var(--line);padding:6px 0}
-.row:first-of-type{border-top:0}
+/* ---- alerts: only when something needs a person ------------------------ */
+.alert{display:flex;gap:12px;align-items:flex-start;border:1px solid;border-radius:16px;
+       padding:12px 14px;margin-bottom:12px;font-size:14px}
+.alert .i{width:20px;height:20px;margin-top:1px}
+.alert b{display:block;font-weight:600;color:var(--fg)}
+.alert span{display:block}
+.alert .btn{margin-top:10px;min-height:40px}
+.alert.bad{background:oklch(0.235 0.035 27);border-color:oklch(0.42 0.10 27);color:oklch(0.85 0.08 27)}
+.alert.bad .i{color:var(--bad)}
+.alert.warn{background:oklch(0.25 0.035 72);border-color:oklch(0.44 0.09 72);color:oklch(0.87 0.08 72)}
+.alert.warn .i{color:var(--warn)}
+.alert.info{background:oklch(0.235 0.035 245);border-color:oklch(0.42 0.08 245);color:oklch(0.86 0.06 245)}
+.alert.info .i{color:var(--alt)}
+
+/* ---- battery and flow: one drawing, so nothing can drift out of line ---- */
+.flow{display:block;width:100%;max-width:400px;height:auto;margin:0 auto;overflow:visible}
+.flow use{fill:currentColor}
+.flow text{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;fill:var(--fg)}
+.flow .lbl{font-size:12px;fill:var(--muted)}
+.flow .val{font-size:19px;font-weight:600}
+.flow .u{font-size:13px;font-weight:400;fill:var(--muted)}
+.flow .soc{font-size:27px;font-weight:700}
+.flow .pct{font-size:15px;font-weight:700}
+.flow .sub{font-size:12px;fill:var(--muted)}
+.flow .chip rect{fill:var(--card2);stroke:var(--line)}
+.flow .chip text{font-size:10px;font-weight:700;letter-spacing:.05em;fill:var(--dim)}
+.flow .chip.on rect{stroke:oklch(0.48 0.10 72)}
+.flow .chip.on text{fill:var(--warn)}
+.flow text.stale{fill:var(--dim)}
+.flow tspan.stale{fill:var(--dim)}
+.flowsum{display:flex;justify-content:space-between;gap:12px;margin-top:10px;
+         padding-top:10px;border-top:1px solid var(--line);font-size:14px}
+.flowsum .k{color:var(--muted)}
+.flowsum > span{white-space:nowrap}
+@media (max-width:360px){ #s_net{display:none} }
+.flowsum .i{width:16px;height:16px;vertical-align:-3px;margin-right:3px}
+
+/* ---- fridge ------------------------------------------------------------- */
+.temps{display:flex;align-items:flex-end;gap:16px}
+.tmain{display:flex;align-items:center;gap:10px}
+.tmain .i{width:28px;height:28px;color:var(--alt)}
+.tbig{font-size:44px;font-weight:600;line-height:1;letter-spacing:-.01em}
+.tu{font-size:18px;color:var(--muted);margin-left:2px}
+.tl{display:block;font-size:13px;color:var(--muted);margin-top:4px}
+.tside{margin-left:auto;text-align:right}
+.tside .v{font-size:20px;font-weight:600;display:flex;align-items:center;gap:5px;justify-content:flex-end}
+.tside .i{width:18px;height:18px;color:var(--muted)}
+/* The deadband scale: not "4.6" but "4.6, and this far from the next run".
+   Same zones as the panel's strip. */
+.scale{position:relative;height:42px;margin-top:18px}
+.scale .track{position:absolute;left:0;right:0;top:9px;height:8px;border-radius:4px;
+              overflow:hidden;display:flex;background:var(--card2)}
+.scale .z{height:100%;flex:none}
+.z.cold{background:oklch(0.36 0.07 245)} .z.rest{background:oklch(0.27 0.008 70)}
+.z.want{background:oklch(0.42 0.09 72)} .z.hard{background:oklch(0.40 0.11 27)}
+.scale .mark{position:absolute;top:3px;width:6px;height:20px;margin-left:-3px;border-radius:3px;
+             background:var(--fg);box-shadow:0 0 0 2px var(--card)}
+.scale .tick{position:absolute;top:24px;font-size:12px;color:var(--muted);transform:translateX(-50%);
+             white-space:nowrap}
+.fline{display:flex;align-items:center;gap:8px;margin-top:4px;font-size:14px}
+.fline .dot{width:8px;height:8px;border-radius:50%;background:currentColor;flex:none}
+
+/* ---- rows and controls -------------------------------------------------- */
+.row{display:flex;align-items:center;gap:12px;min-height:60px;padding:8px 0}
+.row + .row{border-top:1px solid var(--line)}
+.row .ic{width:40px;height:40px;border-radius:12px;background:var(--card2);flex:none;
+         display:grid;place-items:center;color:var(--muted)}
+.row .ic .i{width:22px;height:22px}
+.row.active .ic{color:var(--warn);background:oklch(0.27 0.04 72)}
 .row .lbl{flex:1;min-width:0}
 .row .lbl b{display:block;font-weight:500}
-.row .lbl small{color:var(--muted);font-size:12px}
+.row .lbl small{display:block;color:var(--muted);font-size:13px;margin-top:1px}
+.row.active .lbl small{color:var(--warn)}
+.row .v{font-weight:600;font-size:16px}
+.btns{display:flex;gap:8px;flex:none}
+/* An action row lets its buttons drop under the text rather than squeeze it
+   into a column of single words. Number rows do not wrap: there the stepper
+   belongs beside its label. */
+.row.act{flex-wrap:wrap}
+.row.act .lbl{flex:1 1 150px}
+.row.act .btns{margin-left:auto}
 
-.sw{flex:none;width:60px;height:34px;border-radius:17px;background:var(--card2);
+.sw{flex:none;width:52px;height:32px;border-radius:16px;background:var(--card2);
     border:1px solid var(--line);position:relative;cursor:pointer;padding:0}
-.sw::after{content:"";position:absolute;top:3px;left:3px;width:26px;height:26px;
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:24px;height:24px;
   border-radius:50%;background:var(--dim)}
-.sw[aria-checked="true"]{background:oklch(0.30 0.05 155);border-color:oklch(0.42 0.08 155)}
-.sw[aria-checked="true"]::after{left:29px;background:var(--ok)}
-.sw[data-guard="1"][aria-checked="true"]{background:oklch(0.30 0.05 72);border-color:oklch(0.42 0.08 72)}
-.sw[data-guard="1"][aria-checked="true"]::after{background:var(--warn)}
-.sw:disabled{opacity:.4}
+.sw[aria-checked="true"]{background:oklch(0.32 0.06 155);border-color:oklch(0.45 0.09 155)}
+.sw[aria-checked="true"]::after{left:23px;background:var(--ok)}
+.sw[data-tone="warn"][aria-checked="true"]{background:oklch(0.32 0.06 72);border-color:oklch(0.47 0.09 72)}
+.sw[data-tone="warn"][aria-checked="true"]::after{background:var(--warn)}
+.sw[data-tone="alt"][aria-checked="true"]{background:oklch(0.32 0.06 245);border-color:oklch(0.47 0.08 245)}
+.sw[data-tone="alt"][aria-checked="true"]::after{background:var(--alt)}
+.sw:disabled{opacity:.35}
 
-button.btn{appearance:none;min-height:var(--tap);padding:0 16px;border-radius:10px;
-  border:1px solid var(--line);background:var(--card2);color:var(--fg);
-  font:600 15px/1 system-ui;cursor:pointer}
-button.btn.primary{background:oklch(0.26 0.035 72);border-color:oklch(0.45 0.09 72);color:var(--warn)}
-button.btn.danger{background:oklch(0.24 0.03 27);border-color:oklch(0.42 0.09 27);color:var(--bad)}
-.btnrow{display:flex;gap:10px;margin-top:12px}
-.btnrow>*{flex:1}
-
-select{appearance:none;min-height:var(--tap);background:var(--card2);color:var(--fg);
-  border:1px solid var(--line);border-radius:10px;padding:0 12px;font:500 15px system-ui}
+/* Pill buttons, filled amber for the one thing to do - the app's own buttons. */
+.btn{appearance:none;min-height:44px;padding:0 18px;border-radius:999px;cursor:pointer;
+  border:1px solid var(--line);background:var(--card2);font-weight:600;font-size:15px;white-space:nowrap}
+.btn.primary{background:var(--warn);border-color:var(--warn);color:oklch(0.20 0.02 70)}
+.btn.danger{background:transparent;border-color:oklch(0.42 0.09 27);color:var(--bad)}
+.btn.quiet{background:transparent}
+.btn:disabled{opacity:.35}
+.btnrow{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
 
 /* number editor: -, value, +.  A slider is unusable on a bumpy road. */
-.num{display:flex;align-items:center;gap:8px;flex:none}
-.num button{width:44px;height:44px;border-radius:10px;border:1px solid var(--line);
-  background:var(--card2);color:var(--fg);font:600 22px/1 system-ui;cursor:pointer}
-.num output{min-width:80px;text-align:center;font:600 17px/1 var(--mono);
-  font-variant-numeric:tabular-nums}
+.num{display:flex;align-items:center;gap:4px;flex:none}
+.num button{width:42px;height:42px;border-radius:50%;border:1px solid var(--line);
+  background:var(--card2);font-size:20px;line-height:1;cursor:pointer}
+.num output{min-width:72px;text-align:center;font-weight:600;font-size:16px}
+@media (max-width:360px){
+  .num button{width:38px;height:38px}
+  .num output{min-width:60px;font-size:15px}
+}
 
-/* ---- power flow: where every watt is going, without arithmetic ----
-   Fixed 310px and centred so the SVG coordinates and the HTML overlay on top
-   of it can never disagree; scaling the SVG to fit would oval the ring. */
-.flow{position:relative;width:310px;max-width:100%;height:138px;margin:0 auto}
-.flow>svg{position:absolute;inset:0;width:100%;height:100%}
-.fnode{position:absolute;width:96px}
-.fnode.ne,.fnode.se{text-align:right}
-.fk{display:flex;align-items:center;gap:5px;font:9px/1 system-ui;letter-spacing:.12em;
-    color:var(--muted);text-transform:uppercase}
-.fnode.ne .fk,.fnode.se .fk{justify-content:flex-end}
-.fk svg{width:13px;height:13px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;
-        stroke-linecap:round;stroke-linejoin:round}
-.fnode .v{font:600 17px/1 var(--mono);font-variant-numeric:tabular-nums;margin-top:3px}
-.fmid{position:absolute;left:100px;right:100px;top:44px;text-align:center}
-.fsoc{font:600 24px/1 var(--mono);font-variant-numeric:tabular-nums}
-.fwh{font:10px/1 var(--mono);color:var(--muted);margin-top:4px}
-.pips{display:flex;gap:6px;justify-content:flex-end;margin-top:5px}
-.pip{font:9px/1 var(--mono);letter-spacing:.06em;padding:3px 6px;border-radius:4px;
-     background:var(--card2);color:var(--dim);border:1px solid var(--line)}
-.pip.on{color:var(--warn);border-color:oklch(0.45 0.09 72)}
-.frow{display:flex;align-items:baseline;justify-content:space-between;margin-top:10px;
-      font:11px/1 var(--mono)}
-
-/* ---- live strip: there is no history store on this node, so this is a
-   rolling buffer since the page opened. Useful window on a bench. ---- */
-.strip{margin-top:10px}
-.strip>svg{display:block;width:100%;height:74px}
-.strip .rib{display:block;width:100%;height:8px;margin-top:4px}
-.striplbl{display:flex;justify-content:space-between;margin-top:5px;
-          font:9px/1 var(--mono);color:var(--dim)}
-
-/* ---- chips: the arbiter's reasoning, visible at a glance ---- */
-.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
-.chip{font:600 12px/1 system-ui;letter-spacing:.06em;text-transform:uppercase;
-  padding:8px 10px;border-radius:8px;background:var(--card2);color:var(--dim);
-  border:1px solid var(--line)}
-.chip.on{color:var(--bg);background:var(--warn);border-color:var(--warn)}
-.chip.on.force{background:var(--bad);color:#fff;border-color:var(--bad)}
-
-.banner{border-radius:10px;padding:10px 12px;font-size:14px;margin-bottom:12px;
-  border:1px solid var(--line);background:var(--card2)}
-.banner.bad{background:oklch(0.24 0.03 27);border-color:oklch(0.45 0.10 27);color:oklch(0.84 0.11 27)}
-.banner.warn{background:oklch(0.26 0.035 72);border-color:oklch(0.45 0.09 72);color:oklch(0.86 0.10 72)}
-.note{color:var(--muted);font-size:12px;margin-top:10px}
-table.raw{width:100%;border-collapse:collapse;font:400 12px/1.4 ui-monospace,monospace}
+/* ---- diag --------------------------------------------------------------- */
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.cell{background:var(--card2);border-radius:14px;padding:10px 12px}
+.cell .k{font-size:12px;color:var(--muted)}
+.cell .v{font-size:18px;font-weight:600;margin-top:2px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+.chip{font-size:12px;font-weight:600;padding:6px 10px;border-radius:999px;
+  background:var(--card2);color:var(--dim);border:1px solid var(--line)}
+.chip.on{color:oklch(0.20 0.02 70);background:var(--warn);border-color:var(--warn)}
+.chip.on.bad{background:var(--bad);border-color:var(--bad);color:#fff}
+table.raw{width:100%;border-collapse:collapse;font:12px/1.4 ui-monospace,Menlo,Consolas,monospace}
 table.raw td{border-top:1px solid var(--line);padding:4px 0;vertical-align:top}
 table.raw td:first-child{color:var(--muted);padding-right:10px;word-break:break-all}
 </style>
 </head>
 <body>
 
-<header>
-  <div class="acline">
-    <span class="acstate" id="h_ac">AC --</span>
-    <span class="acreason" id="h_reason">--</span>
-    <span class="link"><span class="dot" id="h_dot"></span><span id="h_link">connecting...</span></span>
+<!-- Icons: the widget's own (Material), so the two draw the same things. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="ic-bolt" viewBox="0 0 24 24"><path d="M14.4,2.88L6.96,13.2H11.28L9.84,21.12L17.04,11.04H12.72Z"/></symbol>
+  <symbol id="ic-in" viewBox="0 0 24 24"><path d="M19,15l-1.41,-1.41L13,18.17V2H11v16.17l-4.59,-4.59L5,15l7,7L19,15z"/></symbol>
+  <symbol id="ic-out" viewBox="0 0 24 24"><path d="M5,9l1.41,1.41L11,5.83V22H13V5.83l4.59,4.59L19,9l-7,-7L5,9z"/></symbol>
+  <symbol id="ic-snow" viewBox="0 0 24 24"><path d="M22,11h-4.17l3.24,-3.24 -1.41,-1.42L15,11h-2V9l4.66,-4.66 -1.42,-1.41L13,6.17V2h-2v4.17L7.76,2.93 6.34,4.34 11,9v2H9L4.34,6.34 2.93,7.76 6.17,11H2v2h4.17l-3.24,3.24 1.41,1.42L9,13h2v2l-4.66,4.66 1.42,1.41L11,17.83V22h2v-4.17l3.24,3.24 1.42,-1.41L13,15v-2h2l4.66,4.66 1.41,-1.42L17.83,13H22z"/></symbol>
+  <symbol id="ic-thermo" viewBox="0 0 24 24"><path d="M15,13V5c0,-1.66 -1.34,-3 -3,-3S9,3.34 9,5v8c-1.21,0.91 -2,2.37 -2,4c0,2.76 2.24,5 5,5s5,-2.24 5,-5C17,15.37 16.21,13.91 15,13zM11,5c0,-0.55 0.45,-1 1,-1s1,0.45 1,1h-1v1h1v2h-1v1h1v2h-2V5z"/></symbol>
+  <symbol id="ic-sun" viewBox="0 0 24 24"><path d="M12 7c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5zM2 13h2c.55 0 1-.45 1-1s-.45-1-1-1H2c-.55 0-1 .45-1 1s.45 1 1 1zm18 0h2c.55 0 1-.45 1-1s-.45-1-1-1h-2c-.55 0-1 .45-1 1s.45 1 1 1zM11 2v2c0 .55.45 1 1 1s1-.45 1-1V2c0-.55-.45-1-1-1s-1 .45-1 1zm0 18v2c0 .55.45 1 1 1s1-.45 1-1v-2c0-.55-.45-1-1-1s-1 .45-1 1zM5.99 4.58c-.39-.39-1.03-.39-1.41 0-.39.39-.39 1.03 0 1.41l1.06 1.06c.39.39 1.03.39 1.41 0s.39-1.03 0-1.41L5.99 4.58zm12.37 12.37c-.39-.39-1.03-.39-1.41 0-.39.39-.39 1.03 0 1.41l1.06 1.06c.39.39 1.03.39 1.41 0 .39-.39.39-1.03 0-1.41l-1.06-1.06zm1.06-10.96c.39-.39.39-1.03 0-1.41-.39-.39-1.03-.39-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06zM7.05 18.36c.39-.39.39-1.03 0-1.41-.39-.39-1.03-.39-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06z"/></symbol>
+  <symbol id="ic-plug" viewBox="0 0 24 24"><path d="M16.01 7L16 3h-2v4h-4V3H8v4h-.01C7 6.99 6 7.99 6 8.99v5.49L9.5 18v3h5v-3l3.5-3.51v-5.5c0-1-1-2-1.99-1.99z"/></symbol>
+  <symbol id="ic-bulb" viewBox="0 0 24 24"><path d="M9 21c0 .55.45 1 1 1h4c.55 0 1-.45 1-1v-1H9v1zm3-19C8.14 2 5 5.14 5 9c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.86-3.14-7-7-7z"/></symbol>
+  <symbol id="ic-fire" viewBox="0 0 24 24"><path d="M13.5.67s.74 2.65.74 4.8c0 2.06-1.35 3.73-3.41 3.73-2.07 0-3.63-1.67-3.63-3.73l.03-.36C5.21 7.51 4 10.62 4 14c0 4.42 3.58 8 8 8s8-3.58 8-8C20 8.61 17.41 3.8 13.5.67zM11.71 19c-1.78 0-3.22-1.4-3.22-3.14 0-1.62 1.05-2.76 2.81-3.12 1.77-.36 3.6-1.21 4.62-2.58.39 1.29.59 2.65.59 4.04 0 2.65-2.15 4.8-4.8 4.8z"/></symbol>
+  <symbol id="ic-moon" viewBox="0 0 24 24"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9 9-4.03 9-9c0-.46-.04-.92-.1-1.36-.98 1.37-2.58 2.26-4.4 2.26-2.98 0-5.4-2.42-5.4-5.4 0-1.81.89-3.42 2.26-4.4-.44-.06-.9-.1-1.36-.1z"/></symbol>
+  <symbol id="ic-park" viewBox="0 0 24 24"><path d="M13 3H6v18h4v-6h3c3.31 0 6-2.69 6-6s-2.69-6-6-6zm.2 8H10V7h3.2c1.1 0 2 .9 2 2s-.9 2-2 2z"/></symbol>
+  <symbol id="ic-warn" viewBox="0 0 24 24"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></symbol>
+  <symbol id="ic-error" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></symbol>
+  <symbol id="ic-linkoff" viewBox="0 0 24 24"><path d="M17,7h-4v1.9h4c1.71,0 3.1,1.39 3.1,3.1 0,1.43 -0.98,2.63 -2.31,2.98l1.46,1.46C20.88,15.61 22,13.95 22,12c0,-2.76 -2.24,-5 -5,-5zM16,11h-2.19l2,2H16zM2,4.27l3.11,3.11C3.29,8.12 2,9.91 2,12c0,2.76 2.24,5 5,5h4v-1.9H7c-1.71,0 -3.1,-1.39 -3.1,-3.1 0,-1.59 1.21,-2.9 2.76,-3.07L8.73,11H8v2h2.73L13,15.27V17h1.73l4.01,4L20,19.74 3.27,3 2,4.27z"/></symbol>
+  <symbol id="ic-home" viewBox="0 0 24 24"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></symbol>
+  <symbol id="ic-toggle" viewBox="0 0 24 24"><path d="M17 7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h10c2.76 0 5-2.24 5-5s-2.24-5-5-5zm0 8c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3z"/></symbol>
+  <symbol id="ic-tune" viewBox="0 0 24 24"><path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></symbol>
+  <symbol id="ic-info" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></symbol>
+</svg>
+
+<header class="appbar">
+  <div class="bar1">
+    <span class="brand"><svg class="i"><use href="#ic-bolt"/></svg>van-core</span>
+    <span class="state" id="h_state"><span class="dot"></span><span id="h_state_t">--</span></span>
   </div>
-  <div class="hrow">
-    <div class="soc" id="h_soc">--<span class="unit">%</span></div>
-    <div class="hsub">
-      <div id="h_flow">--</div>
-      <div id="h_left">--</div>
-    </div>
-  </div>
-  <div class="bar"><i id="h_bar"></i></div>
+  <div class="why" id="h_why">connecting…</div>
 </header>
 
 <nav>
-  <button data-tab="power" aria-current="true"><svg viewBox="0 0 20 20"><path d="M2 15l4-6 4 3 4-7 4 4"></path><path d="M2 17.5h16"></path></svg><span>Power</span></button>
-  <button data-tab="fridge"><svg viewBox="0 0 20 20"><path d="M8 11.5V3.5a2 2 0 1 1 4 0v8"></path><circle cx="10" cy="14" r="3.2"></circle></svg><span>Fridge</span></button>
-  <button data-tab="setup"><svg viewBox="0 0 20 20"><path d="M3 6h14M3 14h14"></path><circle cx="7.5" cy="6" r="2.2"></circle><circle cx="13" cy="14" r="2.2"></circle></svg><span>Setup</span></button>
-  <button data-tab="diag"><svg viewBox="0 0 20 20"><path d="M10 2.5 3 5.5v4.2c0 4 2.9 6.6 7 7.8 4.1-1.2 7-3.8 7-7.8V5.5z"></path><path d="M7.6 10l1.7 1.8 3.3-3.6"></path></svg><span>Diag</span></button>
+  <button data-tab="home" aria-current="true"><svg class="i"><use href="#ic-home"/></svg><span>Home</span></button>
+  <button data-tab="controls"><svg class="i"><use href="#ic-toggle"/></svg><span>Controls</span></button>
+  <button data-tab="setup"><svg class="i"><use href="#ic-tune"/></svg><span>Setup</span></button>
+  <button data-tab="diag"><svg class="i"><use href="#ic-info"/></svg><span>Diag</span></button>
 </nav>
 
 <main>
 
-<!-- ============================ POWER ============================ -->
-<section id="tab-power">
+<!-- ============================= HOME ============================= -->
+<section id="tab-home">
+  <div id="alerts"></div>
+
   <div class="card">
-    <h2>Flow</h2>
-    <div class="flow">
-      <svg viewBox="0 0 310 138" aria-hidden="true">
-        <!-- Link width scales with power and a dead path goes thin and dashed,
-             so a silently failed alternator charger reads at a glance. -->
-        <path id="k_solar" d="M70 34C98 34 106 32 120 35" fill="none" stroke="var(--ok)"
-              stroke-width="2" stroke-linecap="round"></path>
-        <polygon id="a_solar" points="118,30 127,35 118,40" fill="var(--ok)"></polygon>
-        <path id="k_engine" d="M70 98C98 98 106 100 122 96" fill="none" stroke="var(--alt)"
-              stroke-width="2" stroke-linecap="round"></path>
-        <polygon id="a_engine" points="120,91 129,96 120,101" fill="var(--alt)"></polygon>
-        <path id="k_out" d="M190 64C210 64 216 64 234 64" fill="none" stroke="var(--warn)"
-              stroke-width="2" stroke-linecap="round"></path>
-        <polygon id="a_out" points="232,59 241,64 232,69" fill="var(--warn)"></polygon>
-        <circle cx="155" cy="64" r="36" fill="none" stroke="var(--card2)" stroke-width="8"></circle>
-        <circle id="k_ring" cx="155" cy="64" r="36" fill="none" stroke="var(--ok)" stroke-width="8"
-                stroke-linecap="round" stroke-dasharray="0 226.2" transform="rotate(-90 155 64)"></circle>
-        <!-- the bottom fifth is reserve, not capacity -->
-        <circle cx="155" cy="64" r="45" fill="none" stroke="var(--bad)" stroke-width="2.5"
-                stroke-dasharray="56.5 226.2" transform="rotate(-90 155 64)" opacity="0.85"></circle>
-      </svg>
+    <div class="card-h"><h2>Battery</h2><span class="meta" id="b_meta">--</span></div>
+    <!-- Sources, the battery, the loads. Link width scales with power and a
+         dead path goes thin and dashed, so a silently failed charger reads at
+         a glance. One SVG with all its text inside: it scales as a whole and
+         nothing in it can overlap anything else. -->
+    <svg class="flow" id="flow" viewBox="0 0 320 128" role="img" aria-label="Power flow">
+      <defs>
+        <clipPath id="vclip"><rect x="120" y="40" width="84" height="52" rx="12.5"/></clipPath>
+        <linearGradient id="vliq" x1="0" y1="0" x2="0" y2="1">
+          <stop id="vs0" offset="0" stop-opacity=".55"/>
+          <stop id="vs1" offset=".22" stop-opacity=".35"/>
+          <stop id="vs2" offset="1" stop-opacity=".27"/>
+        </linearGradient>
+        <filter id="vsh" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="1" stdDeviation="1.4" flood-color="#000" flood-opacity=".7"/>
+        </filter>
+      </defs>
 
-      <div class="fnode nw" style="left:0;top:14px">
-        <div class="fk"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="4"></circle><path d="M10 1.5v2M10 16.5v2M1.5 10h2M16.5 10h2M4 4l1.4 1.4M14.6 14.6L16 16M16 4l-1.4 1.4M5.4 14.6L4 16"></path></svg><span>Solar</span></div>
-        <div class="v" data-e="solar_in">--</div>
-      </div>
-      <div class="fnode sw" style="left:0;top:78px">
-        <div class="fk"><svg viewBox="0 0 20 20"><path d="M2.5 12.5h15M4 12.5V9.2l1.9-3.4h8.2L16 9.2v3.3"></path><circle cx="6.2" cy="14.6" r="1.6"></circle><circle cx="13.8" cy="14.6" r="1.6"></circle></svg><span>Engine</span></div>
-        <div class="v" data-e="ac_in">--</div>
-      </div>
-      <div class="fnode ne" style="right:0;top:36px">
-        <div class="fk"><span>Output</span><svg viewBox="0 0 20 20"><path d="M2 10.5c1.6-5 3.4-5 5 0s3.4 5 5 0 3.4-5 5 0"></path></svg></div>
-        <div class="v" data-e="out">--</div>
-        <div class="pips"><span class="pip" id="pip_ac">AC</span><span class="pip" id="pip_dc">DC</span></div>
-      </div>
-      <div class="fmid">
-        <div class="fsoc" id="f_soc">--</div>
-        <div class="fwh" id="f_wh">--</div>
-      </div>
+      <!-- sources -->
+      <svg x="0" y="12" width="16" height="16"><use href="#ic-sun" id="fi_sol"/></svg>
+      <text class="lbl" x="21" y="25">Solar</text>
+      <text class="val" id="fv_sol" x="0" y="49">--</text>
+      <svg x="0" y="75" width="16" height="16"><use href="#ic-plug" id="fi_aci"/></svg>
+      <text class="lbl" x="21" y="88">AC in</text>
+      <text class="val" id="fv_aci" x="0" y="112">--</text>
+
+      <!-- links -->
+      <path id="l_sol" d="M80 41C98 41 98 58 112 58" fill="none" stroke-linecap="round"/>
+      <path id="a_sol" d="M111 54.5L117 58L111 61.5Z"/>
+      <path id="l_aci" d="M80 104C98 104 98 74 112 74" fill="none" stroke-linecap="round"/>
+      <path id="a_aci" d="M111 70.5L117 74L111 77.5Z"/>
+      <path id="l_out" d="M212 66H232" fill="none" stroke-linecap="round"/>
+      <path id="a_out" d="M231 62.5L237 66L231 69.5Z"/>
+
+      <!-- the battery: the widget's vessel (LiquidFill.kt), drawn in vector -->
+      <rect x="120" y="40" width="84" height="52" rx="12.5" fill="#000" fill-opacity=".23"/>
+      <path id="v_liq" clip-path="url(#vclip)" fill="url(#vliq)"/>
+      <path id="v_surf" clip-path="url(#vclip)" fill="none" stroke-width="1.5" stroke-opacity=".9"/>
+      <rect id="v_edge" x="120" y="40" width="84" height="52" rx="12.5" fill="none" stroke-width="2.2" stroke-opacity=".62"/>
+      <rect id="v_nub" x="204.5" y="57.7" width="4" height="16.6" rx="2" fill-opacity=".62"/>
+      <text id="v_soc" x="162" y="75.5" text-anchor="middle" filter="url(#vsh)"><tspan class="soc" id="v_soc_n">--</tspan><tspan class="pct" id="v_soc_p">%</tspan></text>
+      <text class="sub" id="v_kwh" x="162" y="112" text-anchor="middle">--</text>
+
+      <!-- loads -->
+      <svg x="244" y="37" width="16" height="16"><use href="#ic-bulb" id="fi_out"/></svg>
+      <text class="lbl" x="265" y="50">Loads</text>
+      <text class="val" id="fv_out" x="244" y="75">--</text>
+      <g class="chip" id="c_ac"><rect x="244.5" y="84.5" width="31" height="18" rx="9"/><text x="260" y="97.5" text-anchor="middle">AC</text></g>
+      <g class="chip" id="c_dc"><rect x="280.5" y="84.5" width="31" height="18" rx="9"/><text x="296" y="97.5" text-anchor="middle">DC</text></g>
+    </svg>
+    <!-- The widget's in/out pair, in its words. -->
+    <div class="flowsum">
+      <span><svg class="i" style="color:var(--ok)"><use href="#ic-in"/></svg><span id="s_in">--</span> <span class="k">in</span></span>
+      <span id="s_net" class="k">--</span>
+      <span><svg class="i" style="color:var(--warn)"><use href="#ic-out"/></svg><span id="s_out">--</span> <span class="k">out</span></span>
     </div>
-
-    <div class="frow">
-      <span id="v_net">--</span>
-      <span style="color:var(--muted)" id="f_left">--</span>
-    </div>
-
-    <div class="strip">
-      <svg id="sp_area" viewBox="0 0 300 74" preserveAspectRatio="none">
-        <path id="sp_in" d="" fill="var(--ok)" opacity="0.45"></path>
-        <path id="sp_out" d="" fill="oklch(0.74 0.055 50)" opacity="0.55"></path>
-        <path id="sp_zero" d="M0 37H300" stroke="var(--dim)" stroke-width="1"
-              vector-effect="non-scaling-stroke"></path>
-      </svg>
-      <svg class="rib" id="sp_rib" viewBox="0 0 300 8" preserveAspectRatio="none">
-        <rect x="0" y="0" width="300" height="8" fill="var(--card2)"></rect>
-        <g id="sp_ribg"></g>
-      </svg>
-      <div class="striplbl"><span id="sp_span">live, since this page opened</span><span id="sp_scale">--</span></div>
-    </div>
-
-    <div class="note">The strip is a rolling buffer held in this browser, not
-      history: the node stores none. Net excludes the station's own ~48W
-      overhead, which no register exposes (docs/ANALYSIS-2026-08-20.md). There
-      is one output register, so AC and DC show as state, not watts.</div>
   </div>
 
   <div class="card">
-    <h2>Outputs</h2>
-    <div class="row">
-      <div class="lbl"><b>AC inverter</b><small id="ac_sub">arbiter-controlled</small></div>
-      <button class="sw" data-sw="ac" data-guard="1" role="switch" aria-checked="false"></button>
+    <div class="card-h"><h2>Fridge</h2><span class="meta" id="f_meta"></span></div>
+    <div class="temps">
+      <div class="tmain">
+        <svg class="i"><use href="#ic-snow"/></svg>
+        <div><span class="tbig" id="t_fridge">--</span><span class="tu">°C</span><span class="tl">cabinet</span></div>
+      </div>
+      <div class="tside">
+        <div class="v"><svg class="i"><use href="#ic-thermo"/></svg><span id="t_cabin">--</span><span class="tu" style="font-size:14px">°C</span></div>
+        <span class="tl">cabin</span>
+      </div>
     </div>
-    <div class="row">
-      <div class="lbl"><b>12V DC output</b><small>feeds every node and all lighting</small></div>
-      <button class="sw" data-sw="dc" data-confirm="Turning DC off kills both ESP nodes and all lighting, and you lose this page. Continue?" role="switch" aria-checked="false"></button>
+    <div class="scale" id="f_scale">
+      <div class="track"><i class="z cold" id="z_cold"></i><i class="z rest" id="z_rest"></i><i class="z want" id="z_want"></i><i class="z hard" id="z_hard"></i></div>
+      <i class="mark" id="f_mark"></i>
+      <span class="tick" id="k_lo"></span><span class="tick" id="k_on"></span><span class="tick" id="k_hard"></span>
     </div>
+    <div class="fline" id="f_line"><span class="dot"></span><span id="f_line_t">--</span></div>
+  </div>
+
+  <div class="card">
+    <div class="row act" id="r_cook">
+      <div class="ic"><svg class="i"><use href="#ic-fire"/></svg></div>
+      <div class="lbl"><b>Cooking</b><small id="cook_sub">--</small></div>
+      <div class="btns">
+        <button class="btn primary" id="btn_man">Start</button>
+        <button class="btn quiet hide" id="btn_man_ext">+30</button>
+        <button class="btn danger hide" id="btn_man_cancel">Stop</button>
+      </div>
+    </div>
+    <div class="row" id="r_sleep">
+      <div class="ic"><svg class="i"><use href="#ic-moon"/></svg></div>
+      <div class="lbl"><b>Sleep mode</b><small id="sleep_sub">--</small></div>
+      <button class="sw" data-sw="sleep" data-tone="alt" role="switch" aria-checked="false" aria-label="Sleep mode"></button>
+    </div>
+  </div>
+</section>
+
+<!-- =========================== CONTROLS =========================== -->
+<section id="tab-controls" hidden>
+  <div class="card">
+    <h2>Station outputs</h2>
     <div class="row">
-      <div class="lbl"><b>USB</b><small>shed first when SOC is low</small></div>
-      <button class="sw" data-sw="usb" role="switch" aria-checked="false"></button>
+      <div class="lbl"><b>USB</b><small>shed first when the battery is low</small></div>
+      <button class="sw" data-sw="usb" role="switch" aria-checked="false" aria-label="USB output"></button>
     </div>
     <div class="row">
       <div class="lbl"><b>Silent charging</b><small>slower AC charge, quieter fan</small></div>
-      <button class="sw" data-sw="silent" role="switch" aria-checked="false"></button>
+      <button class="sw" data-sw="silent" role="switch" aria-checked="false" aria-label="Silent charging"></button>
     </div>
-    <div class="note" id="ac_note"></div>
   </div>
 
   <div class="card">
     <h2>Charging</h2>
     <div class="row">
-      <div class="lbl"><b>AC input level</b><small>set by the knob on the P310, not from here</small></div>
-      <div class="v" data-e="ac_level">--</div>
+      <div class="lbl"><b>AC input level</b><small>set by the knob on the P310</small></div>
+      <span class="v" id="v_aclevel">--</span>
     </div>
-    <div class="row" data-num="thr_charge">
-      <div class="lbl"><b>Charge to</b><small>60-80% when parked at home</small></div>
-    </div>
-    <div class="row" data-num="thr_discharge">
-      <div class="lbl"><b>Discharge floor</b><small>station cuts output below this</small></div>
-    </div>
-  </div>
-</section>
-
-<!-- ============================ FRIDGE =========================== -->
-<section id="tab-fridge" hidden>
-  <div id="fridge_banner"></div>
-
-  <div class="card">
-    <h2>Cabinet</h2>
-    <div class="big"><span data-e="fridge">--</span><span class="unit">&deg;C</span></div>
-    <div class="grid" style="margin-top:12px">
-      <div class="cell"><div class="k">Cabin</div><div class="v" data-e="cabin">--</div></div>
-      <div class="cell"><div class="k">Inverter</div><div class="v" id="v_acstate">--</div></div>
-    </div>
-    <div class="chips">
-      <span class="chip force" data-chip="force">force</span>
-      <span class="chip" data-chip="fridge">fridge</span>
-      <span class="chip" data-chip="manual">manual</span>
-      <span class="chip" data-chip="surplus">surplus</span>
-    </div>
-    <div class="note" id="v_reason">reason: --</div>
-  </div>
-
-  <div class="card">
-    <h2>Cooking</h2>
-    <div class="row">
-      <div class="lbl"><b>Manual AC</b><small id="man_sub">not armed</small></div>
-      <button class="btn primary" id="btn_man">Start</button>
-    </div>
-    <div class="btnrow">
-      <button class="btn" id="btn_man_ext">+30 min</button>
-      <button class="btn danger" id="btn_man_cancel">Cancel</button>
-    </div>
-    <div class="note">The same request flag the kitchen button sets. Auto-releases
-      when the load drops below the release floor, and always at 3h.</div>
-  </div>
-
-  <div class="card">
-    <h2>Night</h2>
-    <div class="row">
-      <div class="lbl"><b>Sleep mode</b><small id="sleep_sub">--</small></div>
-      <button class="sw" data-sw="sleep" role="switch" aria-checked="false"></button>
-    </div>
-    <div class="note">Blanks the display, suppresses surplus loads and holds the
-      heater off. The 10&deg;C hard override still applies: food outranks silence.</div>
+    <div class="row" data-num="thr_charge"><div class="lbl"><b>Charge to</b><small>60–80 % when parked at home</small></div></div>
+    <div class="row" data-num="thr_discharge"><div class="lbl"><b>Discharge floor</b><small>the station cuts output below this</small></div></div>
   </div>
 
   <div class="card">
     <h2>Storage</h2>
     <div class="row">
       <div class="lbl"><b>Parked mode</b><small id="park_sub">--</small></div>
-      <button class="sw" data-sw="parked" data-guard="1" role="switch" aria-checked="false"
+      <button class="sw" data-sw="parked" data-tone="alt" role="switch" aria-checked="false" aria-label="Parked mode"
               data-confirm-on="Parked mode holds the inverter OFF and DISARMS the fail-safe: BLE loss, a dead probe and the 10 C override will all resolve to AC OFF. Only do this with the fridge emptied. Continue?"></button>
     </div>
-    <div class="note" id="park_note">For the van standing at home with the fridge
-      emptied. This is the only mode that overrides the fail-safe, so it asks
-      twice and never arms itself.</div>
+    <p class="hint">For the van standing for days with the fridge emptied. It never
+      arms itself, and it cannot tell whether the fridge is empty – that part is
+      on you. A press of the kitchen button also exits it.</p>
+  </div>
+
+  <div class="card">
+    <h2>Manual override</h2>
+    <div class="row">
+      <div class="lbl"><b>AC inverter</b><small id="ac_sub">the arbiter takes it back within seconds</small></div>
+      <button class="sw" data-sw="ac" data-tone="warn" role="switch" aria-checked="false" aria-label="AC inverter"></button>
+    </div>
+    <div class="row">
+      <div class="lbl"><b>12 V DC</b><small>feeds van-core and all lighting</small></div>
+      <button class="sw" data-sw="dc" role="switch" aria-checked="false" aria-label="12 V DC output"
+              data-confirm="Turning DC off kills van-core and all lighting, and you lose this page. The only way back is the button on the P310. Continue?"></button>
+    </div>
+    <p class="hint">For commissioning. In normal use the arbiter owns the inverter.</p>
   </div>
 </section>
 
-<!-- ============================ SETUP ============================ -->
+<!-- ============================ SETUP ============================= -->
 <section id="tab-setup" hidden>
   <div class="card">
-    <h2>Fridge thresholds</h2>
-    <div class="row" data-num="temp_on"><div class="lbl"><b>Cool above</b><small>request cooling over this</small></div></div>
-    <div class="row" data-num="temp_off"><div class="lbl"><b>Release below</b><small>stop requesting under this</small></div></div>
-    <div class="row" data-num="temp_hard"><div class="lbl"><b>Hard override</b><small>cool regardless of everything</small></div></div>
-    <div class="note">The cabinet sits at 7-8&deg;C with the mechanical thermostat at
-      its warmest setting (MEASURED 2026-08-19). Set these against where it
-      actually sits, not against a nominal 4&deg;C.</div>
+    <h2>Fridge</h2>
+    <div class="row" data-num="temp_on"><div class="lbl"><b>Cool above</b><small>a cooling run starts above this</small></div></div>
+    <div class="row" data-num="temp_off"><div class="lbl"><b>Rest below</b><small>a run ends once it is this cold</small></div></div>
+    <div class="row" data-num="temp_hard"><div class="lbl"><b>Hard limit</b><small>cools regardless of schedule or sleep</small></div></div>
+    <p class="hint">Set these against where the probe actually reads: 7–8 °C
+      with the thermostat at its warmest (measured 19 Aug).</p>
   </div>
 
   <div class="card">
-    <h2>Sleep</h2>
-    <div class="row" data-num="sleep_ceiling"><div class="lbl"><b>Overnight ceiling</b><small>above 6&deg;C is outside the safe band for dairy and meat</small></div></div>
-    <div class="row" data-num="sleep_target"><div class="lbl"><b>Coast target</b><small>a night cycle goes all the way down to this</small></div></div>
+    <h2>Night</h2>
+    <div class="row" data-num="sleep_ceiling"><div class="lbl"><b>Overnight ceiling</b><small>above 6 °C is too warm for dairy and meat</small></div></div>
+    <div class="row" data-num="sleep_target"><div class="lbl"><b>Pre-cool to</b><small>the evening run goes down to this</small></div></div>
   </div>
 
   <div class="card">
-    <h2>Cycle shaping</h2>
+    <h2>Cooking</h2>
+    <div class="row" data-num="man_min"><div class="lbl"><b>Duration</b><small>one press of the kitchen button</small></div></div>
+    <div class="row" data-num="man_w"><div class="lbl"><b>Stops below</b><small>after 10 min under this load</small></div></div>
+  </div>
+
+  <div class="card">
+    <h2>Cycles</h2>
     <div class="row" data-num="min_on"><div class="lbl"><b>Minimum on</b></div></div>
-    <div class="row" data-num="min_off"><div class="lbl"><b>Minimum off</b><small>anti-short-cycle</small></div></div>
-    <div class="row" data-num="idle_w"><div class="lbl"><b>Compressor idle threshold</b></div></div>
-    <div class="row" data-num="idle_s"><div class="lbl"><b>Compressor idle debounce</b><small>every second here is pure idle waste</small></div></div>
-    <div class="note">UNVERIFIED for this appliance: it has a variable-speed
-      inverter compressor, so the two idle settings above may never trigger.
-      See docs/ANALYSIS-2026-08-20.md.</div>
+    <div class="row" data-num="min_off"><div class="lbl"><b>Minimum off</b><small>protects the compressor</small></div></div>
+    <div class="row" data-num="idle_w"><div class="lbl"><b>Compressor idle below</b></div></div>
+    <div class="row" data-num="idle_s"><div class="lbl"><b>Idle for</b></div></div>
+    <p class="hint">The two idle settings may never trigger: this fridge's
+      variable-speed compressor rarely stops on its own.</p>
   </div>
 
   <div class="card">
-    <h2>Manual</h2>
-    <div class="row" data-num="man_min"><div class="lbl"><b>Duration</b></div></div>
-    <div class="row" data-num="man_w"><div class="lbl"><b>Release power</b><small>above the fridge, below a kettle</small></div></div>
+    <h2>Spare solar</h2>
+    <div class="row" data-num="sur_w"><div class="lbl"><b>Margin</b><small>input minus output above this</small></div></div>
+    <div class="row" data-num="sur_soc"><div class="lbl"><b>Battery above</b></div></div>
   </div>
 
   <div class="card">
     <h2>Storage</h2>
-    <div class="row" data-num="park_soc"><div class="lbl"><b>Parked charge max</b><small>calendar ageing vs reserve; solar-only here</small></div></div>
-  </div>
-
-  <div class="card">
-    <h2>Surplus</h2>
-    <div class="row" data-num="sur_w"><div class="lbl"><b>Margin</b><small>input minus output must exceed this</small></div></div>
-    <div class="row" data-num="sur_soc"><div class="lbl"><b>Minimum SOC</b></div></div>
+    <div class="row" data-num="park_soc"><div class="lbl"><b>Charge limit when parked</b><small>less ageing, less reserve</small></div></div>
   </div>
 </section>
 
-<!-- ============================ DIAG ============================= -->
+<!-- ============================= DIAG ============================= -->
 <section id="tab-diag" hidden>
   <div class="card">
     <h2>Health</h2>
-    <div class="grid">
-      <div class="cell"><div class="k">BLE link</div><div class="v" id="d_ble">--</div></div>
+    <div class="grid" style="margin-top:12px">
+      <div class="cell"><div class="k">P310 link</div><div class="v" id="d_ble">--</div></div>
       <div class="cell"><div class="k">Fridge probe</div><div class="v" id="d_probe">--</div></div>
-      <div class="cell"><div class="k">Uptime</div><div class="v" data-e="uptime">--</div></div>
-      <div class="cell"><div class="k">Board</div><div class="v" data-e="board">--</div></div>
+      <div class="cell"><div class="k">Uptime</div><div class="v" id="d_up">--</div></div>
+      <div class="cell"><div class="k">Board</div><div class="v" id="d_board">--</div></div>
     </div>
-    <div class="note" id="d_ver">--</div>
+    <p class="hint" id="d_ver">--</p>
   </div>
 
   <div class="card">
-    <h2>Pre-trip check</h2>
-    <div class="note" style="margin:0">Pull the BLE antenna, unplug the probe,
-      confirm the inverter ends up ON. Before every trip (CLAUDE.md 11).
-      Drive inhibit is a bench-test stand-in until van-vehicle exists.</div>
-    <div class="row" style="margin-top:10px;border-top:1px solid var(--line)">
-      <div class="lbl"><b>Drive inhibit (test)</b><small>suppressor only; force_on still wins</small></div>
-      <button class="sw" data-sw="inhibit" data-guard="1" role="switch" aria-checked="false"></button>
+    <h2>Arbiter</h2>
+    <div class="chips">
+      <span class="chip" data-chip="force">fail-safe</span>
+      <span class="chip" data-chip="fridge">fridge</span>
+      <span class="chip" data-chip="manual">manual</span>
+      <span class="chip" data-chip="surplus">surplus</span>
+      <span class="chip" data-chip="parked">parked</span>
     </div>
-    <div class="btnrow">
-      <button class="btn" id="btn_default">ESPHome default UI</button>
-      <button class="btn danger" id="btn_restart">Restart node</button>
-      <button class="btn" id="btn_flash" hidden>Flash firmware</button>
-    </div>
+    <p class="hint" id="d_reason">reason: --</p>
   </div>
 
   <div class="card">
-    <h2>History log</h2>
-    <div class="note" style="margin:0 0 8px">The node keeps its own rolling log
-      in PSRAM - it survives a crash, a watchdog and an OTA, and is <b>lost on a
-      power cut</b>. Depth below. The phone app's History tab archives it
-      permanently and does the sums; this link is the raw CSV.</div>
-    <div class="grid">
+    <h2>Log</h2>
+    <p class="hint" style="margin-top:6px">10 s rows in a ring in memory, copied to the
+      SD card. The phone app's History tab keeps its own copy and does the sums.</p>
+    <div class="grid" style="grid-template-columns:repeat(3,1fr);margin-top:12px">
       <div class="cell"><div class="k">Rows</div><div class="v" id="d_log_rows">--</div></div>
       <div class="cell"><div class="k">Depth</div><div class="v" id="d_log_span">--</div></div>
       <div class="cell"><div class="k">Clock</div><div class="v" id="d_log_clock">--</div></div>
     </div>
+    <div class="btnrow"><button class="btn" id="btn_log">Open log page</button></div>
+  </div>
+
+  <div class="card">
+    <h2>Pre-trip check</h2>
+    <p class="hint" style="margin-top:6px">Wait for AC to go off, then pull the BLE
+      antenna and unplug the probe: the inverter must come back ON. Starting from
+      AC on proves nothing (CLAUDE.md 11).</p>
+    <div class="row" style="margin-top:4px">
+      <div class="lbl"><b>Drive inhibit (test)</b><small>suppressor only; the fail-safe still wins</small></div>
+      <button class="sw" data-sw="inhibit" data-tone="warn" role="switch" aria-checked="false" aria-label="Drive inhibit test"></button>
+    </div>
     <div class="btnrow">
-      <button class="btn" id="btn_log">Open log page</button>
+      <button class="btn" id="btn_default">ESPHome default UI</button>
+      <button class="btn hide" id="btn_flash">Flash firmware</button>
+      <button class="btn danger" id="btn_restart">Restart node</button>
     </div>
   </div>
 
   <div class="card">
     <h2>All entities</h2>
-    <div class="note" style="margin:0 0 8px">Everything the node publishes, as
+    <p class="hint" style="margin:6px 0 10px">Everything the node publishes, as
       received. Amber ids are ones this page does not know about - that is where
-      an ENTITIES mismatch shows up after the first flash.</div>
+      a name mismatch shows after a flash; red ones clash.</p>
     <table class="raw"><tbody id="d_raw"></tbody></table>
   </div>
 </section>
@@ -550,7 +601,6 @@ const E = {
   sw_inhibit: "switch-drive_inhibit__test_",
   sw_parked:  "switch-parked_mode",
 
-
   btn_man:        "button-manual_ac_start",
   btn_man_ext:    "button-manual_ac_extend",
   btn_man_cancel: "button-manual_ac_cancel",
@@ -577,6 +627,29 @@ const NUMS = {
   sur_soc:       ["number-surplus_minimum_soc",       5,   "%",   0],
   park_soc:      ["number-parked_charge_max",         5,   "%",   0],
 };
+
+/* The arbiter's reason, in words. The state pill already says on or off, so
+ * this says why - the widget's footer under its chip, word for word
+ * (VanWidget.kt reasonText; keep the two in step). Raw value on Diag. */
+const REASON = {
+  "off":           "Nothing needs 230 V",
+  "parked":        "Fridge off by design",
+  "boot":          "Fail-safe: starting up",
+  "ble lost":      "Fail-safe: P310 link lost",
+  "link stale":    "Fail-safe: P310 data stale",
+  "probe stale":   "Fail-safe: fridge probe stale",
+  "watchdog":      "Fail-safe: watchdog",
+  "fridge (hard)": "Fridge above its hard limit",
+  "fridge":        "Fridge cooling run",
+  "manual":        "Cooking",
+  "surplus":       "Using spare solar",
+};
+
+/* Measured usable capacity (M2), the same figure the app's History uses. */
+const PACK_KWH = 3.9;
+/* Battery bands: CLAUDE.md 9 Phase 5, 30 % sheds and 15 % alerts. The widget
+ * uses the same two, so both colour a given charge the same. */
+const SOC_WARN = 30, SOC_BAD = 15;
 
 /* --- state ------------------------------------------------------------- */
 const S = Object.create(null);   // entity key -> {value, state, at}
@@ -653,8 +726,7 @@ function connect() {
 function setLink(up) {
   if (up === linkUp) return;
   linkUp = up;
-  $("#h_dot").className = "dot " + (up ? "up" : "down");
-  $("#h_link").textContent = up ? "van-core connected" : "no connection to van-core";
+  render();
 }
 // A dead SSE stream can still look open - it does not always fire onerror, and
 // an iOS home-screen app that has been backgrounded comes back to a socket that
@@ -699,33 +771,34 @@ var cmd = {
 };
 
 /* --- tabs --------------------------------------------------------------- */
-$$("nav button").forEach(function (b) {
-  b.onclick = function () {
-    $$("nav button").forEach(function (x) { x.setAttribute("aria-current", String(x === b)); });
-    $$("main > section").forEach(function (s) { s.hidden = (s.id !== "tab-" + b.dataset.tab); });
-    render();
-  };
-});
+function showTab(name) {
+  $$("nav button").forEach(function (x) { x.setAttribute("aria-current", String(x.dataset.tab === name)); });
+  $$("main > section").forEach(function (s) { s.hidden = (s.id !== "tab-" + name); });
+  window.scrollTo(0, 0);
+  render();
+}
+$$("nav button").forEach(function (b) { b.onclick = function () { showTab(b.dataset.tab); }; });
 
 /* --- switches ----------------------------------------------------------- */
 var SW = { ac: "sw_ac", dc: "sw_dc", usb: "sw_usb", silent: "sw_silent",
            sleep: "sw_sleep", inhibit: "sw_inhibit", parked: "sw_parked" };
+function flip(name, next) {
+  var el = $('[data-sw="' + name + '"]');
+  var id = E[SW[name]];
+  if (el.dataset.confirm && next === false && !confirm(el.dataset.confirm)) return;
+  if (el.dataset.confirmOn && next === true && !confirm(el.dataset.confirmOn)) return;
+  cmd.sw(id, next);
+  // Parking is two-step in the arbiter (D-14): one request arms, a second
+  // inside the window commits. On the bezel that is two long presses. Here
+  // the modal above is the second human confirmation, so send the second
+  // request behind it rather than making the user flip the switch twice -
+  // three confirmations for one decision is how people learn to click
+  // through them without reading.
+  if (name === "parked" && next === true) setTimeout(function () { cmd.sw(id, true); }, 250);
+  el.setAttribute("aria-checked", String(next));  // optimistic; SSE corrects it
+}
 $$("[data-sw]").forEach(function (el) {
-  el.onclick = function () {
-    var id = E[SW[el.dataset.sw]];
-    var next = el.getAttribute("aria-checked") !== "true";
-    if (el.dataset.confirm && next === false && !confirm(el.dataset.confirm)) return;
-    if (el.dataset.confirmOn && next === true && !confirm(el.dataset.confirmOn)) return;
-    cmd.sw(id, next);
-    // Parking is two-step in the arbiter (D-14): one request arms, a second
-    // inside the window commits. On the bezel that is two long presses. Here
-    // the modal above is the second human confirmation, so send the second
-    // request behind it rather than making the user flip the switch twice -
-    // three confirmations for one decision is how people learn to click
-    // through them without reading.
-    if (el.dataset.sw === "parked" && next === true) setTimeout(function () { cmd.sw(id, true); }, 250);
-    el.setAttribute("aria-checked", String(next));  // optimistic; SSE corrects it
-  };
+  el.onclick = function () { flip(el.dataset.sw, el.getAttribute("aria-checked") !== "true"); };
 });
 
 /* --- number rows: built from NUMS, never hand-written ------------------- */
@@ -734,9 +807,9 @@ $$("[data-num]").forEach(function (row) {
   if (!spec) return;
   var id = spec[0], step = spec[1], unit = spec[2], dp = spec[3];
   var wrap = document.createElement("div"); wrap.className = "num";
-  var dec = document.createElement("button"); dec.textContent = "−";
+  var dec = document.createElement("button"); dec.textContent = "−"; dec.setAttribute("aria-label", "less");
   var out = document.createElement("output");
-  var inc = document.createElement("button"); inc.textContent = "+";
+  var inc = document.createElement("button"); inc.textContent = "+"; inc.setAttribute("aria-label", "more");
   wrap.appendChild(dec); wrap.appendChild(out); wrap.appendChild(inc);
   row.appendChild(wrap);
   row._out = out; row._spec = spec;
@@ -764,10 +837,17 @@ $("#btn_default").onclick    = function () { location.href = "/"; };
  * browser has no way to speak ESPHome's OTA protocol. The app asks for the
  * file and confirms; the page only opens the door. */
 if (window.VanApp && VanApp.flashFirmware) {
-  $("#btn_flash").hidden = false;
+  $("#btn_flash").classList.remove("hide");
   $("#btn_flash").onclick = function () { VanApp.flashFirmware(); };
 }
 $("#btn_log").onclick        = function () { location.href = "/soak"; };
+// Alerts are rebuilt as state changes, so their buttons are delegated.
+$("#alerts").onclick = function (ev) {
+  var b = ev.target.closest("[data-act]");
+  if (!b) return;
+  if (b.dataset.act === "unpark") flip("parked", false);
+  if (b.dataset.act === "controls") showTab("controls");
+};
 
 /* The node's log depth, polled only while Diag is open.
    This is a view onto soak_log's own /soak/status - the page deliberately does
@@ -797,63 +877,276 @@ function logStatus() {
   }).catch(function () { /* no log on this build; dashes are correct */ });
 }
 
-/* --- render ------------------------------------------------------------- */
+/* --- formatting --------------------------------------------------------- */
 function fmtW(v) {
   if (v === null) return "--";
   return Math.abs(v) >= 1000 ? (v / 1000).toFixed(2) + " kW" : Math.round(v) + " W";
 }
 function fmtHM(mins) {
-  if (mins === null) return "--";
   var h = Math.floor(mins / 60), m = Math.round(mins % 60);
-  return h ? h + "h " + String(m).padStart(2, "0") + "m" : m + "m";
+  if (m === 60) { h++; m = 0; }
+  return h ? h + " h " + String(m).padStart(2, "0") + " min" : m + " min";
 }
-function put(sel, text, stale) {
-  $$(sel).forEach(function (el) {
-    el.textContent = text;
-    el.classList.toggle("stale", !!stale);
+// Hours-and-minutes from the station is false precision at 50 h out.
+function fmtLeft(mins) {
+  if (mins >= 600) return Math.round(mins / 60) + " h";
+  if (mins >= 60) {
+    var h = Math.floor(mins / 60), m = Math.round(mins % 60 / 10) * 10;
+    if (m === 60) { h++; m = 0; }
+    return h + " h" + (m ? " " + m + " min" : "");
+  }
+  return Math.max(1, Math.round(mins)) + " min";
+}
+function fmtDays(d) {
+  return d < 1 ? Math.max(1, Math.round(d * 24)) + " h" : d.toFixed(1) + " days";
+}
+function deg(v) { return v === null ? "--" : v.toFixed(1); }
+function band(soc) {
+  return soc === null ? "var(--dim)" : soc < SOC_BAD ? "var(--bad)"
+       : soc < SOC_WARN ? "var(--warn)" : "var(--ok)";
+}
+function setText(id, text, stale) {
+  var el = document.getElementById(id);
+  if (el.textContent !== text) el.textContent = text;
+  el.classList.toggle("stale", !!stale);
+}
+// innerHTML only when it changed, so a button inside is not replaced under a
+// finger that is pressing it.
+function setHTML(el, html) { if (el._h !== html) { el.innerHTML = html; el._h = html; } }
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
   });
 }
+// "213 W" in an SVG text: the number, then the unit smaller and muted.
+function putW(id, w, stale) {
+  var el = document.getElementById(id);
+  var s = fmtW(w), sp = s.lastIndexOf(" ");
+  var html = sp < 0 ? esc(s) : esc(s.slice(0, sp)) + '<tspan class="u"> ' + esc(s.slice(sp + 1)) + "</tspan>";
+  setHTML(el, html);
+  el.classList.toggle("stale", !!stale);
+}
 
+/* --- render ------------------------------------------------------------- */
 function render() {
-  /* --- header --- */
-  var soc = num("soc");
-  $("#h_soc").innerHTML = (soc === null ? "--" : Math.round(soc)) +
-                          '<span class="unit">%</span>';
-  var bar = $("#h_bar");
-  bar.style.width = (soc === null ? 0 : Math.max(0, Math.min(100, soc))) + "%";
-  bar.style.background = soc === null ? "var(--dim)"
-                       : soc < 20 ? "var(--bad)" : soc < 40 ? "var(--warn)" : "var(--ok)";
-  var pin = num("in"), pout = num("out");
-  $("#h_flow").textContent = (pin === null && pout === null) ? "--"
-    : fmtW(pin === null ? 0 : pin) + " in / " + fmtW(pout === null ? 0 : pout) + " out";
-  $("#h_left").textContent = num("left") === null ? "--" : fmtHM(num("left")) + " left";
+  var any = Object.keys(S).length > 0;
+  var soc = num("soc"), pin = num("in"), pout = num("out");
+  var parked = bool("f_parked") === true;
+  var ble = bool("ble");
+  var force = bool("f_force") === true;
+  // The station's own report of its AC output first, as the widget does; the
+  // arbiter's command only when the station has not said.
+  var ac = bool("ac_out"); if (ac === null) ac = bool("ac_on");
+  var raw = txt("reason");
+  var ml = num("man_left"), cooking = ml !== null && ml > 0.5;
+  var ft = num("fridge"), probe = ft !== null && fresh("fridge");
+  var hard = num(NUMS.temp_hard[0]);
 
-  /* --- header: the one question this page exists to answer --- */
-  var hAc = bool("ac_on"), hForce = bool("f_force") === true;
-  var hAcEl = $("#h_ac");
-  hAcEl.textContent = hAc === null ? "AC --" : hAc ? "AC ON" : "AC OFF";
-  hAcEl.style.color = hAc === null ? "var(--dim)"
-                    : hForce ? "var(--bad)" : hAc ? "var(--warn)" : "var(--muted)";
-  var hR = $("#h_reason");
-  hR.textContent = txt("reason") || "--";
-  // A forced-on state must never be mistakeable for normal operation.
-  hR.style.background = hForce ? "oklch(0.30 0.06 27)"
-                      : hAc ? "oklch(0.30 0.05 72)" : "var(--card2)";
-  hR.style.color = hForce ? "var(--bad)" : hAc ? "var(--warn)" : "var(--muted)";
+  /* --- app bar: the widget's header, plus the reason in words --- */
+  var st, col;
+  if (!any)              { st = "--";           col = "var(--dim)"; }
+  else if (parked)       { st = "Parked";       col = "var(--alt)"; }
+  else if (ble === false){ st = "P310 offline"; col = "var(--warn)"; }
+  else if (ac === true)  { st = "AC on";        col = force ? "var(--bad)" : "var(--warn)"; }
+  else if (ac === false) { st = "AC off";       col = "var(--muted)"; }
+  else                   { st = "AC ?";         col = "var(--muted)"; }
+  if (linkUp === false) col = "var(--dim)";
+  $("#h_state").style.color = col;
+  setText("h_state_t", st);
+  var why = linkUp === false ? "No connection to van-core"
+          : !any ? "connecting…"
+          : (REASON[raw] || raw || "--") + (cooking ? " · " + Math.round(ml) + " min left" : "");
+  setText("h_why", why);
 
-  /* --- power --- */
-  put('[data-e="solar_in"]', fmtW(num("solar_in")), !fresh("solar_in"));
-  put('[data-e="ac_in"]',    fmtW(num("ac_in")),    !fresh("ac_in"));
-  put('[data-e="out"]',      fmtW(pout),            !fresh("out"));
-  var net = (pin !== null && pout !== null) ? pin - pout : null;
-  var netEl = $("#v_net");
-  netEl.textContent = net === null ? "--" : (net >= 0 ? "+" : "−") + fmtW(Math.abs(net));
-  netEl.style.color = net === null ? "" : net >= 0 ? "var(--ok)" : "var(--warn)";
+  renderAlerts(soc, ble, parked, force, raw, ft, probe, hard);
+  renderFlow(soc, pin, pout, parked, linkUp === false || ble === false);
+  renderFridge(ft, probe, hard, parked);
+  renderActions(cooking, ml);
+  renderControls(parked);
+  renderSetup();
+  if (!$("#tab-diag").hidden) renderDiag(ft, probe, raw);
+}
 
-  renderFlow(soc, num("solar_in"), num("ac_in"), pout, net);
-  sample(num("solar_in"), num("ac_in"), pout, bool("ac_on"));
+function renderAlerts(soc, ble, parked, force, raw, ft, probe, hard) {
+  var a = [];
+  function add(kind, icon, title, body, btn) {
+    a.push('<div class="alert ' + kind + '"><svg class="i"><use href="#' + icon + '"/></svg><div><b>' +
+           esc(title) + "</b><span>" + esc(body) + "</span>" + (btn || "") + "</div></div>");
+  }
+  if (linkUp === false)
+    add("bad", "ic-linkoff", "No connection to van-core",
+        "Showing the last values received. Reconnecting…");
+  // First among the van's own: every other alert assumes the fail-safe is
+  // armed, and parked is the one state where it is not.
+  if (parked) {
+    var d = num("parked_d");
+    add("info", "ic-park", "Parked" + (d === null ? "" : " for " + fmtDays(d)),
+        "The inverter is held off and the fail-safe is disarmed. Exit before loading food.",
+        '<button class="btn" data-act="unpark">Exit parked mode</button>');
+  }
+  // Link lost cannot command anything (CLAUDE.md 5.2): AC stays where it was.
+  if (ble === false && !parked)
+    add("bad", "ic-error", "P310 link lost",
+        "Nothing can be switched until it reconnects. AC stays as it was – if it was off, so is the fridge.");
+  else if (force && !parked)
+    add(raw === "boot" ? "info" : "warn", "ic-warn", "Inverter forced on",
+        (REASON[raw] || raw || "") + (raw === "boot" ? " – normal for a few minutes after a restart." : ""));
+  if (!parked && (ft === null || !probe) && raw !== "probe stale" && ble !== false && Object.keys(S).length)
+    add("warn", "ic-warn", "Fridge probe not reporting",
+        "After 5 minutes the inverter is forced on.");
+  if (!parked && probe && hard !== null && ft > hard)
+    add("bad", "ic-error", "Fridge at " + ft.toFixed(1) + " °C",
+        "Above the " + hard.toFixed(1) + " °C hard limit – cooling regardless of schedule.");
+  if (soc !== null && soc < SOC_BAD)
+    add("bad", "ic-error", "Battery " + Math.round(soc) + "%", "Below the " + SOC_BAD + "% alert level.");
+  else if (soc !== null && soc < SOC_WARN)
+    add("warn", "ic-warn", "Battery " + Math.round(soc) + "%", "Low – consider shedding loads.");
+  setHTML($("#alerts"), a.join(""));
+}
 
-  /* --- switches --- */
+/* --- the battery and its flows -------------------------------------------
+ * Link stroke width is the honest part: it scales with power, and a path with
+ * no power (or no sensor behind it at all) goes thin and dashed. A silently
+ * dead alternator charger is invisible on a number and obvious here.
+ */
+const VX = 120, VY = 40, VW = 84, VH = 52;   // the vessel, as drawn in the SVG
+function link(path, arrow, w, color) {
+  var p = document.getElementById(path), a = document.getElementById(arrow);
+  if (w === null || w <= 1) {
+    p.setAttribute("stroke", "var(--line)");
+    p.setAttribute("stroke-width", "1.5");
+    p.setAttribute("stroke-dasharray", "2 4");
+    a.setAttribute("fill", "none");
+  } else {
+    p.setAttribute("stroke", color);
+    p.setAttribute("stroke-width", Math.max(1.8, Math.min(6, 1.6 + Math.sqrt(w) / 9)).toFixed(2));
+    p.removeAttribute("stroke-dasharray");
+    a.setAttribute("fill", color);
+  }
+}
+function wave(base, amp, close) {
+  // A gentle, still surface - the widget's liquid at rest. No animation.
+  var d = "", n = 16;
+  for (var i = 0; i <= n; i++) {
+    var x = VX + VW * i / n, y = base + amp * Math.sin(i / n * Math.PI * 3);
+    d += (i ? "L" : "M") + x.toFixed(1) + " " + y.toFixed(1);
+  }
+  if (close) d += "L" + (VX + VW) + " " + (VY + VH) + "L" + VX + " " + (VY + VH) + "Z";
+  return d;
+}
+function renderFlow(soc, pin, pout, parked, stale) {
+  var sol = num("solar_in"), aci = num("ac_in");
+  putW("fv_sol", sol, stale || !fresh("solar_in"));
+  putW("fv_aci", aci, stale || !fresh("ac_in"));
+  putW("fv_out", pout, stale || !fresh("out"));
+  $("#fi_sol").style.color = sol !== null && sol > 1 ? "var(--ok)" : "var(--dim)";
+  $("#fi_aci").style.color = aci !== null && aci > 1 ? "var(--ok)" : "var(--dim)";
+  $("#fi_out").style.color = pout !== null && pout > 1 ? "var(--warn)" : "var(--dim)";
+  link("l_sol", "a_sol", sol, "var(--ok)");
+  link("l_aci", "a_aci", aci, "var(--ok)");
+  link("l_out", "a_out", pout, "var(--warn)");
+
+  // The vessel: level, band colour, the figure on top.
+  var c = stale ? "var(--dim)" : band(soc);
+  var lv = soc === null ? 0 : Math.max(0, Math.min(1, soc / 100));
+  var base = VY + VH - VH * lv;
+  var amp = VH * 0.035 * Math.min(1, Math.min(lv, 1 - lv) / 0.05);
+  $("#v_liq").setAttribute("d", lv > 0 ? wave(base, amp, true) : "");
+  $("#v_surf").setAttribute("d", lv > 0 && lv < 1 ? wave(base, amp, false) : "");
+  $("#v_surf").setAttribute("stroke", c);
+  ["vs0", "vs1", "vs2"].forEach(function (s) { document.getElementById(s).style.stopColor = c; });
+  $("#v_edge").setAttribute("stroke", c);
+  $("#v_nub").setAttribute("fill", c);
+  setText("v_soc_n", soc === null ? "--" : String(Math.round(soc)));
+  $("#v_soc").classList.toggle("stale", stale);
+  setText("v_kwh", soc === null ? "--" : (soc / 100 * PACK_KWH).toFixed(1) + " kWh", stale);
+
+  $("#c_ac").classList.toggle("on", bool("ac_out") === true);
+  $("#c_dc").classList.toggle("on", bool("dc_out") === true);
+  $("#flow").setAttribute("aria-label",
+    "Solar " + fmtW(sol) + ", AC in " + fmtW(aci) + ", battery " +
+    (soc === null ? "unknown" : Math.round(soc) + " percent") + ", loads " + fmtW(pout));
+
+  // In/out, the widget's pair, and what the difference means.
+  setText("s_in", fmtW(pin), stale || !fresh("in"));
+  setText("s_out", fmtW(pout), stale || !fresh("out"));
+  var net = pin !== null && pout !== null ? pin - pout : null;
+  setText("s_net", net === null ? "" : (net >= 0 ? "net +" : "net −") + fmtW(Math.abs(net)), stale);
+
+  // Time left, only when it means something. The station reports thousands of
+  // hours at near-zero load, which is true and useless; and while charging it
+  // is not the question.
+  var left = num("left"), meta;
+  if (soc === null || net === null) meta = "--";
+  else if (soc >= 99.5 && net >= -5) meta = "Full";
+  else if (net > 5) meta = "Charging";
+  else if (net < -5 && left !== null && left <= 72 * 60) meta = "≈ " + fmtLeft(left) + " left";
+  else if (net < -5) meta = "Over 3 days left";
+  else meta = "Holding";
+  setText("b_meta", meta, stale);
+}
+
+function renderFridge(ft, probe, hard, parked) {
+  var stale = linkUp === false;
+  var ct = num("cabin");
+  setText("t_fridge", deg(ft), stale || (ft !== null && !probe));
+  setText("t_cabin", deg(ct), stale || (ct !== null && !fresh("cabin")));
+
+  // In sleep the ceiling replaces "cool above" and the pre-cool target
+  // replaces "rest below" (CLAUDE.md 6, sleep mode).
+  var sleeping = bool("sw_sleep") === true;
+  var on = num(sleeping ? NUMS.sleep_ceiling[0] : NUMS.temp_on[0]);
+  var lo = num(sleeping ? NUMS.sleep_target[0] : NUMS.temp_off[0]);
+  setText("f_meta", sleeping ? "night mode" : "");
+
+  var MAX = 12;
+  var pc = function (v) { return Math.max(0, Math.min(100, v / MAX * 100)); };
+  var ok = on !== null && lo !== null && hard !== null;
+  $("#f_scale").classList.toggle("hide", !ok);
+  if (ok) {
+    var a = pc(lo), b = Math.max(a, pc(on)), h = Math.max(b, pc(hard));
+    $("#z_cold").style.width = a + "%";
+    $("#z_rest").style.width = (b - a) + "%";
+    $("#z_want").style.width = (h - b) + "%";
+    $("#z_hard").style.width = (100 - h) + "%";
+    $("#k_lo").style.left = a + "%";   setText("k_lo", lo.toFixed(0) + "°");
+    $("#k_on").style.left = b + "%";   setText("k_on", on.toFixed(0) + "°");
+    $("#k_hard").style.left = h + "%"; setText("k_hard", hard.toFixed(0) + "°");
+    $("#f_mark").classList.toggle("hide", ft === null);
+    if (ft !== null) $("#f_mark").style.left = pc(ft) + "%";
+    $("#f_mark").style.background = !probe || stale ? "var(--dim)" : "var(--fg)";
+  }
+
+  // What the fridge is doing - the panel's walk-up line, in the same words.
+  var line, col;
+  if (parked)                        { line = "Off on purpose – van parked"; col = "var(--alt)"; }
+  else if (!probe)                   { line = "No probe reading"; col = "var(--bad)"; }
+  else if (hard !== null && ft > hard) { line = "Above the hard limit – cooling now"; col = "var(--bad)"; }
+  else if (bool("f_fridge") === true)  { line = "Cooling" + (lo === null ? "" : " to " + lo.toFixed(1) + "°"); col = "var(--warn)"; }
+  else if (bool("sw_inhibit") === true){ line = "Drive inhibit – coasting"; col = "var(--muted)"; }
+  else if (sleeping)                 { line = "Night – coasting up to " + deg(on) + "°"; col = "var(--alt)"; }
+  else                               { line = "Resting – cools again above " + deg(on) + "°"; col = "var(--muted)"; }
+  $("#f_line").style.color = stale ? "var(--dim)" : col;
+  setText("f_line_t", line);
+}
+
+function renderActions(cooking, ml) {
+  var dur = num(NUMS.man_min[0]);
+  $("#r_cook").classList.toggle("active", cooking);
+  setText("cook_sub", cooking ? Math.round(ml) + " min left – stop it before driving"
+                              : (dur === null ? "45" : dur.toFixed(0)) + " min of 230 V, then stops itself");
+  $("#btn_man").classList.toggle("hide", cooking);
+  $("#btn_man_ext").classList.toggle("hide", !cooking);
+  $("#btn_man_cancel").classList.toggle("hide", !cooking);
+
+  var sleeping = bool("sw_sleep") === true;
+  var ceil = num(NUMS.sleep_ceiling[0]);
+  setText("sleep_sub", sleeping
+    ? "On – display dark, fridge coasts up to " + deg(ceil) + "°"
+    : "Quiet night: no runs until " + deg(ceil) + "°");
+}
+
+function renderControls(parked) {
   Object.keys(SW).forEach(function (k) {
     var b = $('[data-sw="' + k + '"]');
     var st = S[E[SW[k]]];
@@ -861,209 +1154,57 @@ function render() {
     b.setAttribute("aria-checked", String(on));
     b.disabled = !st;
   });
-  // The AC switch stays exposed for commissioning, but the arbiter re-asserts
-  // once a tick. Say so, rather than letting a tap look like it did not stick.
-  $("#ac_sub").textContent = "arbiter-controlled - " + (txt("reason") || "--");
-  $("#ac_note").textContent = bool("f_force")
-    ? "Fail-safe active: AC is forced ON and a manual OFF will be undone within seconds."
-    : "A manual change here is temporary by design: the arbiter re-asserts its decision on the next tick.";
+  var d = num("parked_d");
+  setText("park_sub", parked
+    ? "Parked" + (d === null ? "" : " " + fmtDays(d)) + " – fail-safe disarmed"
+    : "Off – normal operation");
+  setText("ac_sub", bool("f_force") === true
+    ? "fail-safe active: a manual OFF is undone within seconds"
+    : "the arbiter takes it back within seconds");
+  var lvl = num("ac_level");
+  setText("v_aclevel", fmtW(lvl), lvl !== null && !fresh("ac_level"));
+}
 
-  /* --- AC input level: read-only, the P310 knob sets it --- */
-  put('[data-e="ac_level"]', fmtW(num("ac_level")), !fresh("ac_level"));
-
-  /* --- numbers --- */
+function renderSetup() {
   $$("[data-num]").forEach(function (row) {
     if (!row._spec || !row._out) return;
     var v = num(row._spec[0]);
-    row._out.textContent = v === null ? "--" : v.toFixed(row._spec[3]) + " " + row._spec[2];
+    var t = v === null ? "--" : v.toFixed(row._spec[3]) + " " + row._spec[2];
+    if (row._out.textContent !== t) row._out.textContent = t;
   });
+}
 
-  /* --- fridge --- */
-  var ft = num("fridge");
-  put('[data-e="fridge"]', ft === null ? "--" : ft.toFixed(1), ft !== null && !fresh("fridge"));
-  var ct = num("cabin");
-  put('[data-e="cabin"]', ct === null ? "--" : ct.toFixed(1) + " °C", ct !== null && !fresh("cabin"));
-  var acOn = bool("ac_on");
-  var acEl = $("#v_acstate");
-  acEl.textContent = acOn === null ? "--" : acOn ? "ON" : "off";
-  acEl.style.color = acOn ? "var(--warn)" : "var(--muted)";
-  $("#v_reason").textContent = "reason: " + (txt("reason") || "--");
-  var flags = { force: "f_force", fridge: "f_fridge", manual: "f_manual", surplus: "f_surplus" };
-  Object.keys(flags).forEach(function (c) {
-    $('[data-chip="' + c + '"]').classList.toggle("on", bool(flags[c]) === true);
-  });
-
-  var ml = num("man_left");
-  var armed = ml !== null && ml > 0.5;
-  $("#man_sub").textContent = armed ? Math.round(ml) + " min remaining" : "not armed";
-  $("#btn_man").textContent = armed ? "+30 min" : "Start";
-
-  var parked = bool("f_parked") === true;
-  var pdays = num("parked_d");
-  $("#park_sub").textContent = parked
-    ? "AC held off" + (pdays === null ? "" : " for " + pdays.toFixed(1) + " days")
-    : "normal operation";
-  // Nothing is inferred from the probes any more (D-14) - whether the fridge is
-  // empty is a fact only the owner has. What the note still owes them is the
-  // consequence, stated in full, at the moment it applies.
-  $("#park_note").textContent = parked
-    ? "Fail-safe DISARMED. BLE loss, a dead probe and the 10 C override all resolve to AC OFF until this is cleared."
-    : "For the van standing at home with the fridge emptied. Asks twice, and never arms itself - but it cannot tell whether the fridge is empty, so that part is on you.";
-
-  var sleeping = bool("sw_sleep") === true;
-  var ceil = num("number-sleep_ceiling");
-  $("#sleep_sub").textContent = sleeping
-    ? "coasting to a " + (ceil === null ? "--" : ceil.toFixed(1)) + " °C ceiling"
-    : "normal thresholds";
-
-  /* --- the banners worth interrupting for --- */
-  var html = "";
-  // First, and unconditionally: every other banner on this page is written on
-  // the assumption that the fail-safe is armed, and parked is the one state
-  // where it is not.
-  if (parked)
-    html += '<div class="banner bad">PARKED' +
-            (pdays === null ? "" : " for " + pdays.toFixed(1) + " days") +
-            '. The inverter is held OFF and the fail-safe is disarmed. ' +
-            'Do not load food without clearing this.</div>';
-  if (bool("ble") === false)
-    html += '<div class="banner bad">BLE link to the P310 is down. AC is forced ON. Nothing here can be commanded until it returns.</div>';
-  else if (ft === null || !fresh("fridge"))
-    html += '<div class="banner warn">Fridge probe reading is missing or stale. After 5 minutes the arbiter forces AC ON.</div>';
-  if (armed)
-    html += '<div class="banner warn">Manual AC armed, ' + Math.round(ml) +
-            ' min left. Do not drive off with this running.</div>';
-  $("#fridge_banner").innerHTML = html;
-
-  /* --- diag --- */
+function renderDiag(ft, probe, raw) {
+  logStatus();
   var bleUp = bool("ble");
-  $("#d_ble").textContent = bleUp === null ? "--" : bleUp ? "up" : "DOWN";
-  $("#d_ble").style.color = bleUp ? "var(--ok)" : "var(--bad)";
-  var probeOk = ft !== null && fresh("fridge");
-  $("#d_probe").textContent = probeOk ? "ok" : "STALE";
-  $("#d_probe").style.color = probeOk ? "var(--ok)" : "var(--bad)";
+  setText("d_ble", bleUp === null ? "--" : bleUp ? "up" : "DOWN");
+  $("#d_ble").style.color = bleUp === null ? "" : bleUp ? "var(--ok)" : "var(--bad)";
+  setText("d_probe", ft === null ? "missing" : probe ? "ok" : "stale");
+  $("#d_probe").style.color = probe ? "var(--ok)" : "var(--bad)";
   var up = num("uptime");
-  put('[data-e="uptime"]', up === null ? "--" : fmtHM(up / 60));
+  setText("d_up", up === null ? "--" : fmtHM(up / 60));
   var bt = num("board");
-  put('[data-e="board"]', bt === null ? "--" : bt.toFixed(0) + " °C");
-  $("#d_ver").textContent = "ESPHome " + (txt("version") || "--");
+  setText("d_board", bt === null ? "--" : bt.toFixed(0) + " °C");
+  setText("d_ver", "ESPHome " + (txt("version") || "--"));
+  setText("d_reason", "reason: " + (raw || "--"));
+  var flags = { force: "f_force", fridge: "f_fridge", manual: "f_manual", surplus: "f_surplus", parked: "f_parked" };
+  Object.keys(flags).forEach(function (c) {
+    var el = $('[data-chip="' + c + '"]');
+    el.classList.toggle("on", bool(flags[c]) === true);
+    el.classList.toggle("bad", c === "force");
+  });
 
-  if (!$("#tab-diag").hidden) {
-    logStatus();
-    var known = {};
-    Object.keys(E).forEach(function (k) { known[E[k]] = 1; });
-    Object.keys(NUMS).forEach(function (k) { known[NUMS[k][0]] = 1; });
-    // Ids are free-text entity names on 2026.8, so escape them like the values.
-    var esc = function (s) {
-      return String(s).replace(/[&<>"]/g, function (c) {
-        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
-      });
-    };
-    $("#d_raw").innerHTML = Object.keys(S).sort().map(function (k) {
-      var e = S[k];
-      var style = CLASH[k] ? ' style="color:var(--bad)"'
-                : known[k] ? "" : ' style="color:var(--warn)"';
-      var v = e.state != null ? e.state : e.value;
-      return "<tr><td" + style + ">" + esc(e.id) + (CLASH[k] ? " (id clash)" : "") +
-             "</td><td>" + esc(v) + "</td></tr>";
-    }).join("");
-  }
-}
-
-/* --- power flow -----------------------------------------------------------
- * Link stroke width is the honest part: it scales with power, and a path with
- * no power (or no sensor behind it at all) goes thin and dashed. A silently
- * dead alternator charger is invisible on a number and obvious here.
- */
-const RING_C = 226.2;                       // 2*pi*36
-function linkWidth(w) {
-  if (w === null || w <= 1) return null;    // null => dead path
-  return Math.max(1.6, Math.min(6, 1.6 + Math.sqrt(w) / 9));
-}
-function setLink_(pathId, arrowId, w) {
-  var p = $("#" + pathId), a = $("#" + arrowId);
-  var lw = linkWidth(w);
-  if (lw === null) {
-    p.setAttribute("stroke-width", "1.5");
-    p.setAttribute("stroke-dasharray", "3 4");
-    p.setAttribute("stroke", "var(--dim)");
-    a.setAttribute("opacity", "0");
-  } else {
-    p.setAttribute("stroke-width", lw.toFixed(2));
-    p.removeAttribute("stroke-dasharray");
-    p.removeAttribute("stroke");
-    a.setAttribute("opacity", "1");
-  }
-}
-function renderFlow(soc, sol, acin, out, net) {
-  setLink_("k_solar", "a_solar", sol);
-  setLink_("k_engine", "a_engine", acin);
-  setLink_("k_out", "a_out", out);
-
-  var ring = $("#k_ring");
-  var pct = soc === null ? 0 : Math.max(0, Math.min(100, soc));
-  ring.setAttribute("stroke-dasharray", (RING_C * pct / 100).toFixed(1) + " " + RING_C);
-  ring.setAttribute("stroke", soc === null ? "var(--dim)"
-                  : soc < 20 ? "var(--bad)" : soc < 40 ? "var(--warn)" : "var(--ok)");
-
-  $("#f_soc").textContent = soc === null ? "--" : Math.round(soc) + "%";
-  // 3840Wh nominal pack; stated, not measured, so it is not dressed up as more.
-  $("#f_wh").textContent = soc === null ? "--" : (soc / 100 * 3.84).toFixed(2) + " kWh";
-  $("#f_left").textContent = num("left") === null ? "--" : fmtHM(num("left")) + " left";
-  $("#pip_ac").classList.toggle("on", bool("ac_out") === true);
-  $("#pip_dc").classList.toggle("on", bool("dc_out") === true);
-}
-
-/* --- live strip -----------------------------------------------------------
- * This node stores no history (the microSD logger of CLAUDE.md 9 is not
- * written), so this is a rolling in-browser buffer since the page opened.
- * On a bench that is the useful window anyway: toggle something and watch it.
- */
-const BUF = [];
-const BUF_MAX = 240;          // at one sample per 5s, 20 minutes
-let lastSample = 0;
-function sample(sol, acin, out, acOn) {
-  var t = Date.now();
-  if (t - lastSample < 5000) return;
-  lastSample = t;
-  BUF.push({ t: t, i: (sol || 0) + (acin || 0), o: out || 0, ac: acOn === true });
-  while (BUF.length > BUF_MAX) BUF.shift();
-  drawStrip();
-}
-function drawStrip() {
-  var n = BUF.length;
-  if (n < 2) return;
-  var peak = 1;
-  for (var i = 0; i < n; i++) peak = Math.max(peak, BUF[i].i, BUF[i].o);
-  var X = function (k) { return (k / (n - 1)) * 300; };
-  var YI = function (v) { return 37 - (v / peak) * 35; };
-  var YO = function (v) { return 37 + (v / peak) * 35; };
-
-  var din = "M0 37", dout = "M0 37";
-  for (var a = 0; a < n; a++) din += "L" + X(a).toFixed(1) + " " + YI(BUF[a].i).toFixed(1);
-  din += "L300 37Z";
-  for (var b = 0; b < n; b++) dout += "L" + X(b).toFixed(1) + " " + YO(BUF[b].o).toFixed(1);
-  dout += "L300 37Z";
-  $("#sp_in").setAttribute("d", din);
-  $("#sp_out").setAttribute("d", dout);
-
-  // inverter-on ribbon, merged into blocks so it reads as duty not as stripes
-  var rects = "", run = -1;
-  for (var c = 0; c <= n; c++) {
-    var on = c < n && BUF[c].ac;
-    if (on && run < 0) run = c;
-    if (!on && run >= 0) {
-      var x0 = X(run), w = Math.max(1.5, X(c) - x0);
-      rects += '<rect x="' + x0.toFixed(1) + '" y="0" width="' + w.toFixed(1) +
-               '" height="8" fill="var(--warn)"></rect>';
-      run = -1;
-    }
-  }
-  $("#sp_ribg").innerHTML = rects;
-
-  var mins = Math.round((BUF[n - 1].t - BUF[0].t) / 60000);
-  $("#sp_span").textContent = "live, last " + (mins < 1 ? "<1" : mins) + " min";
-  $("#sp_scale").textContent = "±" + Math.round(peak) + " W";
+  var known = {};
+  Object.keys(E).forEach(function (k) { known[E[k]] = 1; });
+  Object.keys(NUMS).forEach(function (k) { known[NUMS[k][0]] = 1; });
+  setHTML($("#d_raw"), Object.keys(S).sort().map(function (k) {
+    var e = S[k];
+    var style = CLASH[k] ? ' style="color:var(--bad)"'
+              : known[k] ? "" : ' style="color:var(--warn)"';
+    var v = e.state != null ? e.state : e.value;
+    return "<tr><td" + style + ">" + esc(e.id) + (CLASH[k] ? " (id clash)" : "") +
+           "</td><td>" + esc(v) + "</td></tr>";
+  }).join(""));
 }
 
 render();

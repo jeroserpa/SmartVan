@@ -23,7 +23,7 @@ SAMPLE = {
     "w_in": "310 W in",
     "w_fridge": "4.6 °C fridge",
     "w_cabin": "24.0 °C cabin",
-    "w_reason": "fridge block",
+    "w_reason": "Fridge cooling run",
     "w_age": "14:32",
 }
 

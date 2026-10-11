@@ -257,7 +257,7 @@ class VanWidget : AppWidgetProvider() {
                 else -> "AC ?" to muted
             }
             if (stale) stateColor = dim
-            val reason = if (parked) "fridge off by design" else text(s, VanFeed.REASON) ?: ""
+            val reason = VanFeed.reasonText(if (parked) "parked" else text(s, VanFeed.REASON))
 
             val at = if (snap.okAt == 0L) "" else DateFormat.getTimeFormat(context).format(Date(snap.okAt))
             val ago = ago(now - snap.okAt)

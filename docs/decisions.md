@@ -1232,3 +1232,58 @@ error, never averaged down.** It is the same 3 900 Wh in every bin, so it
 shifts them all at once; `n` does not help. M14 already noted 3 % moves a bin
 ~10 W. Quoting only the statistical error on a figure that band dominates is
 exactly the false precision this file exists to prevent.
+
+---
+
+## 2026-10-11 — D-26: the web dashboard is redesigned around four questions, and speaks the widget's language
+
+**Decision.** `ui/index.html` is restructured; its API surface, entity map,
+fail-safe wording and every command path are unchanged. Home answers, in
+order: is the inverter on and why (sticky app bar); the battery and where its
+power is going (one drawing); the fridge and how far it is from its next run;
+and the two things done daily, cooking and sleep. Station outputs, charging
+limits and parked mode move to a Controls tab, tuning stays on Setup, and the
+arbiter's raw flags and the entity table stay on Diag.
+
+**Why.** The page had grown as a commissioning tool and read like one:
+
+- **The flow card was broken.** Its "Engine" node used the class `sw`, which
+  is also the switch component, so a grey toggle was painted over the node's
+  label and value. Its labels were HTML positioned over an SVG by hand, and
+  a red "reserve" arc at 12 o'clock read as an error. It is now a single SVG
+  with its text inside it, so it scales as a whole and nothing in it can
+  overlap anything else.
+- **The same number three times.** SOC was in the header, in the ring and in
+  a bar on one screen. It is now once, in the battery.
+- **Developer notes as UI.** Paragraphs citing docs, one of them false since
+  D-22 ("the node stores no history"). Gone; the consequences that matter are
+  stated in a line where they apply.
+- **Raw values.** "3053 h left" at near-zero load (true, useless), and the
+  arbiter's own words ("probe stale", "fridge (hard)"). Time left is shown
+  only while discharging and rounded to what it can know; reasons are
+  translated.
+- **The 12 V switch on the home screen.** Turning it off kills van-core and
+  this page with it. It now sits last, under Manual override, with the AC
+  inverter switch.
+- **The live strip** was an in-browser buffer from page open, mostly empty.
+  History is the app's job (D-25).
+
+**Coherence with the widget and the panel.** The battery is the widget's
+vessel (`LiquidFill.kt`) drawn in vector, banded at the widget's 15 / 30 %
+(the page used 20 / 40 %, so the two disagreed about the same charge). The
+icons are the widget's own. The state pill and the reason line are the
+widget's chip and footer, and the reason words are shared: `VanFeed.reasonText`
+and the page's `REASON` table, held together by `ReasonTextTest`, which reads
+the page. Blue means parked on all three surfaces, as it already did on the
+panel's frame. The fridge scale has the panel's zones, and its status line
+uses the panel's walk-up wording.
+
+**What the home screen does not show, on purpose:** water, until van-water
+exists - an empty "not installed" card on the first screen is noise. And no
+second copy of a control: sleep lives on Home, parked mode on Controls.
+
+**Checked** against `tools/mock_core.py` at 375 and 320 px wide and at full
+width, in each injected fault (BLE lost, probe stale, flat battery, night)
+and in cooking, sleep, parked and the parked-exit path. The mock now reports
+the arbiter's real reason words; it had "temp stale" and "fridge hard", which
+the page could not have translated. `UNVERIFIED` on a real phone and node.

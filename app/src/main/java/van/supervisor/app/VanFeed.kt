@@ -124,6 +124,29 @@ object VanFeed {
     }
 
     /**
+     * The arbiter's reason in words, under the chip that already says on
+     * or off. Word for word what the web page's header says (REASON in
+     * ui/index.html) - keep the two in step, so the widget and the page
+     * never describe the same moment differently. Unknown values pass
+     * through rather than vanish: a new reason should still be readable.
+     */
+    fun reasonText(raw: String?): String = when (raw) {
+        null, "" -> ""
+        "off" -> "Nothing needs 230 V"
+        "parked" -> "Fridge off by design"
+        "boot" -> "Fail-safe: starting up"
+        "ble lost" -> "Fail-safe: P310 link lost"
+        "link stale" -> "Fail-safe: P310 data stale"
+        "probe stale" -> "Fail-safe: fridge probe stale"
+        "watchdog" -> "Fail-safe: watchdog"
+        "fridge (hard)" -> "Fridge above its hard limit"
+        "fridge" -> "Fridge cooling run"
+        "manual" -> "Cooking"
+        "surplus" -> "Using spare solar"
+        else -> raw
+    }
+
+    /**
      * "sensor/Battery" or "sensor-battery" -> "sensor-battery". Slugged the way
      * ESPHome built object ids: lower case, anything outside [a-z0-9_-] -> '_'.
      * A device segment ("domain/device/name"), if ever used, is dropped.

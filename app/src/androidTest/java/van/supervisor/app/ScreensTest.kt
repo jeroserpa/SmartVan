@@ -232,19 +232,21 @@ class ScreensTest {
 
     @Test
     fun b2_widgetStates() {
+        // Reasons are the arbiter's own words (arbiter_core.cpp), so these
+        // shots show what reasonText() really turns them into.
         val now = System.currentTimeMillis()
         val min = 60_000L
         val live = states(soc = 78.4, out = 48.0, inp = 310.0, fridge = 4.6, cabin = 24.0,
-                          ble = true, ac = true, parked = false, reason = "fridge block")
+                          ble = true, ac = true, parked = false, reason = "fridge")
         val cases = listOf(
             "widget-1-live" to snap(live, okAt = now - 2 * min),
             "widget-2-low-battery" to snap(
                 states(soc = 13.0, out = 0.0, inp = 0.0, fridge = 6.8, cabin = 31.5,
-                       ble = true, ac = false, parked = false, reason = "rest block"),
+                       ble = true, ac = false, parked = false, reason = "off"),
                 okAt = now - 5 * min),
             "widget-3-warn-battery" to snap(
                 states(soc = 24.0, out = 1450.0, inp = 0.0, fridge = 5.1, cabin = 26.2,
-                       ble = true, ac = true, parked = false, reason = "manual (cooking)"),
+                       ble = true, ac = true, parked = false, reason = "manual"),
                 okAt = now - min),
             "widget-4-stale" to snap(live, okAt = now - 190 * min, lastOk = false),
             "widget-5-out-of-range-recent" to snap(live, okAt = now - 8 * min, lastOk = false),
@@ -254,7 +256,7 @@ class ScreensTest {
                 okAt = now - 3 * min),
             "widget-7-p310-offline" to snap(
                 states(soc = 71.0, out = null, inp = null, fridge = null, cabin = 22.4,
-                       ble = false, ac = null, parked = false, reason = "BLE lost"),
+                       ble = false, ac = null, parked = false, reason = "ble lost"),
                 okAt = now - min),
             // nodes/van-core-probes.yaml (soak 2) publishes the same two
             // probes as "Fridge probe"/"Cabin probe" and has no arbiter. Both

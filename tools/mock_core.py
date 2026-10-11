@@ -345,8 +345,10 @@ class Sim(threading.Thread):
         reason = ("parked" if parked else
                   "boot" if t < self.boot_until else
                   "ble lost" if not ble else
-                  "temp stale" if not probe_ok else
-                  "fridge hard" if hard else
+                  # The arbiter's own words (arbiter_core.cpp reason()), which
+                  # the page and the widget translate - not paraphrases.
+                  "probe stale" if not probe_ok else
+                  "fridge (hard)" if hard else
                   "manual" if manual else
                   "fridge" if fridge_req else
                   "surplus" if surplus else "off")
