@@ -1071,3 +1071,164 @@ passwords in plain text, so CI cannot publish it from this public repo the
 way it publishes the APK. Today that means the laptop at home, or a cloud
 session whose network policy allows `dl.espressif.com` and
 `components.espressif.com` (both denied by default; found 2026-10-09).
+---
+
+## 2026-09-18 — D-25: the dashboard stays a page, the history goes native, and LVGL is declined
+
+> **`MERGED 2026-10-11`, written 2026-09-18 on a branch.** It sat unmerged while
+> D-22 (30 Sep) put `soak_log` on `van-core.yaml` independently and gave it an
+> SD-card copy. On merge **D-22's logging config was kept and the one proposed
+> in section 3 below was dropped**: the History tab reads D-22's columns
+> (`t_fridge` is the raw probe there too). Two claims below are therefore
+> softer than written: a power cut no longer erases the log, because the card
+> holds it; what the phone archive still adds is reading it away from the van
+> and keeping it past a card swap. The decisions themselves stand.
+
+**Three questions, asked together, with one answer between them: keep the live
+UI where it is, and spend the native effort on the thing a page cannot do.**
+
+### 1. Where the graphics live
+
+**Decision: the live dashboard stays `ui/index.html`, served from flash. The
+History/analysis screen is native Kotlin in `app/`.**
+
+The split is by **data lifetime**, not by looks, and the deciding fact is in
+`components/soak_log/soak_log.h`: the ring buffer lives in `.ext_ram_noinit`
+PSRAM. It survives a crash, a watchdog reset, an OTA and the restart button,
+and it is **lost on a power cut** — a 12 V bus dropout erases days of
+measurement. It also holds only ~4 days at 10 s before it wraps.
+
+So:
+
+| | Live state | History |
+|---|---|---|
+| Where it comes from | pushed by the node | accumulated |
+| Worth anything away from the van? | no | **yes — that is when you read it** |
+| Survives a power cut? | n/a | **only if something else holds it** |
+| Right home | the node's page | the phone |
+
+**Why not rebuild the dashboard natively**, which was the live alternative:
+
+- The visual difference is near zero. `ui/index.html` uses `system-ui`, which
+  *is* Roboto on Android, with the same palette (`res/values/colors.xml` is
+  converted from the page's OKLCH values). Native wins scroll physics, press
+  haptics and ~300–600 ms of cold start. It wins nothing on animation, because
+  the page is fed by SSE at 1 s and there is nothing to animate smoothly.
+- It would duplicate ~50 entity ids into Kotlin. `app/README.md` already calls
+  `VanFeed.kt` "the one duplication of entity ids outside the page" — a cost
+  accepted once, for a widget that cannot run JavaScript at all.
+- **It would put field tuning behind an APK.** §11 requires every threshold to
+  be a `number` entity so tuning never needs a laptop and a reflash. The page
+  ships in the same commit as the YAML, by one OTA. A native Setup tab ships
+  by CI → a download the README already documents three workarounds for →
+  install, and reintroduces the reflash one layer up.
+- The browser path is the fallback for iOS, laptops, and when the app is not
+  installed. Two live UIs would both have to track the firmware forever.
+
+`ui/index.html` remains the source of truth for everything live. The app is a
+window onto it, plus one screen of its own.
+
+**What the History screen must not become:** a second place that decides
+things. It is read-only over a log. The arbiter stays the single writer
+(§5.3), and nothing on this screen commands the node.
+
+### 2. LVGL on the 1.47" panel — `NO`
+
+**The free-PSRAM figure is not the number that gates this.** M12/M14 measured
+8.27 MB free, and it was always going to be: only two things on this node touch
+PSRAM — the st7789 framebuffer (172×320×2 = 110 kB) and `soak_log`'s ring. The
+number that constrains anything here is free **internal** heap, which M14 put
+at **102 kB minimum against 145 kB at boot**. That is where LVGL's object tree
+and heap land by default under ESP-IDF, next to the BLE stack — the one
+subsystem §5.2 says must not fail.
+
+And it buys nothing this panel wants:
+
+| LVGL offers | This panel |
+|---|---|
+| Touch input | Deliberately not a touchscreen — §2, "Why not a touchscreen board" |
+| Animation | Explicitly unwanted: `van-core.yaml` says "1s refresh, no animation" for the §2 starvation reason |
+| Widget tree and styling | The design already matches its mockup exactly, via `nodes/vc_draw.h` |
+| Partial redraw | The only real win — and **M12 recorded zero BLE drops over 21 h** with the current full-frame 1 Hz redraw. There is no measured problem for it to fix |
+
+So it is a rewrite of the one finished, mockup-verified part of the firmware,
+paid for out of the heap the BLE stack lives in, to fix nothing. Declined.
+
+**Reopening it requires the same thing §12 demands of Home Assistant: new
+numbers, not new enthusiasm.** The number that would reopen it is a measured
+loop-time or BLE problem caused by the display — not more free PSRAM. If the
+panel later wants a trend line, that is `it.line()` over a ring buffer.
+
+**What the PSRAM headroom actually unlocked** is `soak_log` on `van-core.yaml`,
+which is the precondition for all of §1 above.
+
+### 3. Consequences
+
+- *(Superseded by D-22's config, see the note above.)* `nodes/van-core.yaml`
+  gains `soak_log` at 10 s, 4 MB, 25 columns — the two
+  probes *and* the control copy, the station registers, every arbiter flag,
+  and the fridge plug polled off the main loop.
+- 10 s rather than §9's 30 s: the blocked measurements are coast dT/dt, the
+  pulldown penalty and duty cycle, and at 30 s a cool-down block is a dozen
+  points. ~930 kB/day, so 4 MB ≈ 4.3 days.
+- `tools/mock_core.py` serves `/soak`, so the History screen is built with no
+  hardware — the same rule the page already followed.
+- **This does not retire the microSD logger of §9 Phase 1.** PSRAM is still
+  volatile; the phone archive makes that survivable, not correct. A card is
+  still the answer for a van nobody visits for a fortnight.
+
+### What running it found — `worth recording, because both were confident wrong answers`
+
+The analyses were checked end to end against a synthetic log that hides a
+50 W station draw in the SOC balance and in no column. Two defects surfaced
+that reading the code had not:
+
+1. **A full pack reported 334 W against a true 50.** At 100 % SOC the surplus
+   is curtailed rather than stored, so the energy balance is not measuring
+   overhead at all. Such intervals are now **excluded, not clamped** — the
+   same rule §9 applies to out-of-band tank readings, in a different
+   subsystem. Mean 50.8 → 49.7 W, SD 18.2 → 3.9.
+
+   **This was not a new finding, and it should not be recorded as one.**
+   `tools/soak_report.py` §5 already skipped pinned packs, at the same 99.5 %
+   threshold, before any of this was written. It was new to the Kotlin, which
+   is a different and much less flattering thing. The thresholds are now
+   deliberately identical: **two tools computing the same quantity from the
+   same CSV must not disagree about which rows are usable.**
+2. **The weighted estimate read 47.9 ±0.21 W** — worse than a plain mean, while
+   claiming a fifth of a watt. The error model assumed ΔSOC was exact because
+   both ends of a bin sit on a SOC tick. Near a turning point that is false:
+   the pack can drift across one 0.1 % boundary and back having moved no
+   energy. Those bins claimed ±0.9 W while being 26 W out, and were therefore
+   the *most heavily weighted* in the estimate.
+
+### Kept in step with `tools/soak_report.py`
+
+Comparing the two was worth more than either alone, and turned up a third
+thing neither test had caught. `soak_report.py` uses **only windows with no AC
+input**; the Kotlin did not. Charging from AC puts the station's own
+conversion losses into the same residual as its idle draw, so the app would
+have reported a higher "overhead" whenever the alternator or shore power was
+running — a number that is not wrong so much as **a different quantity wearing
+the same name**. The ~48 W of M2 is the idle figure. The filter now matches.
+
+Solar is deliberately *not* excluded, also matching: MPPT losses land in the
+residual in both tools, and a convention shared with the existing one beats a
+third invented here.
+
+Where the two still differ, knowingly:
+
+| | `soak_report.py` §5 | the app |
+|---|---|---|
+| Window | fixed 2 h | between SOC ticks, grouped to ≥5 min |
+| Why | 0.1 % over 2 h is only ±2 W, so quantisation is bounded by the window length | shorter runs still yield bins; quantisation is carried per bin instead |
+| Best for | a long soak downloaded to a laptop | whatever is on the phone, including a single evening |
+
+They should agree on the same long dataset. If they ever do not, that is a
+finding, not a rounding difference.
+
+**And the pack-capacity tolerance is reported separately from the statistical
+error, never averaged down.** It is the same 3 900 Wh in every bin, so it
+shifts them all at once; `n` does not help. M14 already noted 3 % moves a bin
+~10 W. Quoting only the statistical error on a figure that band dominates is
+exactly the false precision this file exists to prevent.

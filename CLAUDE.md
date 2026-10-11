@@ -222,6 +222,18 @@ Blank after 60s of no input.
 **Risk:** BLE client + SoftAP + web server + display on one ESP32 can starve the
 BLE task. Keep updates at 1–2s, simple fonts, no animation. If BLE dropouts
 appear, the display is the first thing to move off this node.
+
+**LVGL for this panel: `DECLINED 2026-09-18`, see `docs/decisions.md` D-25.**
+Asked because 8.27 MB of PSRAM is free — but **PSRAM is not the number that
+gates this node.** Only the framebuffer (110 kB) and `soak_log` use it. The
+constraint is free *internal* heap, which M14 put at **102 kB minimum against
+145 kB at boot**, and that is the pool the BLE stack lives in. LVGL's wins here
+are touch (deliberately absent, §2), animation (explicitly unwanted, above),
+styling (the panel already matches its mockup via `vc_draw.h`) and partial
+redraw — and M12 recorded **zero BLE drops over 21 h** with the current
+full-frame 1 Hz redraw, so there is no measured problem to fix. Reopening it
+needs a measured loop-time or BLE problem caused by the display, not more free
+PSRAM. A trend line on this panel would be `it.line()`, not a framework.
 - Optional: NRF24L01+ (~€4) if going the milight-hub route for lighting.
 
 ---
@@ -933,6 +945,21 @@ None of the following needs the ESP32, and several could still change the design
   predicted saving into a measured one.
 
 ### Data logging (Phase 1)
+
+> **`LANDED 2026-09-30`, D-22 — PSRAM ring plus card.** `van-core.yaml` carries
+> `soak_log`: a 4 MB PSRAM ring at 10s (~4 days, CSV at `/soak`), copied from
+> its own task to `/log/YYYYMMDD.csv` on the card, so a missing or failing card
+> never touches the main loop. The clock is set from the phone each time the UI
+> page opens (no RTC yet).
+>
+> **10s rather than the 30s below**, because the blocked measurements are coast
+> dT/dt, the pulldown penalty and duty cycle, and at 30s a cool-down block is a
+> dozen points.
+>
+> **And it is where the §8 sums now live.** The phone app's History tab
+> (`docs/decisions.md` D-25) archives the log and computes station overhead
+> from the SOC balance, coast τ, duty cycle and Wh/K per run block — which is
+> how M14 did them by hand in a text editor.
 
 The chosen board has a microSD slot. Use the `sd_mmc_card` external component
 (minimum ESPHome 2025.7.0, supports ESP32-S3), which also ships `sd_file_server`
