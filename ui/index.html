@@ -486,6 +486,7 @@ table.raw td:first-child{color:var(--muted);padding-right:10px;word-break:break-
     <h2>Spare solar</h2>
     <div class="row" data-num="sur_w"><div class="lbl"><b>Margin</b><small>input minus output above this</small></div></div>
     <div class="row" data-num="sur_soc"><div class="lbl"><b>Battery above</b></div></div>
+    <div class="row" data-num="sur_floor"><div class="lbl"><b>Fridge stops at</b><small>spare solar never cools the fridge below this</small></div></div>
   </div>
 
   <div class="card">
@@ -631,6 +632,7 @@ const NUMS = {
   man_w:         ["number-manual_ac_release_power",   10,  "W",   0],
   sur_w:         ["number-surplus_margin",            50,  "W",   0],
   sur_soc:       ["number-surplus_minimum_soc",       5,   "%",   0],
+  sur_floor:     ["number-surplus_fridge_floor",      0.5, "°C", 1],
   park_soc:      ["number-parked_charge_max",         5,   "%",   0],
 };
 

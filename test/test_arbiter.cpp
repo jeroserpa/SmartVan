@@ -493,9 +493,12 @@ static void test_manual() {
 // Opportunistic surplus
 // ---------------------------------------------------------------------------
 static void test_surplus() {
+  // Spare solar only starts on a cabinet due cooling (above temp_off_c), so
+  // these run at 5 C rather than the rig's cold 3 C baseline.
   CASE("surplus requires both headroom and a high SOC");
   {
     Sim s;
+    s.in.fridge_temp_c = 5.0f;
     s.settle();
     s.in.input_power_w = 600.0f;
     s.in.soc_pct = 70.0f;
@@ -510,6 +513,7 @@ static void test_surplus() {
   CASE("a passing cloud does not cost an inverter start");
   {
     Sim s;
+    s.in.fridge_temp_c = 5.0f;
     s.settle();
     s.in.input_power_w = 600.0f;
     s.run(1 * MIN);
@@ -519,6 +523,69 @@ static void test_surplus() {
     CHECK(s.core.outputs().surplus_req);  // held by the minimum on-time
     s.run(9 * MIN);
     CHECK(!s.core.outputs().surplus_req);
+  }
+
+  // M19: spare solar held AC on for 55 min after the fridge block had ended
+  // cold, and the wall probe went to -0.7 C (-3.7 C on 9 Oct).
+  CASE("spare solar stops at the floor on the RAW probe, inside its minimum on-time");
+  {
+    Sim s;
+    s.core.config().probe_filter_ms = 10 * MIN;  // as on the node
+    s.in.fridge_temp_c = 5.0f;
+    s.settle();
+    s.in.input_power_w = 600.0f;
+    s.run(1 * MIN);
+    CHECK(s.core.outputs().surplus_req);
+    s.in.fridge_temp_c = 0.9f;  // the raw probe is past the floor...
+    const ArbiterOutputs &o = s.run(5 * SEC);
+    CHECK(o.fridge_filtered_c > 2.0f);  // ...while the filter has barely moved
+    CHECK(!o.surplus_req);  // and inside surplus_min_on_ms: does not matter
+    CHECK(!o.ac_on);
+    CHECK(o.reason == AcReason::OFF);
+  }
+
+  CASE("after a cold stop, spare solar waits until the cabinet is due cooling again");
+  {
+    Sim s;
+    s.in.fridge_temp_c = 5.0f;
+    s.settle();
+    s.in.input_power_w = 600.0f;
+    s.run(1 * MIN);
+    CHECK(s.core.outputs().surplus_req);
+    s.in.fridge_temp_c = 0.8f;
+    CHECK(!s.run(5 * SEC).surplus_req);
+    s.in.fridge_temp_c = 2.5f;  // the sun is still there; the cabinet is not due
+    CHECK(!s.run(20 * MIN).surplus_req);
+    CHECK(!s.core.outputs().ac_on);
+    s.in.fridge_temp_c = 4.5f;  // back above "release below"
+    CHECK(s.run(1 * MIN).surplus_req);
+  }
+
+  CASE("a cold cabinet is never cooled further by spare solar");
+  {
+    Sim s;  // the rig's 3 C: below temp_off_c, above the floor
+    s.settle();
+    s.in.input_power_w = 600.0f;
+    s.in.soc_pct = 99.0f;
+    s.run(2 * MIN);
+    CHECK(!s.core.outputs().surplus_req);
+    CHECK(!s.core.outputs().ac_on);
+  }
+
+  CASE("no probe, no spare-solar cooling - and the fail-safe still follows");
+  {
+    Sim s;
+    s.in.fridge_temp_c = 5.0f;
+    s.settle();
+    s.in.input_power_w = 600.0f;
+    s.run(1 * MIN);
+    CHECK(s.core.outputs().surplus_req);
+    s.in.temp_valid = false;
+    CHECK(!s.run(5 * SEC).surplus_req);
+    const ArbiterOutputs &o = s.run(6 * MIN);  // past temp_stale_ms
+    CHECK(!o.surplus_req);
+    CHECK(o.ac_on);
+    CHECK(o.reason == AcReason::TEMP_STALE);
   }
 }
 

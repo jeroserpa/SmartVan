@@ -76,6 +76,13 @@ struct ArbiterConfig {
   float surplus_margin_w = 200.0f;
   float surplus_soc_pct = 85.0f;
   uint32_t surplus_min_on_ms = 10u * 60u * 1000u; // do not flap on cloud edges
+  // Cold limit, on the RAW probe. `ADDED 2026-10-13` (measurements.md M19):
+  // with AC on, the fridge runs on its own thermostat - back on medium after
+  // every power cut (M16) - so spare solar cooled the cabinet past freezing,
+  // -3.7 C on 9 Oct and -0.7 C on 12 Oct. Raw on the wall probe at 1 C left
+  // the filtered reading near 2 C, the bottom of the 1-2 C banking target
+  // (CLAUDE.md section 9 Phase 5).
+  float surplus_floor_c = 1.0f;
 
   // --- fail-safe ---
   uint32_t boot_force_ms = 60u * 1000u;      // hold AC on after boot

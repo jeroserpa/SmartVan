@@ -147,6 +147,7 @@ def _init_entities():
         ("number-manual_ac_release_power", "Manual AC release power", 150, "W"),
         ("number-surplus_margin", "Surplus margin", 200, "W"),
         ("number-surplus_minimum_soc", "Surplus minimum SOC", 85, "%"),
+        ("number-surplus_fridge_floor", "Surplus fridge floor", 1.0, "°C"),
         ("number-parked_charge_max", "Parked charge max", 80, "%"),
     ]:
         define(eid, name, val, unit)

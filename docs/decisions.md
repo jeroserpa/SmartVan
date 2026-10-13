@@ -1289,3 +1289,37 @@ width, in each injected fault (BLE lost, probe stale, flat battery, night)
 and in cooking, sleep, parked and the parked-exit path. The mock now reports
 the arbiter's real reason words; it had "temp stale" and "fridge hard", which
 the page could not have translated. `UNVERIFIED` on a real phone and node.
+
+---
+
+## 2026-10-13 — D-27: spare solar stops before the fridge freezes
+
+**Decision.** `surplus_req` gets a cold limit in `arbiter_core`: it releases as
+soon as the **raw** probe is below `surplus_floor_c` (number "Surplus fridge
+floor", default 1 °C), ignoring its minimum on-time, and it may only start on a
+cabinet whose filtered reading is above `temp_off_c`. No valid probe, no
+spare-solar cooling. Host-tested; the four new cases fail on the old code.
+
+**Why.** With AC on, the fridge cools on its own thermostat, and that is back on
+medium after every power cut (M16), so nothing bounded spare-solar cooling:
+the wall probe reached −3.7 °C on 9 Oct (2 h 38 min) and −0.7 °C on 12 Oct
+(55 min, M19), both times after the fridge's own block had ended cold. The
+9 Oct workaround — margin 1000 W, so the rule never fires — was never applied.
+
+**Why these choices.**
+- *Raw, not filtered:* this is a protection, and the project rule is that the
+  filter may delay a release, never a safety response (D-22, as for the 10 °C
+  override). On the wall probe raw 1 °C left the filtered reading near 2 °C,
+  the bottom of the Phase 5 banking target of 1–2 °C.
+- *Start above `temp_off_c`:* gives the rule its hysteresis without a new
+  tunable, and keeps spare solar from adding compressor starts — each sunny
+  spell is one run from ~4 °C to the floor (§6 "prefer fewer, longer blocks").
+- *No probe, no surplus:* without a reading nothing can know the cabinet is not
+  already freezing; `force_on` handles the fridge after 5 min as before.
+
+**Open — and the user says spare solar is mainly for the water heater.** The
+heater needs AC, AC runs the fridge, and this limit therefore blocks heating
+whenever the cabinet is cold. When the heater lands, separate the two rather
+than loosen the limit: most likely van-core switches the fridge's own socket
+(the Athom plug already in the fridge's supply) off while spare solar heats
+water, with that socket failing toward ON per §5.2.

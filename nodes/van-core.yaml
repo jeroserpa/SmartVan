@@ -1122,6 +1122,26 @@ number:
     on_value:
       - lambda: id(arbiter)->config().surplus_soc_pct = x;
 
+  - platform: template
+    # Spare solar stops when the RAW probe falls below this, and only starts on
+    # a cabinet above "Fridge off below". With AC on the fridge runs on its own
+    # thermostat (medium after every power cut, M16), so without this spare
+    # solar froze the cabinet: -3.7 C on 9 Oct, -0.7 C on 12 Oct (M19). Raw
+    # 1 C on the wall probe left the filtered reading near 2 C. `UNVERIFIED`
+    # against what the food itself reaches.
+    name: "Surplus fridge floor"
+    id: num_surplus_floor
+    unit_of_measurement: "°C"
+    min_value: 0.0
+    max_value: 4.0
+    step: 0.5
+    initial_value: 1.0
+    optimistic: true
+    restore_value: true
+    entity_category: config
+    on_value:
+      - lambda: id(arbiter)->config().surplus_floor_c = x;
+
 # -----------------------------------------------------------------------------
 # Feedback: button LED and buzzer
 # -----------------------------------------------------------------------------

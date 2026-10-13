@@ -340,9 +340,11 @@ void ArbiterCore::update_manual_(uint32_t now_ms, const ArbiterInputs &in) {
 
 void ArbiterCore::update_surplus_(uint32_t now_ms, const ArbiterInputs &in) {
   // Suppressed entirely while coasting - the whole point of sleep mode is that
-  // nothing opportunistic gets to start the inverter.
+  // nothing opportunistic gets to start the inverter. And with no probe there
+  // is no way to know the cabinet is not already freezing, so no opportunistic
+  // cooling either; force_on looks after the fridge if the probe stays stale.
   if (in.sleep_mode || in.drive_inhibit || !in.input_power_valid || !in.power_valid ||
-      !in.soc_valid) {
+      !in.soc_valid || !in.temp_valid) {
     if (out_.surplus_req) {
       out_.surplus_req = false;
       surplus_since_ms_ = now_ms;
@@ -350,9 +352,27 @@ void ArbiterCore::update_surplus_(uint32_t now_ms, const ArbiterInputs &in) {
     return;
   }
 
+  // The cold limit (surplus_floor_c). AC on means the fridge cooling on its
+  // own thermostat, so spare solar has to stop before the cabinet freezes.
+  // RAW probe, like the hard override: this is a protection, and the filter
+  // must never be what delays one. It ignores the minimum on-time for the same
+  // reason - cloud-edge flapping is a nuisance, frozen food is not.
+  if (out_.surplus_req && in.fridge_temp_c < cfg_.surplus_floor_c) {
+    out_.surplus_req = false;
+    surplus_since_ms_ = now_ms;
+    return;
+  }
+
   const float surplus = in.input_power_w - in.output_power_w;
   if (!out_.surplus_req) {
-    if (surplus > cfg_.surplus_margin_w && in.soc_pct >= cfg_.surplus_soc_pct) {
+    // Start only on a cabinet that is due cooling anyway - above the normal
+    // release temperature - so a sunny spell is one long run from there down
+    // to the floor, and spare solar never restarts the compressor on a
+    // cabinet it has just cooled. That is the hysteresis: temp_off_c down to
+    // surplus_floor_c, with no new tunable for it.
+    const float temp = filt_init_ ? temp_filt_ : in.fridge_temp_c;
+    if (surplus > cfg_.surplus_margin_w && in.soc_pct >= cfg_.surplus_soc_pct &&
+        temp > cfg_.temp_off_c && in.fridge_temp_c >= cfg_.surplus_floor_c) {
       out_.surplus_req = true;
       surplus_since_ms_ = now_ms;
     }
