@@ -265,7 +265,12 @@ jobs:
         if: always()
         run: |
           cat instrument.txt || true
-          ! grep -qE "FAILURES!!!|INSTRUMENTATION_FAILED|Process crashed" instrument.txt
+          # An explicit exit, not `! grep`: bash -e ignores a failure that `!`
+          # produced, so that form let FAILURES!!! through as a green job.
+          if grep -qE "FAILURES!!!|INSTRUMENTATION_FAILED|Process crashed" instrument.txt; then
+            echo "::error::instrumented tests failed, see instrument.txt above"
+            exit 1
+          fi
           # The shrunk release build: launched, still alive after 10 s, no crash.
           cat release-crash.txt || true
           [ -s release-pid.txt ] || { echo "::error::release build not running after launch"; exit 1; }
