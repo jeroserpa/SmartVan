@@ -4,18 +4,72 @@
 converted from the page's OKLCH values — keep them in step). Adaptive and
 themed launcher icon from the bolt in `tools/make_icon.py`. The app never shows
 a raw WebView error: it is either the page, the page with a "link lost"
-banner, or a status panel (searching / connecting / not on van-core Wi-Fi /
-not answering) with Retry, a Wi-Fi settings shortcut and a Details view of
-the bound network. Errors retry by themselves every 5 s, and again on return
-to the app. Pull down on the page to reload it.
+banner, the phone's saved copy of the page with its last readings (out of
+reach — see Offline below), or a status panel (searching / connecting / not
+on van-core Wi-Fi / not answering) with Retry, a Wi-Fi settings shortcut and
+a Details view of the bound network. Errors retry by themselves every 5 s,
+and again on return to the app. Pull down on the page to reload it.
 
 Two tabs, at the **top** — `ui/index.html` carries its own fixed bottom nav, so
 an app-level bottom bar would stack two rows of tabs on one screen.
 
 | Tab | What it is |
 |---|---|
-| **Dashboard** | A WebView onto `http://192.168.4.1/ui`, with this app's traffic bound to the van Wi-Fi so the rest of the phone keeps using mobile data. No logic here — the web UI stays the source of truth. |
+| **Dashboard** | A WebView onto `http://192.168.4.1/ui`, with this app's traffic bound to the van Wi-Fi so the rest of the phone keeps using mobile data. No logic here — the web UI stays the source of truth. Out of reach, the same page from the phone's copy, with the last readings (D-28). |
 | **History** | Native. The node's log, archived on the phone, with the analyses. See below. |
+
+## Offline dashboard (D-28)
+
+The dashboard opens anywhere, at any time — at home, 200 km from the van,
+with no Wi-Fi at all — showing the **last readings the phone saw**, all four
+tabs of them. Nothing on it is live and nothing on it can be switched.
+
+- **What is kept, and where.** Two things, each by the side that owns it:
+  - *The page.* After every live load the app GETs `/ui` once more and keeps
+    it in its private files, one copy per base URL. It is the node's own
+    page, from its firmware, not a copy bundled in the APK — the page ships
+    by OTA with the entities it shows (D-25), and an APK from another commit
+    would show a different one. Only a page carrying
+    `<meta name="van-offline">` is kept: an older firmware's page saves no
+    readings and would show dashes, and a house router answering at
+    192.168.4.1 must never become "the van".
+  - *The readings.* The page itself writes the newest state of every entity
+    to `localStorage` every 10 s while live (a few kB), each with the time it
+    arrived. `OfflinePage.kt` never looks inside.
+- **How the copy finds them.** It is loaded with `loadDataWithBaseURL` under
+  the node's own URL, so it has the node's origin and therefore the node
+  page's `localStorage`. It asks `window.VanApp.offlineCopy()` at load and,
+  when told yes, opens no stream and sends nothing.
+- **It talks to nobody.** With the process unbound and mobile data on, a
+  request for 192.168.4.1 would go to the carrier; `shouldInterceptRequest`
+  answers every request the copy makes (its icon, its manifest) with a local
+  404.
+- **It cannot be mistaken for live.** The bar every tab shows reads
+  `Offline` and *Not live · last reading 14:32 · 2 h ago*; only a live link
+  may say `AC on`. A card at the top says when the readings are from and that
+  nothing can be switched. Values are greyed, flow arrows lose their colour,
+  switches and steppers are disabled. A restored reading is never treated as
+  fresh, so no "probe not reporting" alert is raised about a phone that is
+  simply out of range.
+- **Above it, a banner says why** (looking for van-core / not on van-core
+  Wi-Fi / not answering), muted rather than amber — away from the van is the
+  normal state of a phone. A tap opens the usual status panel with Wi-Fi
+  settings, Retry and Details; **Show last readings** goes back.
+- **Going live.** Retries continue every 5 s as before, but over the copy
+  they are a plain GET of `/ui` first: loading the live URL into the WebView
+  would swap the copy for an error page on every retry. Once anything
+  answers (`/ui`, or `/` on a bring-up build), the live page loads over the
+  copy, which stays on screen until it commits.
+- **On open**, in range or not, the copy is what shows while the app looks
+  for the van, instead of a "searching" spinner. The live page itself also
+  restores the last readings while its stream comes up, greyed, so it opens
+  on numbers rather than dashes.
+- **Needs a firmware with this page.** The readings are saved by the page the
+  node serves, so the node must run a build from D-28 on. Until then the app
+  behaves as before.
+- **Not an alarm, and not a substitute for being there.** Like the widget,
+  this only knows what the phone last saw. It says nothing about the van
+  since then.
 
 ## History (D-25)
 
@@ -64,7 +118,28 @@ should not do. That asymmetry, not looks, is why this screen is native.
   time constant. The analyses are tested against exactly those.
 - **Charts are Canvas**, like `LiquidFill.kt` and for the same reason: the
   release APK is deliberately shrunk. A gap in the log draws as a gap — joining
-  across a reboot would draw a trend that never happened.
+  across a reboot would draw a trend that never happened. The line breaks on a
+  NAN, on a hole in time of more than three sample intervals, and where the
+  `boot` column changes (a fast reboot leaves no hole). Where there are more
+  samples than pixels, each pixel column draws its samples' minimum and
+  maximum: a 30 s spike in a month stays visible, where a downsample would
+  drop it and an average would halve it. Time labels name the day at each
+  midnight and on multi-day ranges.
+- **Every chart opens full screen** on a tap (`ChartExplorer.kt`, D-28):
+  pinch to zoom the time axis, drag to pan, double-tap to zoom in, tap for
+  the values at an instant, long-press and slide to scrub, tap a legend entry
+  to hide a series (the power chart's solar input otherwise flattens the
+  fridge's 30 W). The line above the plot gives min, max and mean of what is
+  in view, and the y axis fits itself to it. The four buttons at the bottom
+  (earlier, zoom out, zoom in, later) do the same with one thumb. The
+  temperature and power charts can go anywhere in the archive from there:
+  each move re-reads the store for that window at about one point per pixel,
+  min and max of each slice (`HistoryStore.traces`), so the cost is the
+  screen's width, not the archive's length. Overhead and duty are computed
+  over the range chosen on the tab, and explore that.
+- **"All" is the newest 200 000 rows** (~23 days at 10 s) when the archive
+  holds more. It used to be the oldest, which froze "All" on the archive's
+  first three weeks; the explorer reaches anything older.
 
 ## Saving files: `window.VanApp.saveFile(name, text)`
 
@@ -359,3 +434,11 @@ lost, generate a new one and uninstall the app once before updating.
 - Widget: add it with the phone on van-core Wi-Fi — values within a few
   seconds; ↻ shows `updating…` then a time; out of range shows
   `not in range · last …` and grey values after 20 min.
+- Offline (D-28), after flashing van-core with this page: open the dashboard
+  on van-core Wi-Fi for a minute, then leave range (or turn Wi-Fi off) and
+  reopen the app — the dashboard shows `Offline · last reading …` with the
+  values it last had, every control greyed. Back in range it goes live by
+  itself within ~10 s.
+- History explorer: tap the temperature chart, pinch out to the whole archive
+  and back in to an hour; tap for a readout; rotate the phone for a wider
+  plot.

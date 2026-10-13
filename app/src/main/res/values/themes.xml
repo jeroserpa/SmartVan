@@ -19,6 +19,16 @@
         <item name="android:windowLightNavigationBar">false</item>
     </style>
 
+    <!-- The chart explorer: a dialog that fills the screen, so it keeps the
+         app's palette and Material widgets and survives rotation with the
+         activity (configChanges in the manifest). -->
+    <style name="Theme.Van.Explorer" parent="Theme.Van">
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="windowNoTitle">true</item>
+        <item name="android:windowBackground">@color/bg</item>
+    </style>
+
     <style name="Theme.Van.Starting" parent="Theme.SplashScreen">
         <item name="windowSplashScreenBackground">@color/bg</item>
         <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>

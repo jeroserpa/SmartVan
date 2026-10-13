@@ -32,29 +32,25 @@
         android:layout_height="0dp"
         android:layout_weight="1">
 
-    <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
-        android:id="@+id/swipe"
+    <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="match_parent">
+        android:layout_height="match_parent"
+        android:orientation="vertical">
 
-        <WebView
-            android:id="@+id/web"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:background="@color/bg"
-            android:overScrollMode="never" />
-    </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
-
-    <!-- Shown when the page is up but the Wi-Fi dropped: keep the last values
-         visible, clearly marked, rather than blanking the screen. -->
+    <!-- Above the page, not over it: the page's own bar says how old its
+         values are, and that is the line that must not be covered.
+         Two jobs. The page is up but the Wi-Fi dropped: the last values stay
+         visible, clearly marked. Or the node is out of reach and the page is
+         the phone's saved copy (D-28): this says why, and a tap opens the
+         status panel with its Wi-Fi, Retry and Details. -->
     <TextView
         android:id="@+id/banner"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_gravity="top"
         android:background="@drawable/banner_bg"
         android:drawablePadding="10dp"
         android:gravity="center_vertical"
+        android:minHeight="44dp"
         android:paddingHorizontal="16dp"
         android:paddingVertical="10dp"
         android:text="@string/st_lost_banner"
@@ -63,6 +59,21 @@
         android:visibility="gone"
         app:drawableStartCompat="@drawable/ic_wifi_off"
         app:drawableTint="@color/warn" />
+
+    <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+        android:id="@+id/swipe"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <WebView
+            android:id="@+id/web"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@color/bg"
+            android:overScrollMode="never" />
+    </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+    </LinearLayout>
 
     <!-- Everything that is not the page: searching, connecting, errors. -->
     <ScrollView
@@ -150,6 +161,16 @@
                     android:layout_height="wrap_content"
                     android:text="@string/btn_retry" />
             </LinearLayout>
+
+            <!-- Back to the saved copy, when there is one (D-28). -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btn_offline"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="@string/btn_offline"
+                android:visibility="gone" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btn_details"

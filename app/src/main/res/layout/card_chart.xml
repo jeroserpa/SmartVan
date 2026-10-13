@@ -1,22 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- One chart with a title, a one-line reading of what it says, and the plot.
      The sentence matters as much as the plot: a number nobody can interpret
-     is the state docs/measurements.md was already in. -->
+     is the state docs/measurements.md was already in.
+     The whole card is the button that opens it full screen (ChartExplorer,
+     D-28); the corner icon says so. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:layout_marginTop="12dp"
     android:background="@drawable/card_bg"
+    android:clickable="true"
+    android:focusable="true"
+    android:foreground="?attr/selectableItemBackground"
     android:orientation="vertical"
     android:paddingHorizontal="14dp"
     android:paddingVertical="12dp">
 
-    <TextView
-        android:id="@+id/c_title"
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:textColor="@color/fg"
-        android:textSize="15sp" />
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/c_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textColor="@color/fg"
+            android:textSize="15sp" />
+
+        <ImageView
+            android:layout_width="16dp"
+            android:layout_height="16dp"
+            android:layout_marginStart="8dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/ic_open_full"
+            app:tint="@color/dim" />
+    </LinearLayout>
 
     <TextView
         android:id="@+id/c_read"

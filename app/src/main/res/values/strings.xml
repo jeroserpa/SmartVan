@@ -12,8 +12,15 @@
     <string name="st_unreachable_title">van-core is not answering</string>
     <string name="st_unreachable_body">The Wi-Fi is connected, but the node did not reply. Retrying automatically.</string>
     <string name="st_lost_banner">Wi-Fi to van-core lost — values are frozen. Reconnecting…</string>
+    <!-- Over the saved copy of the page (D-28). The page says how old its
+         values are; these say why it is not live. Tap for the status panel. -->
+    <string name="st_off_searching">Looking for van-core…</string>
+    <string name="st_off_connecting">Connecting to van-core…</string>
+    <string name="st_off_nowifi">Not on van-core Wi-Fi</string>
+    <string name="st_off_unreachable">van-core is not answering · retrying</string>
 
     <string name="btn_retry">Retry</string>
+    <string name="btn_offline">Show last readings</string>
     <string name="btn_wifi">Wi-Fi settings</string>
     <string name="btn_details">Details</string>
     <string name="btn_hide_details">Hide details</string>
@@ -115,6 +122,15 @@
     <string name="h_duty">Compressor duty</string>
     <string name="h_duty_wait">Needs at least half an hour in a bin.</string>
     <string name="h_duty_read">%1$.0f%% of the time, over %2$d hours</string>
+
+    <!-- The chart explorer (D-28): one History chart, full screen. -->
+    <string name="x_close">Close</string>
+    <string name="x_reset">Reset</string>
+    <string name="x_earlier">Earlier</string>
+    <string name="x_later">Later</string>
+    <string name="x_zoom_in">Zoom in</string>
+    <string name="x_zoom_out">Zoom out</string>
+    <string name="x_hint">Pinch or drag · tap for values</string>
 
     <string name="h_episodes">Run and rest blocks</string>
     <string name="h_ep_wait">No complete block in this range yet.</string>

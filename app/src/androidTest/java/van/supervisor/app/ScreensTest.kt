@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.os.ParcelFileDescriptor
 import android.view.LayoutInflater
 import android.view.View
+import android.webkit.WebView
 import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.test.core.app.ActivityScenario
@@ -21,6 +22,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.junit.runners.MethodSorters
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * Renders every app and widget state to PNG for review, on an emulator in CI
@@ -55,9 +59,17 @@ class ScreensTest {
     @Test
     fun a1_appWithLivePage() {
         MainActivity.baseUrlOverride = mock
-        ActivityScenario.launch(MainActivity::class.java).use {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             Thread.sleep(10_000)
             save("app-1-page", screen())
+            // What a3 shows out of reach (D-28): the page saves its last
+            // readings while live, and the app keeps a copy of the page.
+            assertTrue(
+                "the live page should have saved its last readings",
+                js(scenario, "localStorage.getItem('van-core.last-readings') !== null") == "true",
+            )
+            val kept = File(ctx.filesDir, "offline/" + OfflinePage.fileName(mock))
+            assertTrue("the app should have kept a copy of the page at $kept", await(20_000) { kept.isFile })
         }
     }
 
@@ -65,6 +77,8 @@ class ScreensTest {
     fun a2_appWhenNodeDoesNotAnswer() {
         // Nothing listens on 8081 on the host: connection refused. (Not a low
         // port: Chromium refuses those itself with ERR_UNSAFE_PORT.)
+        // And no saved copy for that address - copies are kept per base URL -
+        // so this is still the status panel, as on a first run.
         MainActivity.baseUrlOverride = "http://10.0.2.2:8081/"
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             Thread.sleep(6_000)
@@ -80,15 +94,42 @@ class ScreensTest {
         shell("svc wifi disable")
         Thread.sleep(3_000)
         MainActivity.baseUrlOverride = mock
-        ActivityScenario.launch(MainActivity::class.java).use {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             Thread.sleep(1_000)
             save("app-4-searching", screen())
             Thread.sleep(12_000)   // requestNetwork times out after 10 s
             save("app-5-no-wifi", screen())
-            // Past the 5 s auto-retry: the panel must not have fallen back to
-            // "searching" while the retry runs.
+            // a1 ran the live page against this same mock, so there is a
+            // saved copy (D-28): out of reach, the dashboard is that copy
+            // with the last readings, not the status panel.
+            assertTrue(
+                "the saved copy should be on screen, not the status panel",
+                visible(scenario, R.id.banner) && !visible(scenario, R.id.panel),
+            )
+            assertTrue(
+                "the page should know it is the saved copy",
+                js(scenario, "typeof OFFLINE_COPY !== 'undefined' && OFFLINE_COPY") == "true",
+            )
+            val restored = js(scenario, "Object.keys(S).length")?.toIntOrNull() ?: 0
+            assertTrue("the saved copy should show the last readings, got $restored entities", restored > 10)
+            assertTrue(
+                "the saved copy must not say AC on: only a live link may",
+                js(scenario, "document.getElementById('h_state_t').textContent") == "\"Offline\"",
+            )
+            // Past the 5 s auto-retry: the copy must not have been swapped for
+            // an error or a "searching" panel while the retry runs.
             Thread.sleep(6_000)
             save("app-6-no-wifi-while-retrying", screen())
+            assertTrue("still the saved copy after a retry", !visible(scenario, R.id.panel))
+
+            // The banner opens the status panel, and the panel goes back.
+            scenario.onActivity { it.findViewById<View>(R.id.banner).performClick() }
+            Thread.sleep(800)
+            save("app-6b-no-wifi-status", screen())
+            assertTrue("a tap on the banner should open the status panel", visible(scenario, R.id.panel))
+            scenario.onActivity { it.findViewById<View>(R.id.btn_offline).performClick() }
+            Thread.sleep(800)
+            assertTrue("Show last readings should close the panel again", !visible(scenario, R.id.panel))
         }
         shell("svc wifi enable")
         Thread.sleep(8_000)
@@ -149,6 +190,39 @@ class ScreensTest {
                 watts != null && watts in 40f..60f,
             )
 
+            // The explorer (D-28). A card opens full screen on what it held...
+            scenario.onActivity { it.findViewById<View>(R.id.card_temp).performClick() }
+            Thread.sleep(1_500)
+            save("app-9-explore-temp", screen())
+            val ex = ChartExplorer.last
+            assertNotNull("the temperature card should open the explorer", ex)
+            assertTrue(
+                "the explorer should give min/max/mean of what is in view, got \"${ex!!.statsText()}\"",
+                ex.statsText().contains("fridge") && ex.statsText().contains("mean"),
+            )
+            // ...out to the whole archive, which it re-reads in min/max slices
+            // rather than plotting every row (HistoryStore.traces)...
+            instr.runOnMainSync { ex.chartView.setView(ex.chartView.extentFrom(), ex.chartView.extentTo()) }
+            Thread.sleep(2_000)
+            save("app-a-explore-whole", screen())
+            // ...and in to two hours with a readout, where the rows come raw.
+            instr.runOnMainSync {
+                val c = ex.chartView
+                val mid = (c.viewFrom() + c.viewTo()) / 2
+                c.setView(mid - 3_600, mid + 3_600)
+                c.showCursor(mid)
+            }
+            Thread.sleep(2_000)
+            save("app-b-explore-zoomed", screen())
+            instr.runOnMainSync { ex.dismiss() }
+
+            // A derived chart explores what the tab computed: overhead bars.
+            scenario.onActivity { it.findViewById<View>(R.id.card_overhead).performClick() }
+            Thread.sleep(1_500)
+            save("app-c-explore-overhead", screen())
+            instr.runOnMainSync { ChartExplorer.last?.dismiss() }
+            Thread.sleep(500)
+
             // All-time range: a different read path, and the one that has to
             // cope with the largest table.
             scenario.onActivity { it.findViewById<View>(R.id.h_range_all).performClick() }
@@ -165,6 +239,23 @@ class ScreensTest {
             Thread.sleep(500)
         }
         return false
+    }
+
+    private fun visible(scenario: ActivityScenario<MainActivity>, id: Int): Boolean {
+        var out = false
+        scenario.onActivity { out = it.findViewById<View>(id).visibility == View.VISIBLE }
+        return out
+    }
+
+    /** [expr] evaluated in the dashboard's page, as JSON; null if it did not answer in 5 s. */
+    private fun js(scenario: ActivityScenario<MainActivity>, expr: String): String? {
+        val done = CountDownLatch(1)
+        var out: String? = null
+        scenario.onActivity {
+            it.findViewById<WebView>(R.id.web).evaluateJavascript(expr) { r -> out = r; done.countDown() }
+        }
+        done.await(5, TimeUnit.SECONDS)
+        return out
     }
 
     private fun text(scenario: ActivityScenario<MainActivity>, id: Int): String {

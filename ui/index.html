@@ -43,10 +43,16 @@
   with no CA and no clock to validate a certificate against. A self-signed cert
   would trade the URL bar for an interstitial, which is worse. Accepted.
 
-  No service worker for the same reason (not a secure context), and none is
-  wanted: the page is already served from flash on the same origin as the API
-  it drives, so there is nothing an offline cache would add.
+  No service worker for the same reason (not a secure context). A browser
+  therefore cannot open this page away from the van at all; the phone app can,
+  because it keeps a copy of it (D-28, app/README.md "Offline"). That copy
+  shows the last readings this page saved in localStorage - see "last
+  readings" in the script - and switches nothing.
 -->
+<!-- Tells the app this page may be kept and shown from a saved copy when
+     van-core is out of reach. A page without it (older firmware, or something
+     else answering at 192.168.4.1) is never kept. -->
+<meta name="van-offline" content="1">
 <link rel="manifest" href="/van-ui/manifest.webmanifest">
 <link rel="icon" href="/van-ui/icon.png">
 <link rel="apple-touch-icon" href="/van-ui/icon.png">
@@ -153,6 +159,8 @@ h3{margin:16px 0 4px;font-size:12px;font-weight:600;letter-spacing:.08em;
 .flow .chip text{font-size:10px;font-weight:700;letter-spacing:.05em;fill:var(--dim)}
 .flow .chip.on rect{stroke:oklch(0.48 0.10 72)}
 .flow .chip.on text{fill:var(--warn)}
+.flow.stale .chip.on rect{stroke:var(--dim)}
+.flow.stale .chip.on text{fill:var(--muted)}
 .flow text.stale{fill:var(--dim)}
 .flow tspan.stale{fill:var(--dim)}
 .flowsum{display:flex;justify-content:space-between;gap:12px;margin-top:10px;
@@ -233,6 +241,7 @@ h3{margin:16px 0 4px;font-size:12px;font-weight:600;letter-spacing:.08em;
 .num button{width:42px;height:42px;border-radius:50%;border:1px solid var(--line);
   background:var(--card2);font-size:20px;line-height:1;cursor:pointer}
 .num output{min-width:72px;text-align:center;font-weight:600;font-size:16px}
+.num button:disabled{opacity:.35}
 @media (max-width:360px){
   .num button{width:38px;height:38px}
   .num output{min-width:60px;font-size:15px}
@@ -679,6 +688,19 @@ function key(id) {
   return k;
 }
 let linkUp = null, lastMsg = 0;
+// When the link most recently came up, and when anything was last heard from
+// the node - this session, or the session that saved the last readings.
+let linkSince = 0, lastSeen = 0;
+
+/* The app is showing a saved copy of this page because van-core is out of
+ * reach (D-28). It says so through its bridge; a browser has no such thing,
+ * and an older app neither, and both get the live page as before. A saved
+ * copy opens no stream and sends nothing: there is no node to send it to,
+ * and on mobile data a request for 192.168.4.1 would go to the carrier. */
+const OFFLINE_COPY = (function () {
+  try { return !!(window.VanApp && VanApp.offlineCopy && VanApp.offlineCopy()); }
+  catch (e) { return false; }
+})();
 
 const $  = function (s, r) { return (r || document).querySelector(s); };
 const $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
@@ -693,8 +715,61 @@ function num(k)  { var e = ent(k); var v = e && e.value;
 function bool(k) { var e = ent(k); if (!e) return null;
                    if (typeof e.value === "boolean") return e.value;
                    return e.state === "ON" || e.state === "on" || e.value === 1; }
-function fresh(k){ var e = ent(k); return !!e && (Date.now() - e.at) < STALE_MS; }
+// A restored reading is never fresh, however recently it was saved: it is
+// what the node said then, not what it says now.
+function fresh(k){ var e = ent(k); return !!e && !e.restored && (Date.now() - e.at) < STALE_MS; }
 function txt(k)  { var e = ent(k); return e && e.state != null ? String(e.state) : ""; }
+
+/* --- last readings, kept on the phone -------------------------------------
+ * While the link is live the page writes the newest state of every entity to
+ * localStorage, each with the time it arrived. On the next open it restores
+ * them before the stream is up, and the app's saved copy (OFFLINE_COPY) shows
+ * nothing else. Restored entries are marked: never fresh, never switchable,
+ * and dropped once the live stream has had time to replace them, so an
+ * entity a reflash removed does not linger. A few kB, every 10 s. */
+const SNAP_KEY = "van-core.last-readings";
+var lastSave = 0, purged = false;
+function saveSnap() {
+  lastSave = Date.now();
+  var s = {};
+  Object.keys(S).forEach(function (k) {
+    var e = S[k];
+    s[k] = { id: e.id, value: e.value, state: e.state, name: e.name, options: e.options, at: e.at };
+  });
+  // Storage full, disabled or a private window: the live page does not care.
+  try { localStorage.setItem(SNAP_KEY, JSON.stringify({ v: 1, seen: lastMsg, s: s })); } catch (e) {}
+}
+function restoreSnap() {
+  var j = null;
+  try { j = JSON.parse(localStorage.getItem(SNAP_KEY) || "null"); } catch (e) { return; }
+  if (!j || j.v !== 1 || !j.s) return;
+  Object.keys(j.s).forEach(function (k) {
+    var e = j.s[k];
+    if (!e || typeof e.id !== "string" || S[k]) return;
+    S[k] = { id: e.id, value: e.value, state: e.state, name: e.name, options: e.options,
+             at: e.at || 0, restored: true };
+  });
+  if (typeof j.seen === "number") lastSeen = j.seen;
+}
+var DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+// "14:32", "yesterday 14:32", "Tue 13 Oct 14:32": when, in the words a
+// person uses, not an ISO string.
+function when(t) {
+  var d = new Date(t), now = new Date();
+  var hm = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+  var today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  if (t >= today) return hm;
+  if (t >= today - 86400000) return "yesterday " + hm;
+  return DAYS[d.getDay()] + " " + d.getDate() + " " + MONTHS[d.getMonth()] + " " + hm;
+}
+function ago(t) {
+  var s = (Date.now() - t) / 1000;
+  if (s < 90) return "just now";
+  if (s < 3600) return Math.round(s / 60) + " min ago";
+  if (s < 36 * 3600) return Math.round(s / 3600) + " h ago";
+  return Math.round(s / 86400) + " days ago";
+}
 
 /* --- transport ---------------------------------------------------------- */
 // The live stream, kept module-level so the watchdog and the wake handler can
@@ -714,8 +789,10 @@ function connect() {
     var k = key(d.id), prev = S[k];
     // Two node entities slugging to one key would make a widget flip between
     // them, and nothing here can tell which was meant - so Diag says so. One
-    // entity seen in both forms is a reflash under an open page, not a clash.
-    if (prev && prev.id !== d.id && (prev.id.indexOf("/") < 0) === (d.id.indexOf("/") < 0))
+    // entity seen in both forms is a reflash under an open page, not a clash;
+    // nor is one restored from a firmware that named it slightly differently.
+    if (prev && !prev.restored && prev.id !== d.id &&
+        (prev.id.indexOf("/") < 0) === (d.id.indexOf("/") < 0))
       CLASH[k] = true;
     S[k] = { id: d.id, value: d.value, state: d.state, name: d.name,
              options: d.option || d.options, at: Date.now() };
@@ -734,13 +811,21 @@ function connect() {
 function setLink(up) {
   if (up === linkUp) return;
   linkUp = up;
+  if (up) linkSince = Date.now();
   render();
 }
 // A dead SSE stream can still look open - it does not always fire onerror, and
 // an iOS home-screen app that has been backgrounded comes back to a socket that
 // is silently gone. So do not merely report it: tear it down and reconnect.
+// A saved copy has no stream to watch; it only re-renders, so "2 h ago" ages.
 setInterval(function () {
-  if (Date.now() - lastMsg > 20000) { setLink(false); connect(); }
+  if (!OFFLINE_COPY && Date.now() - lastMsg > 20000) { setLink(false); connect(); }
+  // Thirty seconds live is long past the initial burst: whatever is still
+  // restored, the node no longer publishes.
+  if (!purged && linkUp === true && Date.now() - linkSince > 30000) {
+    Object.keys(S).forEach(function (k) { if (S[k].restored) delete S[k]; });
+    purged = true;
+  }
   render();
 }, 2000);
 
@@ -748,10 +833,14 @@ setInterval(function () {
 // launches spend most of their life backgrounded, and the first thing wanted on
 // unlocking the phone is a live number, not 20s of a stale one.
 document.addEventListener("visibilitychange", function () {
+  if (OFFLINE_COPY) return;
+  if (document.hidden && linkUp === true) saveSnap();
   if (!document.hidden && Date.now() - lastMsg > 5000) connect();
 });
+window.addEventListener("pagehide", function () { if (!OFFLINE_COPY && linkUp === true) saveSnap(); });
 
 function post(path) {
+  if (OFFLINE_COPY) return Promise.resolve();
   return fetch(path, { method: "POST" }).catch(function () { setLink(false); });
 }
 
@@ -760,6 +849,7 @@ function post(path) {
 // this page is the one that actually gets opened. 404 on builds without the
 // log - harmless, so the failure is ignored.
 function syncClock() {
+  if (OFFLINE_COPY) return;
   fetch("/soak/clock", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -822,6 +912,9 @@ $$("[data-num]").forEach(function (row) {
   row.appendChild(wrap);
   row._out = out; row._spec = spec;
   function bump(d) {
+    // Never step from a restored value: +0.5 on yesterday's setpoint is a
+    // setpoint nobody chose.
+    if (OFFLINE_COPY || !S[id] || S[id].restored) return;
     var cur = num(id); if (cur === null) return;
     // Snap to the step grid so repeated taps cannot drift off it.
     var v = Math.round((cur + d * step) / step) * step;
@@ -868,7 +961,7 @@ function logStatus() {
   // render() runs on every SSE event, so this is called many times a second
   // while Diag is open. One request per 30 s is plenty for a depth in days,
   // and every request is load on the node that also holds the BLE link.
-  if (Date.now() - logAt < 30000) return;
+  if (OFFLINE_COPY || Date.now() - logAt < 30000) return;
   logAt = Date.now();
   fetch("/soak/status", { cache: "no-store" }).then(function (r) {
     return r.ok ? r.json() : null;
@@ -947,27 +1040,42 @@ function render() {
   var ac = bool("ac_out"); if (ac === null) ac = bool("ac_on");
   var raw = txt("reason");
   var ml = num("man_left"), cooking = ml !== null && ml > 0.5;
-  var ft = num("fridge"), probe = ft !== null && fresh("fridge");
+  var ft = num("fridge");
+  // Live, a probe reading is good only while it is fresh. Not live, every
+  // value is the last one heard and is already shown as such; judging it
+  // stale again would report a probe fault that is only a phone out of range.
+  var probe = ft !== null && (fresh("fridge") || linkUp !== true);
   var hard = num(NUMS.temp_hard[0]);
+  if (linkUp === true) lastSeen = lastMsg;
 
   /* --- app bar: the widget's header, plus the reason in words --- */
+  // Only a live link may say "AC on". Restored or frozen state stays on the
+  // cards below, greyed; the bar that every tab shows says how old it is.
   var st, col;
-  if (!any)              { st = "--";           col = "var(--dim)"; }
+  if (linkUp !== true)   { st = linkUp === null && !OFFLINE_COPY ? "--" : "Offline"; col = "var(--dim)"; }
+  else if (!any)         { st = "--";           col = "var(--dim)"; }
   else if (parked)       { st = "Parked";       col = "var(--alt)"; }
   else if (ble === false){ st = "P310 offline"; col = "var(--warn)"; }
   else if (ac === true)  { st = "AC on";        col = force ? "var(--bad)" : "var(--warn)"; }
   else if (ac === false) { st = "AC off";       col = "var(--muted)"; }
   else                   { st = "AC ?";         col = "var(--muted)"; }
-  if (linkUp === false) col = "var(--dim)";
   $("#h_state").style.color = col;
   setText("h_state_t", st);
-  var why = linkUp === false ? "No connection to van-core"
+  var seen = lastSeen ? "last reading " + when(lastSeen) + " · " + ago(lastSeen) : "";
+  var why = OFFLINE_COPY ? (seen ? "Not live · " + seen : "No readings saved on this phone yet")
+          : linkUp === false ? "No connection to van-core" + (seen ? " · " + seen : "")
+          : linkUp === null ? "connecting…" + (seen ? " " + seen : "")
           : !any ? "connecting…"
           : (REASON[raw] || raw || "--") + (cooking ? " · " + Math.round(ml) + " min left" : "");
   setText("h_why", why);
 
+  // Keep the last readings for the next open, and for the app's saved copy.
+  // Not in the first seconds of a link: the burst is still arriving.
+  if (linkUp === true && !OFFLINE_COPY && Date.now() - linkSince > 3000 &&
+      Date.now() - lastSave > 10000) saveSnap();
+
   renderAlerts(soc, ble, parked, force, raw, ft, probe, hard);
-  renderFlow(soc, pin, pout, parked, linkUp === false || ble === false);
+  renderFlow(soc, pin, pout, parked, linkUp !== true || ble === false);
   renderFridge(ft, probe, hard, parked);
   renderActions(cooking, ml);
   renderControls(parked);
@@ -981,16 +1089,25 @@ function renderAlerts(soc, ble, parked, force, raw, ft, probe, hard) {
     a.push('<div class="alert ' + kind + '"><svg class="i"><use href="#' + icon + '"/></svg><div><b>' +
            esc(title) + "</b><span>" + esc(body) + "</span>" + (btn || "") + "</div></div>");
   }
-  if (linkUp === false)
+  // Out of range is the normal state of a phone away from the van, so the
+  // saved copy says so plainly rather than in red. Everything under it is as
+  // the node last reported it, and says when.
+  if (OFFLINE_COPY)
+    add("info", "ic-linkoff",
+        lastSeen ? "Not live – last readings " + when(lastSeen) : "Not live – nothing saved yet",
+        lastSeen ? "Saved on this phone " + ago(lastSeen) + ". Nothing can be switched " +
+                   "from here; join van-core Wi-Fi to go live."
+                 : "Open this app once on van-core Wi-Fi and the last readings are kept here.");
+  else if (linkUp === false)
     add("bad", "ic-linkoff", "No connection to van-core",
-        "Showing the last values received. Reconnecting…");
+        "Showing the last values received" + (lastSeen ? ", " + when(lastSeen) : "") + ". Reconnecting…");
   // First among the van's own: every other alert assumes the fail-safe is
   // armed, and parked is the one state where it is not.
   if (parked) {
     var d = num("parked_d");
     add("info", "ic-park", "Parked" + (d === null ? "" : " for " + fmtDays(d)),
         "The inverter is held off and the fail-safe is disarmed. Exit before loading food.",
-        '<button class="btn" data-act="unpark">Exit parked mode</button>');
+        OFFLINE_COPY ? "" : '<button class="btn" data-act="unpark">Exit parked mode</button>');
   }
   // Link lost cannot command anything (CLAUDE.md 5.2): AC stays where it was.
   if (ble === false && !parked)
@@ -999,7 +1116,8 @@ function renderAlerts(soc, ble, parked, force, raw, ft, probe, hard) {
   else if (force && !parked)
     add(raw === "boot" ? "info" : "warn", "ic-warn", "Inverter forced on",
         (REASON[raw] || raw || "") + (raw === "boot" ? " – normal for a few minutes after a restart." : ""));
-  if (!parked && (ft === null || !probe) && raw !== "probe stale" && ble !== false && Object.keys(S).length)
+  if (linkUp === true && !parked && (ft === null || !probe) && raw !== "probe stale" &&
+      ble !== false && Object.keys(S).length)
     add("warn", "ic-warn", "Fridge probe not reporting",
         "After 5 minutes the inverter is forced on.");
   if (!parked && probe && hard !== null && ft > hard)
@@ -1047,12 +1165,16 @@ function renderFlow(soc, pin, pout, parked, stale) {
   putW("fv_sol", sol, stale || !fresh("solar_in"));
   putW("fv_aci", aci, stale || !fresh("ac_in"));
   putW("fv_out", pout, stale || !fresh("out"));
-  $("#fi_sol").style.color = sol !== null && sol > 1 ? "var(--ok)" : "var(--dim)";
-  $("#fi_aci").style.color = aci !== null && aci > 1 ? "var(--ok)" : "var(--dim)";
-  $("#fi_out").style.color = pout !== null && pout > 1 ? "var(--warn)" : "var(--dim)";
-  link("l_sol", "a_sol", sol, "var(--ok)");
-  link("l_aci", "a_aci", aci, "var(--ok)");
-  link("l_out", "a_out", pout, "var(--warn)");
+  // Frozen flows keep their widths, so the last picture still reads, but lose
+  // their colour: a green arrow says "charging now".
+  var cin = stale ? "var(--muted)" : "var(--ok)", cout = stale ? "var(--muted)" : "var(--warn)";
+  $("#fi_sol").style.color = sol !== null && sol > 1 ? cin : "var(--dim)";
+  $("#fi_aci").style.color = aci !== null && aci > 1 ? cin : "var(--dim)";
+  $("#fi_out").style.color = pout !== null && pout > 1 ? cout : "var(--dim)";
+  link("l_sol", "a_sol", sol, cin);
+  link("l_aci", "a_aci", aci, cin);
+  link("l_out", "a_out", pout, cout);
+  $("#flow").classList.toggle("stale", !!stale);
 
   // The vessel: level, band colour, the figure on top.
   var c = stale ? "var(--dim)" : band(soc);
@@ -1095,7 +1217,7 @@ function renderFlow(soc, pin, pout, parked, stale) {
 }
 
 function renderFridge(ft, probe, hard, parked) {
-  var stale = linkUp === false;
+  var stale = linkUp !== true;
   var ct = num("cabin");
   setText("t_fridge", deg(ft), stale || (ft !== null && !probe));
   setText("t_cabin", deg(ct), stale || (ct !== null && !fresh("cabin")));
@@ -1160,7 +1282,9 @@ function renderControls(parked) {
     var st = S[E[SW[k]]];
     var on = st ? (st.value === true || st.state === "ON") : false;
     b.setAttribute("aria-checked", String(on));
-    b.disabled = !st;
+    // A restored position is shown, not offered: flipping it would command
+    // from a state the node may no longer be in.
+    b.disabled = !st || !!st.restored || OFFLINE_COPY;
   });
   var d = num("parked_d");
   setText("park_sub", parked
@@ -1179,6 +1303,7 @@ function renderSetup() {
     var v = num(row._spec[0]);
     var t = v === null ? "--" : v.toFixed(row._spec[3]) + " " + row._spec[2];
     if (row._out.textContent !== t) row._out.textContent = t;
+    row._out.classList.toggle("stale", linkUp !== true);
   });
 }
 
@@ -1215,8 +1340,17 @@ function renderDiag(ft, probe, raw) {
   }).join(""));
 }
 
+restoreSnap();
+if (OFFLINE_COPY) {
+  // Switches are handled in renderControls; everything else that could
+  // command the node, or navigate to a page the node would have to serve,
+  // is greyed once here. The tab bar is not in main and stays usable.
+  $$("main button").forEach(function (b) { b.disabled = true; });
+  linkUp = false;
+} else {
+  connect();
+}
 render();
-connect();
 </script>
 </body>
 </html>

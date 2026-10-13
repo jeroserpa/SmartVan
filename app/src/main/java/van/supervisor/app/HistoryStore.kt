@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import kotlin.math.max
 
 /**
  * The phone's copy of van-core's log — and the reason any of this is native.
@@ -173,9 +174,12 @@ class HistoryStore(context: Context) :
         // silently, shifting every series onto its neighbour's name.
         val sel = map.joinToString(", ") { "c${it.first}" }
         val rows = ArrayList<SoakCsv.Row>()
+        // The NEWEST rows when the range holds more than the limit. Oldest-
+        // first, an archive past ~23 days of 10 s rows made "All" stop at
+        // its first three weeks and never show anything newer again.
         readableDatabase.rawQuery(
-            "SELECT epoch, boot, uptime, clock, $sel FROM $TABLE_ROWS " +
-                "WHERE epoch BETWEEN ? AND ? ORDER BY epoch LIMIT ?",
+            "SELECT * FROM (SELECT epoch, boot, uptime, clock, $sel FROM $TABLE_ROWS " +
+                "WHERE epoch BETWEEN ? AND ? ORDER BY epoch DESC LIMIT ?) ORDER BY epoch",
             arrayOf(from.toString(), to.toString(), limit.toString()),
         ).use { c ->
             while (c.moveToNext()) {
@@ -195,6 +199,90 @@ class HistoryStore(context: Context) :
             }
         }
         return SoakCsv.Table(names, rows)
+    }
+
+    /**
+     * One column over a window, as plotted. [lo] and [hi] are equal for raw
+     * rows; for a reduced read they are each slice's minimum and maximum.
+     */
+    class Trace(val name: String, val x: LongArray, val lo: FloatArray, val hi: FloatArray?)
+
+    /**
+     * [names] over `[from, to]`, for the chart explorer: raw rows while the
+     * window holds fewer than about [points], otherwise one point per slice
+     * of time with the slice's minimum and maximum. Never a plain downsample:
+     * a 30 s spike in a month of data has to survive the zoom level a month
+     * is viewed at. The cost is bounded by [points], not by the archive -
+     * which has no upper bound by design.
+     *
+     * Raw reads break the line where the node rebooted (a NAN between the
+     * last row of one boot and the first of the next), which a gap in time
+     * alone does not always show: the ring keeps logging across a fast one.
+     */
+    fun traces(names: List<String>, from: Long, to: Long, points: Int): List<Trace> {
+        val slots = slotMap().associate { it.second to it.first }
+        val cols = names.filter { it in slots }
+        if (cols.isEmpty() || to <= from) return emptyList()
+        val db = readableDatabase
+        val n = db.rawQuery(
+            "SELECT COUNT(*) FROM $TABLE_ROWS WHERE epoch BETWEEN ? AND ?",
+            arrayOf(from.toString(), to.toString()),
+        ).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+
+        if (n <= points) {
+            val x = ArrayList<Long>(n + 16)
+            val v = cols.map { ArrayList<Float>(n + 16) }
+            var lastBoot = Int.MIN_VALUE
+            val sel = cols.joinToString(", ") { "c${slots.getValue(it)}" }
+            db.rawQuery(
+                "SELECT epoch, boot, $sel FROM $TABLE_ROWS WHERE epoch BETWEEN ? AND ? ORDER BY epoch",
+                arrayOf(from.toString(), to.toString()),
+            ).use { c ->
+                while (c.moveToNext()) {
+                    val t = c.getLong(0)
+                    val boot = c.getInt(1)
+                    if (lastBoot != Int.MIN_VALUE && boot != lastBoot && x.isNotEmpty()) {
+                        x.add(t - 1)
+                        v.forEach { it.add(Float.NaN) }
+                    }
+                    lastBoot = boot
+                    x.add(t)
+                    for (i in cols.indices) v[i].add(if (c.isNull(2 + i)) Float.NaN else c.getFloat(2 + i))
+                }
+            }
+            val xs = x.toLongArray()
+            return cols.mapIndexed { i, name -> Trace(name, xs, v[i].toFloatArray(), null) }
+        }
+
+        // Bucket width as a literal, not a bound argument: rawQuery binds
+        // strings, and integer division needs an integer. It is computed
+        // here, never taken from input.
+        val b = max(1L, (to - from) / points)
+        val sel = cols.joinToString(", ") {
+            val s = slots.getValue(it)
+            "MIN(c$s), MAX(c$s)"
+        }
+        val x = ArrayList<Long>(points + 16)
+        val lo = cols.map { ArrayList<Float>(points + 16) }
+        val hi = cols.map { ArrayList<Float>(points + 16) }
+        db.rawQuery(
+            "SELECT MIN(epoch), MAX(epoch), $sel FROM $TABLE_ROWS WHERE epoch BETWEEN ? AND ? " +
+                "GROUP BY epoch / $b ORDER BY epoch / $b",
+            arrayOf(from.toString(), to.toString()),
+        ).use { c ->
+            while (c.moveToNext()) {
+                x.add((c.getLong(0) + c.getLong(1)) / 2)
+                for (i in cols.indices) {
+                    val a = 2 + 2 * i
+                    lo[i].add(if (c.isNull(a)) Float.NaN else c.getFloat(a))
+                    hi[i].add(if (c.isNull(a + 1)) Float.NaN else c.getFloat(a + 1))
+                }
+            }
+        }
+        val xs = x.toLongArray()
+        return cols.mapIndexed { i, name ->
+            Trace(name, xs, lo[i].toFloatArray(), hi[i].toFloatArray())
+        }
     }
 
     class Span(val rows: Int, val oldest: Long, val newest: Long)

@@ -3,6 +3,7 @@ package van.supervisor.app
 import android.annotation.TargetApi
 import android.content.ContentValues
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.media.MediaScannerConnection
 import android.net.ConnectivityManager
 import android.net.Network
@@ -33,12 +34,18 @@ import androidx.annotation.VisibleForTesting
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.core.widget.TextViewCompat
 import androidx.lifecycle.Lifecycle
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.tabs.TabLayout
+import java.io.ByteArrayInputStream
 import java.io.File
+import java.net.ConnectException
+import java.net.NoRouteToHostException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -69,6 +76,12 @@ import kotlin.concurrent.thread
  * Everything else in this class is about never showing a blank or a raw
  * WebView error: the page, or a panel that says what is happening and what to
  * do, or the page with a banner when the link dropped underneath it.
+ *
+ * And, out of reach, the page anyway (D-28): the node's own page, kept on the
+ * phone by [OfflinePage], showing the last readings it saved, with a banner
+ * that says why it is not live and opens the panel on a tap. The copy is
+ * loaded under the node's URL so it finds those readings in its own storage,
+ * and it talks to nobody - see shouldInterceptRequest.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -97,6 +110,9 @@ class MainActivity : AppCompatActivity() {
 
         /** When the last update check started (elapsedRealtime); process-wide, so app switching does not repeat it. */
         private var lastUpdateCheck: Long? = null
+
+        /** The saved copy's history entry: the node's URL, so the copy keeps the node's origin, marked. */
+        private const val SAVED_SUFFIX = "#saved"
     }
 
     private enum class Phase { SEARCHING, CONNECTING, NO_WIFI, UNREACHABLE, READY }
@@ -113,7 +129,23 @@ class MainActivity : AppCompatActivity() {
     private lateinit var panelActions: View
     private lateinit var panelDetails: TextView
     private lateinit var btnDetails: MaterialButton
+    private lateinit var btnOffline: MaterialButton
     private val main = Handler(Looper.getMainLooper())
+
+    /** The phone's copy of the node's page (D-28). */
+    private val offlinePage by lazy { OfflinePage(this) }
+    /**
+     * The WebView holds the saved copy, not the live page. Volatile: the
+     * bridge reads it on the JavaBridge thread and shouldInterceptRequest on
+     * WebView's IO thread.
+     */
+    @Volatile private var offlineShown = false
+    /** The status panel is open over the saved copy, by a tap on the banner. */
+    private var statusOpen = false
+    /** A reachability check is out while the saved copy is up. */
+    private var probing = false
+    /** The live page has been kept once this launch. It changes only by OTA. */
+    private var pageKept = false
     private val startedAt = SystemClock.elapsedRealtime()
 
     private lateinit var tabs: TabLayout
@@ -168,6 +200,7 @@ class MainActivity : AppCompatActivity() {
         panelActions = findViewById(R.id.panel_actions)
         panelDetails = findViewById(R.id.panel_details)
         btnDetails = findViewById(R.id.btn_details)
+        btnOffline = findViewById(R.id.btn_offline)
 
         setupWebView()
         setupTabs()
@@ -182,6 +215,10 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.btn_retry).setOnClickListener { load() }
         findViewById<View>(R.id.btn_wifi).setOnClickListener { openWifiSettings() }
         btnDetails.setOnClickListener { toggleDetails() }
+        // Over the saved copy the banner is the way to the panel, and the
+        // panel's own button is the way back.
+        banner.setOnClickListener { if (offlineShown) openStatus(true) }
+        btnOffline.setOnClickListener { openStatus(false) }
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -190,6 +227,8 @@ class MainActivity : AppCompatActivity() {
                 // is what anyone who got there by tapping a tab expects.
                 if (tabs.selectedTabPosition != 0) {
                     tabs.getTabAt(0)?.select()
+                } else if (statusOpen && offlineShown) {
+                    openStatus(false)
                 } else if (phase == Phase.READY && web.canGoBack()) {
                     web.goBack()
                 } else {
@@ -297,7 +336,29 @@ class MainActivity : AppCompatActivity() {
 
             override fun onPageFinished(view: WebView, url: String) {
                 swipe.isRefreshing = false
-                if (phase == Phase.CONNECTING && url != failedUrl) setPhase(Phase.READY)
+                // The saved copy finishing is not van-core answering.
+                if (offlineShown || url.endsWith(SAVED_SUFFIX)) return
+                if (phase == Phase.CONNECTING && url != failedUrl) {
+                    setPhase(Phase.READY)
+                    // Only the full UI: the `/` fallback is a bring-up build's
+                    // stock page, which has nothing to keep.
+                    if (url.startsWith(uiUrl)) keepPage()
+                }
+            }
+
+            // The saved copy talks to nobody. With the process unbound, a
+            // request for 192.168.4.1 would go out on mobile data, and the
+            // page asks for its icon and manifest whatever it is told. The
+            // copy itself is loaded as data, not fetched, so it never
+            // arrives here as a main-frame request.
+            override fun shouldInterceptRequest(
+                view: WebView, request: WebResourceRequest
+            ): WebResourceResponse? {
+                if (!offlineShown || request.isForMainFrame) return null
+                return WebResourceResponse(
+                    "text/plain", "utf-8", 404, "Not live", emptyMap(),
+                    ByteArrayInputStream(ByteArray(0)),
+                )
             }
 
             // A crashed or killed renderer takes the WebView with it. Rebuild
@@ -316,10 +377,18 @@ class MainActivity : AppCompatActivity() {
         if (p == Phase.READY) {
             panel.visibility = View.GONE
             banner.visibility = View.GONE
+            statusOpen = false
             return
         }
         swipe.isRefreshing = false
-        panel.visibility = View.VISIBLE
+
+        // Not live, and a saved copy of the page exists: show that, with a
+        // line saying why, rather than a status screen (D-28). The panel
+        // below is still filled in; it is one tap on the banner away.
+        val copy = showOfflineCopy()
+        btnOffline.visibility = if (copy) View.VISIBLE else View.GONE
+        panel.visibility = if (copy && !statusOpen) View.GONE else View.VISIBLE
+        if (copy) offlineBanner(p)
 
         val busy = p == Phase.SEARCHING || p == Phase.CONNECTING
         panelProgress.visibility = if (busy) View.VISIBLE else View.GONE
@@ -356,6 +425,122 @@ class MainActivity : AppCompatActivity() {
         panelIcon.setColorFilter(getColor(R.color.muted))
         val pad = (20 * resources.displayMetrics.density).toInt()
         panelIcon.setPadding(pad, pad, pad, pad)
+    }
+
+    // --- the saved copy (D-28) -------------------------------------------------
+
+    /** Put the saved copy on screen if it is not already. False when there is none. */
+    private fun showOfflineCopy(): Boolean {
+        if (offlineShown) return true
+        val html = offlinePage.load(rootUrl) ?: return false
+        offlineShown = true
+        // Under the node's own URL, so the page has the node's origin and
+        // with it the readings it saved in localStorage while live. The
+        // history entry is marked so its onPageFinished cannot pass for the
+        // node answering.
+        web.loadDataWithBaseURL(uiUrl, html, "text/html", "UTF-8", uiUrl + SAVED_SUFFIX)
+        return true
+    }
+
+    private fun offlineBanner(p: Phase) {
+        val (text, icon) = when (p) {
+            Phase.SEARCHING -> R.string.st_off_searching to R.drawable.ic_refresh
+            Phase.CONNECTING -> R.string.st_off_connecting to R.drawable.ic_refresh
+            Phase.NO_WIFI -> R.string.st_off_nowifi to R.drawable.ic_wifi_off
+            else -> R.string.st_off_unreachable to R.drawable.ic_link_off
+        }
+        // Muted, not amber: away from the van is the normal state of a phone,
+        // not a fault. The chevron says there is more behind it.
+        styleBanner(getString(text), R.color.muted, icon, R.drawable.ic_chevron_right)
+    }
+
+    /** The live page is up and the Wi-Fi went from under it. */
+    private fun lostBanner() =
+        styleBanner(getString(R.string.st_lost_banner), R.color.warn, R.drawable.ic_wifi_off, 0)
+
+    private fun styleBanner(text: String, color: Int, start: Int, end: Int) {
+        banner.text = text
+        banner.setTextColor(getColor(color))
+        banner.setCompoundDrawablesRelativeWithIntrinsicBounds(start, 0, end, 0)
+        TextViewCompat.setCompoundDrawableTintList(banner, ColorStateList.valueOf(getColor(color)))
+        banner.visibility = View.VISIBLE
+    }
+
+    /** Open or close the status panel over the saved copy. */
+    private fun openStatus(open: Boolean) {
+        statusOpen = open
+        if (phase != Phase.READY) setPhase(phase)
+    }
+
+    /**
+     * Keep the live page for next time. A second GET of /ui, once per
+     * launch: a WebView will not hand over a page's bytes, and the node
+     * serves it from flash with no heap copy, so it costs the node nothing
+     * worth saving.
+     */
+    private fun keepPage() {
+        if (pageKept) return
+        pageKept = true
+        val net = boundNetwork
+        thread(name = "keep-page", isDaemon = true) {
+            val ok = runCatching {
+                offlinePage.save(rootUrl, offlinePage.get(net, uiUrl).body)
+            }.getOrDefault(false)
+            // A page that is not keepable (older firmware) is not worth asking
+            // for again this launch; a failed read is.
+            if (!ok && offlinePage.load(rootUrl) == null) main.post { pageKept = false }
+        }
+    }
+
+    /**
+     * Over the saved copy, ask the node before loading it: putting the live
+     * URL into the WebView would swap the copy for an error page on every
+     * retry, five seconds apart, for as long as the van is out of reach.
+     *
+     * The copy is replaced only once something answers. /ui first, keeping it
+     * if it is the full UI; then `/`, because a bring-up build closes the
+     * socket on /ui and serves only ESPHome's stock page - that is still the
+     * node answering, and it must not be left behind a copy of a firmware it
+     * no longer runs. Nothing answering at all (refused, timed out) skips
+     * the second request.
+     */
+    private fun probe(quiet: Boolean) {
+        if (probing) return
+        probing = true
+        if (!quiet) setPhase(Phase.CONNECTING)
+        val net = boundNetwork
+        thread(name = "van-probe", isDaemon = true) {
+            var why: String? = null
+            val ui = runCatching { offlinePage.get(net, uiUrl) }
+            val answered = ui.fold(
+                onSuccess = { r ->
+                    if (r.code == 200) offlinePage.save(rootUrl, r.body)
+                    r.code == 200 || runCatching { offlinePage.get(net, rootUrl).code == 200 }
+                        .getOrDefault(false)
+                },
+                onFailure = { e ->
+                    why = "$uiUrl\n${e.javaClass.simpleName}: ${e.message ?: ""}"
+                    e !is ConnectException && e !is SocketTimeoutException &&
+                        e !is NoRouteToHostException && e !is UnknownHostException &&
+                        runCatching { offlinePage.get(net, rootUrl).code == 200 }.getOrDefault(false)
+                },
+            )
+            main.post {
+                probing = false
+                if (isDestroyed) return@post
+                if (answered) {
+                    pageKept = true
+                    offlineShown = false
+                    statusOpen = false
+                    // Quiet: the copy stays on screen until the live page
+                    // commits over it, so there is no flash of anything else.
+                    open(uiUrl, quiet = true)
+                } else {
+                    lastError = why ?: "$uiUrl\nno answer"
+                    setPhase(Phase.UNREACHABLE)
+                }
+            }
+        }
     }
 
     private fun toggleDetails() = showDetails(panelDetails.visibility != View.VISIBLE)
@@ -425,7 +610,7 @@ class MainActivity : AppCompatActivity() {
                     cm.bindProcessToNetwork(null)
                     boundNetwork = null
                     // Keep the last values on screen, marked, instead of blanking.
-                    if (phase == Phase.READY) banner.visibility = View.VISIBLE
+                    if (phase == Phase.READY) lostBanner()
                     else setPhase(Phase.NO_WIFI)
                 }
             }
@@ -456,7 +641,7 @@ class MainActivity : AppCompatActivity() {
         }
         failedUrl = null
         lastError = null
-        open(uiUrl, quiet)
+        if (offlineShown) probe(quiet) else open(uiUrl, quiet)
     }
 
     private fun open(url: String, quiet: Boolean) {
@@ -498,6 +683,15 @@ class MainActivity : AppCompatActivity() {
             main.post { flash.start() }
             return "ok"
         }
+
+        /**
+         * Whether this is the phone's saved copy of the page rather than the
+         * live one (D-28). The page asks once, at load, and then neither
+         * connects nor sends anything. Not origin-checked: it reveals nothing,
+         * and the answer only ever makes a page do less.
+         */
+        @JavascriptInterface
+        fun offlineCopy(): Boolean = offlineShown
     }
 
     /**

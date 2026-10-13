@@ -1323,3 +1323,85 @@ whenever the cabinet is cold. When the heater lands, separate the two rather
 than loosen the limit: most likely van-core switches the fridge's own socket
 (the Athom plug already in the fridge's supply) off while spare solar heats
 water, with that socket failing toward ON per §5.2.
+
+---
+
+## 2026-10-13 — D-28: the dashboard opens out of range, and History charts open to be explored
+
+**Asked for:** the app's screens available with no connection, to show them
+at any moment; and History charts that can be opened and navigated, because
+more data makes them harder to read.
+
+### 1. The dashboard, out of range
+
+**Decision.** The app keeps the node's own page and shows it, with the last
+readings, whenever van-core cannot be reached. The page saves its readings;
+the app saves the page. Nothing in the saved copy is live or switchable.
+
+**Why the node's page and not one bundled in the APK.** D-25 holds: the page
+ships by OTA in the same commit as the entities it shows. A bundled page
+would be the APK's commit, not the firmware's, and would drift exactly the
+way D-25 refused to let a native dashboard drift. The cost is that the
+feature needs a firmware with this page; an older one is detected
+(`<meta name="van-offline">` is missing) and the app behaves as before.
+
+**Why the page saves the readings, not the app.** The page already holds
+every entity, under the keys the page understands, and it is the only thing
+that knows how to show them. An app-side snapshot would be a second
+duplication of entity ids (the widget's `VanFeed.kt` is the one accepted
+already) or a reach into the page's private variables. `localStorage` under
+the node's origin is shared by the live page and the copy because the copy
+is loaded under the node's URL.
+
+**What makes it safe to look at,** since a stale "AC on" read as current is
+the one misreading that matters:
+
+- Only a live link may put an AC state in the bar every tab shows; otherwise
+  it says `Offline` with the age of the readings.
+- A restored reading is never fresh, so the page's own freshness rules grey
+  it, and no alert fires because the phone is out of range ("probe not
+  reporting" used to appear 45 s into any link drop, which was already
+  wrong).
+- Every control is disabled and `post()` refuses in the copy; a restored
+  switch position is shown but never offered on a live page either, until
+  the node has re-sent it. Stepping a setpoint from a restored value would
+  command a number nobody chose.
+- The copy makes no requests at all (`shouldInterceptRequest`), so a phone
+  on mobile data does not send 192.168.4.1 to the carrier.
+
+**What it is not.** The widget's caveat applies unchanged: it knows only what
+the phone last saw. It is not a remote view of the van, and §12's rule
+stands - nothing here needs a server, a cloud or a router.
+
+### 2. History charts
+
+**Decision.** Every History card opens on a tap into a full-screen explorer:
+pinch and drag through time, tap for values, hide a series from the legend,
+min/max/mean of what is in view. The temperature and power charts re-read
+the archive for whatever window is on screen; overhead and duty explore the
+range they were computed over.
+
+**Why min/max per slice, at screen resolution.** The archive is unbounded by
+design (D-25), so neither the cards nor the explorer may cost what the
+archive costs. Each pixel column draws its samples' minimum and maximum, and
+the store answers a window with at most about one slice per pixel. A plain
+downsample would drop a 30 s spike from a month's view and an average would
+halve it; the envelope keeps it, at a cost set by the screen's width.
+
+**Found on the way, and fixed:**
+- "All" read the *oldest* 200 000 rows. Past ~23 days of archive it would
+  have stopped showing anything new. It now reads the newest.
+- A line was only broken by NAN, so a reboot or a sync hole was drawn as a
+  straight ramp, against the convention the chart's own comment stated. It
+  now breaks on a hole longer than three sample intervals and where `boot`
+  changes.
+- Time labels read `00:00` five times over on a multi-day range, and were
+  aligned with the zone's raw offset, so summer time put every 3/6 h tick an
+  hour off. Days are now named and ticks follow the offset at each tick.
+- The right-hand axis labels were drawn into a 10 dp margin and clipped.
+
+**Checked.** The page in a browser against `tools/mock_core.py`: live, saved
+copy, link dropped and back. The app on the CI emulator (`ScreensTest`):
+the copy is shown out of range with the readings a1 left, says `Offline`,
+and survives the retry; the explorer opens, reads the whole archive in
+slices and two hours raw. `UNVERIFIED` on a real phone and node.

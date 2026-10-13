@@ -26,6 +26,12 @@ import kotlin.math.roundToInt
  * Every panel leads with a **sentence**, not a chart. A plot nobody can
  * interpret leaves the project exactly where it was: with a CSV and a person
  * doing arithmetic by hand.
+ *
+ * Each chart opens on a tap into [ChartExplorer], full screen, to be zoomed,
+ * panned and read point by point (D-28). The temperature and power charts
+ * are drawn from logged columns and can go anywhere in the archive from
+ * there; overhead and duty are computed over the range chosen here, and
+ * explore that.
  */
 class HistoryScreen(private val root: View) {
 
@@ -51,15 +57,54 @@ class HistoryScreen(private val root: View) {
 
     private var rangeS: Long = 86_400L
     private var syncing = false
+    private var explorer: ChartExplorer? = null
 
-    /** Title, one-line reading, plot. */
-    private class Card(view: View) {
+    /** Title, one-line reading, plot - and what the plot was last given, for the explorer. */
+    private class Card(val view: View) {
         val title: TextView = view.findViewById(R.id.c_title)
         val read: TextView = view.findViewById(R.id.c_read)
         val chart: ChartView = view.findViewById(R.id.c_chart)
+        var series: List<ChartView.Series> = emptyList()
+
+        fun show(data: List<ChartView.Series>, empty: String) {
+            series = data
+            chart.setData(data, empty)
+        }
+    }
+
+    /** A logged column, as one chart draws it. The card and the explorer build from the same list. */
+    private class Line(val col: String, val label: String, val color: Int, val unit: String)
+
+    private val tempLines = listOf(
+        Line("t_fridge", "fridge", c(R.color.alt), "°"),
+        Line("t_cabin", "cabin", c(R.color.muted), "°"),
+    )
+    private val powerLines = listOf(
+        Line("in_w", "in", c(R.color.ok), "W"),
+        Line("out_w", "out", c(R.color.warn), "W"),
+        Line("fridge_w", "fridge", c(R.color.alt), "W"),
+    )
+
+    /** The archive, re-read for whatever window the explorer is showing. Runs on [io]. */
+    private inner class StoreSource(private val lines: List<Line>) : ChartExplorer.Source {
+        override fun extent(): Pair<Long, Long>? =
+            store.span().takeIf { it.rows > 0 }?.let { it.oldest to it.newest }
+
+        override fun load(from: Long, to: Long, points: Int): List<ChartView.Series> {
+            val tr = store.traces(lines.map { it.col }, from, to, points)
+            return lines.mapNotNull { l ->
+                tr.firstOrNull { it.name == l.col }?.let {
+                    ChartView.Series(l.label, l.color, it.x, it.lo, unit = l.unit, hi = it.hi)
+                }
+            }
+        }
     }
 
     init {
+        temp.view.setOnClickListener { explore(temp, StoreSource(tempLines)) }
+        power.view.setOnClickListener { explore(power, StoreSource(powerLines)) }
+        overhead.view.setOnClickListener { explore(overhead, null) }
+        duty.view.setOnClickListener { explore(duty, null) }
         syncBtn.setOnClickListener { sync(full = false) }
         exportBtn.setOnClickListener { export() }
         ranges.check(R.id.h_range_1d)
@@ -74,6 +119,15 @@ class HistoryScreen(private val root: View) {
             redraw()
         }
         redraw()
+    }
+
+    private fun explore(card: Card, source: ChartExplorer.Source?) {
+        if (card.series.none { it.x.isNotEmpty() }) return
+        explorer?.dismiss()
+        explorer = ChartExplorer(
+            context, card.title.text.toString(), card.series,
+            context.getString(R.string.h_no_rows), source, io,
+        ).also { it.show() }
     }
 
     /** Called when the tab becomes visible. */
@@ -221,19 +275,10 @@ class HistoryScreen(private val root: View) {
             )
         }
 
-        val x = t.epochs()
-
         // --- temperatures ---------------------------------------------------
         temp.title.setText(R.string.h_temp)
         val fridge = t.col("t_fridge")
-        val cabin = t.col("t_cabin")
-        temp.chart.setData(
-            listOfNotNull(
-                fridge?.let { ChartView.Series("fridge", c(R.color.alt), x, it, unit = "°") },
-                cabin?.let { ChartView.Series("cabin", c(R.color.muted), x, it, unit = "°") },
-            ),
-            context.getString(R.string.h_no_rows),
-        )
+        temp.show(series(t, tempLines), context.getString(R.string.h_no_rows))
         temp.read.text = if (fridge == null) context.getString(R.string.h_no_probe)
             else context.getString(
                 R.string.h_temp_read,
@@ -242,17 +287,8 @@ class HistoryScreen(private val root: View) {
 
         // --- power ----------------------------------------------------------
         power.title.setText(R.string.h_power)
-        val inW = t.col("in_w")
-        val outW = t.col("out_w")
         val fridgeW = t.col("fridge_w")
-        power.chart.setData(
-            listOfNotNull(
-                inW?.let { ChartView.Series("in", c(R.color.ok), x, it, unit = "W") },
-                outW?.let { ChartView.Series("out", c(R.color.warn), x, it, unit = "W") },
-                fridgeW?.let { ChartView.Series("fridge", c(R.color.alt), x, it, unit = "W") },
-            ),
-            context.getString(R.string.h_no_rows),
-        )
+        power.show(series(t, powerLines), context.getString(R.string.h_no_rows))
         power.read.text = if (fridgeW == null) context.getString(R.string.h_no_plug)
             else context.getString(R.string.h_power_read, mean(fridgeW), wh(t, "fridge_w"))
 
@@ -260,7 +296,7 @@ class HistoryScreen(private val root: View) {
         overhead.title.setText(R.string.h_overhead)
         val s = Analysis.summarise(bins.map { it.overheadW })
         val est = Analysis.overheadEstimate(bins)
-        overhead.chart.setData(
+        overhead.show(
             listOf(
                 ChartView.Series(
                     "overhead", c(R.color.warn),
@@ -284,7 +320,7 @@ class HistoryScreen(private val root: View) {
         // --- duty ------------------------------------------------------------
         duty.title.setText(R.string.h_duty)
         val haveFridgeDuty = dutyBins.any { !it.fridgeDuty.isNaN() }
-        duty.chart.setData(
+        duty.show(
             listOfNotNull(
                 if (haveFridgeDuty) ChartView.Series(
                     "compressor", c(R.color.alt),
@@ -369,6 +405,35 @@ class HistoryScreen(private val root: View) {
 
     // ------------------------------------------------------------------ small
 
+    /**
+     * The card's series for [lines], from rows: NAN where the node rebooted,
+     * as [HistoryStore.traces] does for the explorer, so the card and the
+     * explorer break the line in the same places. A gap in time alone does
+     * not always show a reboot: the ring keeps logging across a fast one.
+     */
+    private fun series(t: SoakCsv.Table, lines: List<Line>): List<ChartView.Series> {
+        val rows = t.rows
+        var breaks = 0
+        for (i in 1 until rows.size) if (rows[i].boot != rows[i - 1].boot) breaks++
+        val n = rows.size + breaks
+        val present = lines.filter { t.index(it.col) >= 0 }
+        val idx = present.map { t.index(it.col) }
+        val x = LongArray(n)
+        val v = present.map { FloatArray(n) }
+        var j = 0
+        for (i in rows.indices) {
+            if (i > 0 && rows[i].boot != rows[i - 1].boot) {
+                x[j] = rows[i].epoch - 1
+                for (a in v) a[j] = Float.NaN
+                j++
+            }
+            x[j] = rows[i].epoch
+            for (k in present.indices) v[k][j] = rows[i].v.getOrElse(idx[k]) { Float.NaN }
+            j++
+        }
+        return present.mapIndexed { k, l -> ChartView.Series(l.label, l.color, x, v[k], unit = l.unit) }
+    }
+
     private fun c(res: Int) = context.getColor(res)
 
     private fun last(v: FloatArray): Float {
@@ -407,6 +472,8 @@ class HistoryScreen(private val root: View) {
         else SimpleDateFormat("d MMM HH:mm", Locale.UK).format(Date(epoch * 1000L))
 
     fun close() {
+        explorer?.dismiss()
+        explorer = null
         io.shutdown()
         store.close()
     }
