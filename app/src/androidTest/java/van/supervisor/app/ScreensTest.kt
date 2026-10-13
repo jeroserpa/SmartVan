@@ -6,6 +6,8 @@ import android.content.pm.ShortcutManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.ParcelFileDescriptor
 import android.view.LayoutInflater
 import android.view.View
@@ -62,6 +64,7 @@ class ScreensTest {
 
     @Test
     fun a1_appWithLivePage() {
+        assertTrue("the emulator's Wi-Fi never came up", wifiReady())
         MainActivity.baseUrlOverride = mock
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             Thread.sleep(10_000)
@@ -288,6 +291,31 @@ class ScreensTest {
         } finally {
             ctx.getSharedPreferences(AppUpdate.PREFS, Context.MODE_PRIVATE).edit().clear().commit()
         }
+    }
+
+    /**
+     * Waits for the emulator's Wi-Fi to be up and validated. The first test
+     * after boot found it connected but not yet carrying traffic twice on
+     * 2026-10-13: mobile data still the default network, the mock unreachable,
+     * and a1 (and a3, which needs a1's saved copy) failing for no fault of the
+     * app. Turning it off and on, as a3 does, brought it back each time.
+     */
+    private fun wifiReady(): Boolean {
+        val cm = ctx.getSystemService(ConnectivityManager::class.java)
+        val up = {
+            @Suppress("DEPRECATION")
+            cm.allNetworks.any { n ->
+                val caps = cm.getNetworkCapabilities(n)
+                caps != null &&
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
+                    caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            }
+        }
+        if (await(30_000, up)) return true
+        shell("svc wifi disable")
+        Thread.sleep(3_000)
+        shell("svc wifi enable")
+        return await(60_000, up)
     }
 
     /** The message of the update dialog on screen, or null if none is up. */
