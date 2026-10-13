@@ -13,6 +13,9 @@ on:
       - "build.gradle.kts"
       - "gradle.properties"
       - "tools/mock_core.py"
+      - "tools/check_ui_names.py"
+      - "nodes/van-core.yaml"
+      - "common/**"
       - "ui/**"
       - ".github/workflows/android-app.yml"
   workflow_dispatch:
@@ -24,6 +27,12 @@ jobs:
       contents: write   # the rolling app-latest release
     steps:
       - uses: actions/checkout@v4
+
+      # The page and the node's config name the same entities, or the page
+      # shows "--" and its controls do nothing (M18); and every tunable on the
+      # node is reachable from the page (D-26 follow-up). Seconds, no setup.
+      - name: Page and firmware in step
+        run: python3 tools/check_ui_names.py
 
       - uses: actions/setup-java@v4
         with:

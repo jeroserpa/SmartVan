@@ -471,6 +471,9 @@ table.raw td:first-child{color:var(--muted);padding-right:10px;word-break:break-
 
   <div class="card">
     <h2>Cycles</h2>
+    <div class="row" data-num="rest_block"><div class="lbl"><b>Rest between runs</b><small>then a run starts if above "rest below"</small></div></div>
+    <div class="row" data-num="run_block"><div class="lbl"><b>Longest run</b><small>a run ends here even if not yet cold</small></div></div>
+    <div class="row" data-num="probe_filter"><div class="lbl"><b>Probe smoothing</b><small>0 = raw; the hard limit always reads raw</small></div></div>
     <div class="row" data-num="min_on"><div class="lbl"><b>Minimum on</b></div></div>
     <div class="row" data-num="min_off"><div class="lbl"><b>Minimum off</b><small>protects the compressor</small></div></div>
     <div class="row" data-num="idle_w"><div class="lbl"><b>Compressor idle below</b></div></div>
@@ -617,6 +620,9 @@ const NUMS = {
   temp_hard:     ["number-fridge_hard_override",      0.5, "°C", 1],
   sleep_ceiling: ["number-sleep_ceiling",             0.5, "°C", 1],
   sleep_target:  ["number-sleep_coast_target",        0.5, "°C", 1],
+  rest_block:    ["number-fridge_rest_block",         5,   "min", 0],
+  run_block:     ["number-fridge_run_block",          5,   "min", 0],
+  probe_filter:  ["number-fridge_probe_filter",       1,   "min", 0],
   min_on:        ["number-minimum_inverter_on_time",  1,   "min", 0],
   min_off:       ["number-minimum_inverter_off_time", 1,   "min", 0],
   idle_w:        ["number-compressor_idle_threshold", 1,   "W",   0],

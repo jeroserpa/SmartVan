@@ -686,3 +686,59 @@ Notes:
   mismatch; a red one an id clash.
 - The legacy path is tested against the mock's reconstruction of the old
   format, not against a real 2025.x build.
+
+---
+
+## M19 — 2026-10-11/12 — first log on the D-26 firmware, 28.4 h, one boot
+
+`soak-20261012-2221.csv`, Sun 11 Oct 17:59 → Mon 12 Oct 22:21 local, 10,215
+rows at 10 s, no gaps. Firmware: `van-core.yaml` at the D-26 commit (new page,
+large-number panel), ESPHome 2026.8.0, flashed from the phone. No SD card.
+Cabin 14.8–25.0 °C. Contents of the cabinet not recorded — `ASK`.
+
+### Node health — clean
+- No restarts, **no BLE drops**, fail-safe only for the boot window (~60 s).
+- **One re-send, and it did its job** (D-22 #1): 12 Oct 06:10:42 the station
+  still reported AC on 10 s after an OFF command; the re-send went out and the
+  next sample agreed. First field observation of the fix working.
+- Free internal heap: floor 101.5 kB through normal running (M14: 102 kB).
+  It dipped to **84.1 kB** only in the last row, i.e. while this 1.3 MB CSV was
+  being downloaded. BLE held. Worth knowing; not a leak (heap now steady).
+- Board 54–67 °C. `sd_lag` climbs one per row, as expected with no card.
+
+### The log did not survive the flash (D-22 #3) — `FAIL`
+One boot record (`boot 3 reset=software at_row=0`) and no earlier rows: the
+ring was cleared across the OTA's software reset, with the flush-after-write
+fix running in the firmware being replaced. Not the boot-time PSRAM test: in
+ESP-IDF 5.5.5 `esp_psram_extram_test()` keeps out `.ext_ram_noinit`. Still
+open is whether a software reset of the *same* image keeps it — a reflash
+moves rodata, and on the S3 that may move where the noinit segment lands.
+**Next:** press Restart node once and see whether the rows survive.
+
+### Cycling: the rest block sets the count, not the probe filter
+- 35 fridge runs in 28.4 h — **27 on Mon 12**, against ~29/day on test day
+  (M17). The 10 min probe filter (D-22 #2) did not reduce it.
+- Every rest was **exactly 30 min** (the rest block), and every run started
+  on the schedule, never on the 7 °C ceiling: filtered probe at start
+  4.0–5.4 °C. Runs ended on "cold" (filtered 4.0 °C) after 11–25 min.
+- At night the rest raised the filtered probe by only ~0.0–0.2 K before the
+  next run; in the afternoon by up to ~1.3 K. So a run often starts a tenth of
+  a degree above the floor, to cool that tenth back off.
+- AC duty 37.7 %. Fridge energy at the plug 215 Wh = ~180 Wh/day.
+- The headroom says the rest block can be lengthened safely — the ceiling
+  still starts a run if the cabinet warms. `UNVERIFIED` what that costs per
+  run (the pulldown penalty is still unmeasured, M17).
+
+### Spare solar froze the cabinet again — `KNOWN BUG`
+12 Oct 12:19–13:14: SOC 96 → 100 %, in 237–299 W, so `surplus_req` held AC on
+for 55 min after the fridge block had already ended cold at 12:29. Probe
+4.3 → **−0.69 °C** raw (filtered −0.36). It stopped only because the pack
+reached 100 % and charging stopped. The rule fired at ~206 W of surplus, so
+the margin is at its 200 W default — the 1000 W workaround from 9 Oct is not
+in place. Same mechanism as 9 Oct (−3.7 °C over 2 h 38 min): the thermostat
+is back on medium after every power cut (M16), and nothing in the rule knows
+the cabinet is cold.
+
+Page follow-up from this log: "Fridge rest block", "Fridge run block" and
+"Fridge probe filter" existed on the node but not on the page;
+`tools/check_ui_names.py` now fails CI when that happens.
