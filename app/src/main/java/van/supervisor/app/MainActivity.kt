@@ -283,13 +283,46 @@ class MainActivity : AppCompatActivity() {
         }
         // A WebView that is not being looked at should not be running timers
         // or holding an SSE stream open on a node that also runs BLE.
-        if (onHistory) {
-            web.onPause()
-            web.pauseTimers()
-        } else {
-            web.onResume()
-            web.resumeTimers()
+        if (onHistory) pauseWeb() else resumeWeb()
+    }
+
+    /** The WebView is frozen, or about to be. */
+    private var webPaused = false
+
+    /**
+     * Freeze the dashboard - after asking the page to close its stream.
+     *
+     * Pausing alone never closed it (D-29): the stream stayed open, stopped
+     * draining, and van-core's ESPHome 2026.8 abandoned it after ~20 s
+     * without closing the socket, which then stayed held for as long as
+     * this app lived in the background. That is one of the ways the node ran
+     * out of sockets (M20). A closed stream is a FIN the node acts on.
+     *
+     * The freeze waits for the page's answer, or 400 ms if it has none: a
+     * page that is frozen first never gets to close anything. Older pages
+     * have no `VanPage` and are frozen as before.
+     */
+    private fun pauseWeb() {
+        if (webPaused) return
+        webPaused = true
+        var done = false
+        val freeze = Runnable {
+            if (done) return@Runnable
+            done = true
+            if (webPaused && !isDestroyed) {
+                web.onPause()
+                web.pauseTimers()
+            }
         }
+        web.evaluateJavascript("window.VanPage&&VanPage.suspend()") { main.post(freeze) }
+        main.postDelayed(freeze, 400)
+    }
+
+    private fun resumeWeb() {
+        webPaused = false
+        web.onResume()
+        web.resumeTimers()
+        web.evaluateJavascript("window.VanPage&&VanPage.resume()", null)
     }
 
     /**
@@ -939,8 +972,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (tabs.selectedTabPosition == 0) {
-            web.onResume()
-            web.resumeTimers()
+            resumeWeb()
             // Back from Wi-Fi settings, or from the home screen: try at once.
             if (phase == Phase.NO_WIFI || phase == Phase.UNREACHABLE) load(quiet = true)
         } else {
@@ -953,8 +985,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         main.removeCallbacks(autoRetry)
-        web.onPause()
-        web.pauseTimers()
+        pauseWeb()
         // The user was just looking at live values, so van-core is in range:
         // the best moment to bring the widget up to date.
         VanWidget.refreshNow(this)

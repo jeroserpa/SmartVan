@@ -1405,3 +1405,49 @@ copy, link dropped and back. The app on the CI emulator (`ScreensTest`):
 the copy is shown out of range with the readings a1 left, says `Offline`,
 and survives the retry; the explorer opens, reads the whole archive in
 slices and two hours raw. `UNVERIFIED` on a real phone and node.
+
+---
+
+## 2026-10-13 — D-29: van-core's sockets — more of them, dead peers freed, stuck streams closed
+
+**Decision.** Four changes, each closing one way the node ran out of sockets
+(M20), none of them touching BLE or the arbiter:
+
+1. **`CONFIG_LWIP_MAX_SOCKETS: 16`** in `nodes/van-core.yaml`. ESPHome sized
+   it at 10 from what its components declare; httpd alone may take 9 of
+   those. 16 leaves room for OTA, the plug poller and two spare even with
+   httpd full. The extra slots cost a few hundred bytes until used.
+2. **`components/net_guard`**: every 5 s, arms TCP keep-alive (idle 60 s, 3
+   probes 10 s apart) on each connected socket, so a vanished peer's
+   connection is freed in about 90 s instead of never; and publishes **Open
+   sockets**, on Diag and as the log column `sockets`, with a warning in the
+   log at 14 of 16. It closes nothing itself.
+3. **`components/web_server_idf`**: ESPHome 2026.8.0's own, vendored, with
+   one fix. A stuck event stream is now closed through httpd instead of
+   being freed with its socket still open. Upstream fixed this in 2026.10;
+   ESPHome is held below 2026.9 by `sd_file_server`, so this copy goes when
+   that does.
+4. **Streams are closed, not frozen.** The page closes its event stream when
+   hidden and reopens it when shown (`VanPage.suspend/resume`); the app calls
+   those before it freezes the WebView. The app's one-off requests send
+   `Connection: close`, so Android's pool does not park them on the node.
+
+**Why not just more sockets.** On its own, 16 only moves the ceiling: dead
+peers and stuck streams would fill httpd's 7 again, and the flapping streams
+the user saw come from httpd recycling its oldest session to admit a new
+one. Keep-alive and the stream fix stop the table filling; the bigger table
+keeps OTA and the poller working while it does. **The count is there so this
+is a measurement next time, not a deduction.**
+
+**Why vendor rather than upgrade.** Upgrading to 2026.10 fixes the stream
+bug and breaks the SD card component, which does not build past 2026.8. A
+copy of the exact version already in use, with a ten-line patch, is the
+smaller change.
+
+**Consequence for this flash.** The new log column changes the row layout,
+so the node's PSRAM ring starts empty. A power cut clears it anyway, and
+recovering from M20 needed one.
+
+**`UNVERIFIED`**: everything above is from the sources and the build, not
+from the node. Watch "Open sockets" in History over a few days of normal
+use: it should sit around 4–8 and fall back after the phone leaves.

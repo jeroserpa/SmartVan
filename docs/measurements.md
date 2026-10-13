@@ -742,3 +742,50 @@ the cabinet is cold.
 Page follow-up from this log: "Fridge rest block", "Fridge run block" and
 "Fridge probe filter" existed on the node but not on the page;
 `tools/check_ui_names.py` now fails CI when that happens.
+
+## M20 — 2026-10-13 — van-core ran out of sockets after 49 h up
+
+Firmware 2026.8.0, built 2026-10-11 15:01 (config hash 0x045a414e), uptime
+177 845 s (49.4 h) at 19:24. From the user's screenshots of the app and of
+ESPHome's own page in Chrome.
+
+**What failed, all at once:**
+- A firmware flash from the app: "van-core closed the connection during
+  handshake". Nothing was written; the old firmware kept running.
+- Every button, in the app and on ESPHome's default page in Chrome.
+- The app's "ESPHome default UI" button: straight back to the status panel.
+- History sync: "On Wi-Fi · van-core did not answer". Last good row 14:43.
+- The dashboard flapping between "no connection" and back.
+
+**ESPHome's log, repeating every few ms:**
+
+    esp-tls: Failed to create socket (family 2 socktype 1 protocol 0)
+    transport_base: Failed to open a new connection: 32770
+    HTTP_CLIENT: Connection failed, sock < 0
+
+32770 is `ESP_ERR_ESP_TLS_CANNOT_CREATE_SOCKET`; the client is soak_log's
+fridge-plug poller. The socket table was full.
+
+**What kept working:** BLE to the P310 (`P310 connected` ON), the arbiter
+(`reason: off`), the display. None of them use sockets.
+
+**Why it was full** (from the build and the ESPHome 2026.8.0 / IDF 5.5.5
+sources, not measured on the node — there was no counter):
+- `CONFIG_LWIP_MAX_SOCKETS=10`, ESPHome's floor. httpd alone may hold 7
+  client sessions (`max_open_sockets`) plus its listener and control socket;
+  OTA's listener makes 10. The plug poller and an OTA upload's own
+  connection were never counted, so with httpd full they had nothing.
+- httpd has TCP keep-alive off. An idle connection whose phone left range or
+  dropped Wi-Fi is never noticed and holds its session indefinitely.
+- ESPHome 2026.8's event stream gives up on a stream that has not drained
+  for ~20 s by freeing its own object without closing the socket. The app
+  froze its WebView with the stream open whenever it left the dashboard, so
+  every background spell could leave one behind. When httpd later closes
+  such a socket it writes into the freed object. Fixed upstream in 2026.10.
+
+**Also visible:** `SD log behind` 17 784 rows = 49.4 h at 10 s, i.e. nothing
+had reached the card since boot. Unrelated to the sockets, and it means the
+node's log has had no copy that survives a power cut. `VERIFY` the card.
+
+Fixes in D-29. `UNVERIFIED` until the new firmware has run a few days with
+the new "Open sockets" reading in the log.

@@ -179,6 +179,10 @@ object HistorySync {
 
     private fun open(route: Network?, url: String): HttpURLConnection {
         val u = URL(url)
-        return (route?.openConnection(u) ?: u.openConnection()) as HttpURLConnection
+        return ((route?.openConnection(u) ?: u.openConnection()) as HttpURLConnection).apply {
+            // Released at once rather than parked in Android's pool for five
+            // minutes: van-core has 16 sockets in all (D-29, M20).
+            setRequestProperty("Connection", "close")
+        }
     }
 }

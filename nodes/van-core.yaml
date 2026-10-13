@@ -112,6 +112,16 @@ esp32:
       disable_vfs_support_dir: false
     sdkconfig_options:
       CONFIG_FATFS_LFN_STACK: "y"
+      # `ADDED 2026-10-13`, D-29, M20. ESPHome sized this at its floor of 10
+      # from what its components declare, but httpd alone may hold 7 client
+      # sessions plus its listener and its control socket, and nobody counted
+      # soak_log's plug poller or the OTA upload's own connection. Once httpd
+      # was full, those two were refused - which is how a flash failed with
+      # "closed the connection during handshake". 16 = 9 httpd + OTA listener
+      # and upload + plug poller + 2 Wi-Fi internals, and 2 spare. Each slot
+      # is a few hundred bytes until used; net_guard's "Open sockets" shows
+      # how close to it the node runs.
+      CONFIG_LWIP_MAX_SOCKETS: "16"
   flash_size: 16MB
 
 psram:
@@ -138,11 +148,15 @@ external_components:
       url: https://github.com/ylianst/esp-fbot
       ref: 2b22754e7691c081b403ed46c3c931136b7e4cec
     refresh: never
-  # The arbiter (pure state machine, host-tested in test/), the log, the UI.
+  # The arbiter (pure state machine, host-tested in test/), the log, the UI,
+  # and the socket guard (D-29). web_server_idf here REPLACES ESPHome's own:
+  # it is 2026.8.0's, with the fix for stuck event streams that upstream
+  # shipped in 2026.10 - see components/web_server_idf/README.md, and delete
+  # it from this list when ESPHome moves past 2026.10.
   - source:
       type: local
       path: ../components
-    components: [ac_arbiter, soak_log, van_ui]
+    components: [ac_arbiter, soak_log, van_ui, net_guard, web_server_idf]
   # Mounts the card and serves /file. soak_log does the writing, off the main
   # loop; this component's own write actions block it and are not used.
   #
@@ -810,6 +824,22 @@ soak_log:
     - {name: heap_int_min, sensor: heap_int_min, accuracy_decimals: 0}
     - {name: die_c, sensor: board_temp, accuracy_decimals: 1}
     - {name: sd_lag, sensor: sd_lag, accuracy_decimals: 0}
+    - {name: sockets, sensor: net_sockets, accuracy_decimals: 0}
+
+# -----------------------------------------------------------------------------
+# Sockets (D-29, M20). The node ran out of them after 49 h: dead peers held
+# httpd sessions for good, and everything else that needed a connection was
+# refused. This arms TCP keep-alive so a vanished phone's connections are
+# freed in about 90 s, and counts what is open, on Diag and in the log above.
+# -----------------------------------------------------------------------------
+net_guard:
+  update_interval: 5s
+  keepalive_idle: 60s
+  keepalive_interval: 10s
+  keepalive_count: 3
+  open_sockets:
+    name: "Open sockets"
+    id: net_sockets
 
 # -----------------------------------------------------------------------------
 # The arbiter. One component, one writer, one decision.

@@ -87,6 +87,8 @@ class OfflinePage(context: Context) {
             c.connectTimeout = 4_000
             c.readTimeout = 6_000
             c.useCaches = false
+            // A one-off read: free the node's socket as soon as it is done (D-29).
+            c.setRequestProperty("Connection", "close")
             val code = c.responseCode
             if (code != 200) return Reply(code, "")
             val out = ByteArrayOutputStream()

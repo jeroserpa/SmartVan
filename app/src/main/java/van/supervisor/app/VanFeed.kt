@@ -176,6 +176,9 @@ object VanFeed {
         // keep-alive pings.
         conn.readTimeout = READ_TIMEOUT_MS
         conn.setRequestProperty("Accept", "text/event-stream")
+        // The stream is abandoned after the burst; ask for the socket to go
+        // with it rather than be offered back for reuse (D-29).
+        conn.setRequestProperty("Connection", "close")
         val deadline = SystemClock.elapsedRealtime() + BURST_MS
         val states = HashMap<String, JSONObject>()
         var sawEsphome = false

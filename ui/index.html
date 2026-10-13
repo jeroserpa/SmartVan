@@ -513,6 +513,9 @@ table.raw td:first-child{color:var(--muted);padding-right:10px;word-break:break-
       <div class="cell"><div class="k">Fridge probe</div><div class="v" id="d_probe">--</div></div>
       <div class="cell"><div class="k">Uptime</div><div class="v" id="d_up">--</div></div>
       <div class="cell"><div class="k">Board</div><div class="v" id="d_board">--</div></div>
+      <!-- D-29: the node ran out of these once (M20); 16 is the ceiling. -->
+      <div class="cell"><div class="k">Open sockets</div><div class="v" id="d_sock">--</div></div>
+      <div class="cell"><div class="k">SD log behind</div><div class="v" id="d_sd">--</div></div>
     </div>
     <p class="hint" id="d_ver">--</p>
   </div>
@@ -591,6 +594,8 @@ const E = {
   man_left:   "sensor-manual_ac_remaining",
   uptime:     "sensor-van_core_uptime",
   board:      "sensor-van_core_board_temperature",
+  sockets:    "sensor-open_sockets",
+  sd_lag:     "sensor-sd_log_behind",
 
   ble:        "binary_sensor-p310_connected",
   ac_on:      "binary_sensor-ac_on",
@@ -776,7 +781,12 @@ function ago(t) {
 // tear a dead one down. Only the newest EventSource is ever `stream`; older
 // ones ignore their own callbacks.
 var stream = null;
+// Hidden pages hold no stream (D-29). A stream nobody drains stalls van-core's
+// send buffer; ESPHome 2026.8 then abandoned it without closing the socket,
+// and that is one of the ways the node ran out of them (M20).
+var suspended = false;
 function connect() {
+  if (suspended) return;
   if (stream) { try { stream.close(); } catch (e) {} stream = null; }
   // Give the new stream a full watchdog window before it is judged, so a
   // reconnect cannot immediately trigger another one.
@@ -819,7 +829,7 @@ function setLink(up) {
 // is silently gone. So do not merely report it: tear it down and reconnect.
 // A saved copy has no stream to watch; it only re-renders, so "2 h ago" ages.
 setInterval(function () {
-  if (!OFFLINE_COPY && Date.now() - lastMsg > 20000) { setLink(false); connect(); }
+  if (!OFFLINE_COPY && !suspended && Date.now() - lastMsg > 20000) { setLink(false); connect(); }
   // Thirty seconds live is long past the initial burst: whatever is still
   // restored, the node no longer publishes.
   if (!purged && linkUp === true && Date.now() - linkSince > 30000) {
@@ -832,12 +842,31 @@ setInterval(function () {
 // Reconnect on wake rather than waiting out the watchdog. Standalone home-screen
 // launches spend most of their life backgrounded, and the first thing wanted on
 // unlocking the phone is a live number, not 20s of a stale one.
+// Hidden, the stream is closed outright rather than left to stall: a closed
+// stream is a FIN van-core acts on, a stalled one is a socket it keeps.
+function suspend() {
+  if (OFFLINE_COPY || suspended) return;
+  if (linkUp === true) saveSnap();
+  suspended = true;
+  if (stream) { try { stream.close(); } catch (e) {} stream = null; }
+  // Not "live" while nothing is arriving; back on the first event.
+  linkUp = null;
+}
+function resume() {
+  if (OFFLINE_COPY || !suspended) return;
+  suspended = false;
+  connect();
+  render();
+}
 document.addEventListener("visibilitychange", function () {
-  if (OFFLINE_COPY) return;
-  if (document.hidden && linkUp === true) saveSnap();
-  if (!document.hidden && Date.now() - lastMsg > 5000) connect();
+  if (document.hidden) suspend();
+  else if (suspended) resume();
+  else if (!OFFLINE_COPY && Date.now() - lastMsg > 5000) connect();
 });
 window.addEventListener("pagehide", function () { if (!OFFLINE_COPY && linkUp === true) saveSnap(); });
+// For the app, which freezes its WebView when it leaves the dashboard and
+// cannot rely on the page being told it is hidden first (D-29).
+window.VanPage = { suspend: suspend, resume: resume };
 
 function post(path) {
   if (OFFLINE_COPY) return Promise.resolve();
@@ -1318,6 +1347,15 @@ function renderDiag(ft, probe, raw) {
   setText("d_up", up === null ? "--" : fmtHM(up / 60));
   var bt = num("board");
   setText("d_board", bt === null ? "--" : bt.toFixed(0) + " °C");
+  // Amber two short of the ceiling, where net_guard starts warning too.
+  var so = num("sockets");
+  setText("d_sock", so === null ? "--" : so.toFixed(0) + " / 16");
+  $("#d_sock").style.color = so !== null && so >= 14 ? "var(--warn)" : "";
+  // Rows not yet on the card. More than a few minutes' worth means the card
+  // is out or failing, and the log lives only in memory a power cut clears.
+  var sd = num("sd_lag");
+  setText("d_sd", sd === null ? "--" : sd.toFixed(0) + " rows");
+  $("#d_sd").style.color = sd !== null && sd > 60 ? "var(--warn)" : "";
   setText("d_ver", "ESPHome " + (txt("version") || "--"));
   setText("d_reason", "reason: " + (raw || "--"));
   var flags = { force: "f_force", fridge: "f_fridge", manual: "f_manual", surplus: "f_surplus", parked: "f_parked" };

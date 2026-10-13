@@ -822,6 +822,7 @@ class ChartView @JvmOverloads constructor(
     private fun fmt(v: Float): String {
         val a = abs(v)
         return when {
+            a == 0f -> "0"
             a >= 100f -> v.toInt().toString()
             a >= 10f -> "%.0f".format(v)
             a >= 1f -> "%.1f".format(v)

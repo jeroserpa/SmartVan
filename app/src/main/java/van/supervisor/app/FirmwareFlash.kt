@@ -340,6 +340,8 @@ class FirmwareFlash(
                 connectTimeout = 4_000
                 readTimeout = 4_000
                 useCaches = false
+                // One-off reads; nothing to keep a socket open on the node for (D-29).
+                setRequestProperty("Connection", "close")
             }
         } catch (e: Exception) {
             null

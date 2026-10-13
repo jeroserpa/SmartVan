@@ -71,6 +71,24 @@ tabs of them. Nothing on it is live and nothing on it can be switched.
   this only knows what the phone last saw. It says nothing about the van
   since then.
 
+## Connections to van-core (D-29)
+
+van-core has 16 sockets for everything, and on 2026-10-13 it ran out of its
+then 10 (`docs/measurements.md` M20). The app is one of its clients, so it
+holds as few as it can:
+
+- **Leaving the dashboard closes the live stream** — History tab, home
+  screen, screen off. The app asks the page (`VanPage.suspend()`) and then
+  freezes the WebView; it used to freeze it with the stream open, and a
+  stream nobody drains is one ESPHome 2026.8 abandoned without closing.
+  Coming back reopens it (`VanPage.resume()`). Older pages without
+  `VanPage` are frozen as before.
+- **One-off requests send `Connection: close`** — History sync, the widget's
+  read, the saved-page fetch, the flash checks — so Android's connection pool
+  does not hold the node's socket for five minutes after each one.
+- **Diag shows "Open sockets"** (of 16) and "SD log behind". The first is
+  in the log too, so History can show whether it ever creeps up again.
+
 ## History (D-25)
 
 **Why this one is not a page.** `soak_log`'s ring lives in `.ext_ram_noinit`

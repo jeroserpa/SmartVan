@@ -99,6 +99,9 @@ def _init_entities():
     define("sensor-manual_ac_remaining", "Manual AC remaining", 0.0, "min")
     define("sensor-van_core_uptime", "Van core uptime", 0.0, "s")
     define("sensor-van_core_board_temperature", "Van core board temperature", 41.0, "°C")
+    # D-29: net_guard's count, and the card's backlog.
+    define("sensor-open_sockets", "Open sockets", 6.0, "")
+    define("sensor-sd_log_behind", "SD log behind", 2.0, "rows")
 
     define("binary_sensor-p310_connected", "P310 connected", True)
     define("binary_sensor-p310_ac_output_active", "P310 AC output active", True)
