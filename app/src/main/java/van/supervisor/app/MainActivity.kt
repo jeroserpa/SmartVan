@@ -120,7 +120,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cm: ConnectivityManager
     private lateinit var web: WebView
     private lateinit var swipe: SwipeRefreshLayout
-    private lateinit var banner: View
+    private lateinit var banner: TextView
     private lateinit var panel: View
     private lateinit var panelIcon: ImageView
     private lateinit var panelProgress: View
