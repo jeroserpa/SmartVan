@@ -99,6 +99,9 @@ class MainActivity : AppCompatActivity() {
         /** The launcher shortcut's action (res/xml/shortcuts.xml): straight to the flash file picker. */
         const val ACTION_FLASH = "van.supervisor.app.FLASH_FIRMWARE"
 
+        /** The other shortcut: ask GitHub for a newer app build now, and say what it answered (D-23). */
+        const val ACTION_CHECK_UPDATE = "van.supervisor.app.CHECK_UPDATE"
+
         /**
          * Instrumented tests only: point the app at a mock van-core. A static
          * set from the test's own process, deliberately not an intent extra —
@@ -163,8 +166,10 @@ class MainActivity : AppCompatActivity() {
     /** Whether the current load keeps the screen as it is (see [open]). */
     private var quietLoad = false
 
-    /** Whichever update dialog is up - the question, the permission, or the progress. */
-    private var updateDialog: AlertDialog? = null
+    /** Whichever update dialog is up - the question, the permission, the progress, or an answer. */
+    @VisibleForTesting
+    internal var updateDialog: AlertDialog? = null
+        private set
     /** An update is downloading or being handed to Android; nothing may start another. */
     private var updating = false
 
@@ -241,11 +246,15 @@ class MainActivity : AppCompatActivity() {
         requestVanNetwork()
         // Not on a re-creation: the shortcut asked once, not on every rotation.
         if (savedInstanceState == null && intent?.action == ACTION_FLASH) main.post { flash.start() }
+        // Not posted, unlike the flash: started here, before onResume, the
+        // automatic check finds one under way and does not ask a second time.
+        if (savedInstanceState == null && intent?.action == ACTION_CHECK_UPDATE) checkForUpdate(asked = true)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if (intent.action == ACTION_FLASH) flash.start()
+        if (intent.action == ACTION_CHECK_UPDATE) checkForUpdate(asked = true)
     }
 
     private fun setupTabs() {
@@ -769,34 +778,81 @@ class MainActivity : AppCompatActivity() {
      * Ask GitHub, off the UI thread, whether a newer build exists. At most once
      * per [AppUpdate.CHECK_EVERY_MS], unless [force]d: back from granting the
      * install permission, the user is waiting on it.
+     *
+     * Or because the user [asked], from the launcher shortcut. That check
+     * ignores the 15 min limit and "Later" both, and always says what it
+     * found ([reportUpdate]). The one that runs on its own stays silent by
+     * design, which on 2026-10-13 left build 60 unoffered and nothing to tap.
      */
-    private fun checkForUpdate(force: Boolean = false) {
+    private fun checkForUpdate(force: Boolean = false, asked: Boolean = false) {
         // Instrumented tests run against a mock van-core; a real GitHub check
         // there would only make the screenshots depend on the network.
-        if (baseUrlOverride != null || updating || updateDialog?.isShowing == true) return
+        if (baseUrlOverride != null) return
+        // Already on screen: the question, the download, or an earlier answer.
+        if (updating || updateDialog?.isShowing == true) return
         // Installing closes the app, which would cut a firmware upload off.
-        if (flash.busy) return
+        if (flash.busy) {
+            if (asked) Toast.makeText(this, R.string.upd_not_while_flashing, Toast.LENGTH_LONG).show()
+            return
+        }
         val now = SystemClock.elapsedRealtime()
         val last = lastUpdateCheck
-        if (!force && last != null && now - last < AppUpdate.CHECK_EVERY_MS) return
+        if (!force && !asked && last != null && now - last < AppUpdate.CHECK_EVERY_MS) return
         lastUpdateCheck = now
+        if (asked) Toast.makeText(this, R.string.upd_checking, Toast.LENGTH_SHORT).show()
         thread(name = "update-check", isDaemon = true) {
-            val r = AppUpdate.latest(applicationContext) ?: return@thread
-            main.post { offerUpdate(r) }
+            val r = AppUpdate.latest(applicationContext)
+            main.post {
+                if (asked) reportUpdate(r) else if (r != null) offerUpdate(r)
+            }
         }
     }
 
-    private fun offerUpdate(r: AppUpdate.Release) {
+    /**
+     * The answer to a check the user asked for. A newer build gets the usual
+     * question, "Later" or not; anything else gets a line saying why there is
+     * no question, so that silence never has to be read as an answer.
+     */
+    @VisibleForTesting
+    internal fun reportUpdate(r: AppUpdate.Release?) {
+        if (isFinishing || isDestroyed || updating || updateDialog?.isShowing == true) return
+        val installed = AppUpdate.installedBuild(this)
+        if (r != null && r.build > installed) {
+            offerUpdate(r, asked = true)
+            return
+        }
+        val (title, body) = when {
+            r == null -> getString(R.string.upd_no_answer_title) to getString(R.string.upd_no_answer_body)
+            r.build == installed -> getString(R.string.upd_latest_title) to getString(R.string.upd_latest_body, installed)
+            // A build from a branch, installed by hand: nothing published beats it.
+            else -> getString(R.string.upd_latest_title) to getString(R.string.upd_ahead_body, installed, r.build)
+        }
+        updateDialog = MaterialAlertDialogBuilder(this)
+            .setTitle(title)
+            .setMessage(body)
+            .setPositiveButton(android.R.string.ok, null)
+            .show()
+    }
+
+    private fun offerUpdate(r: AppUpdate.Release, asked: Boolean = false) {
         if (isFinishing || isDestroyed || updating || updateDialog?.isShowing == true || flash.busy) return
         val installed = AppUpdate.installedBuild(this)
         val pending = AppUpdate.takePending(this)
         if (r.build <= installed) return
         // Back from Android's settings after saying yes: no second question.
+        // Still without the permission, the check that runs on its own takes
+        // that as "not now"; one the user asked for asks again instead.
         if (pending > 0L) {
-            if (packageManager.canRequestPackageInstalls()) downloadUpdate(r) else AppUpdate.snooze(this)
-            return
+            if (packageManager.canRequestPackageInstalls()) {
+                downloadUpdate(r)
+                return
+            }
+            if (!asked) {
+                AppUpdate.snooze(this)
+                return
+            }
         }
-        if (!AppUpdate.isOffer(r, installed, AppUpdate.snoozeUntil(this), System.currentTimeMillis())) return
+        if (!AppUpdate.isOffer(r, installed, AppUpdate.snoozeUntil(this), System.currentTimeMillis(), asked)) return
         updateDialog = MaterialAlertDialogBuilder(this)
             .setTitle(R.string.upd_title)
             .setMessage(getString(R.string.upd_body, r.build, installed, "%.1f".format(r.size / 1e6)))

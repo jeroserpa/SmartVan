@@ -1,5 +1,8 @@
 package van.supervisor.app
 
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ShortcutManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -15,6 +18,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.google.android.material.tabs.TabLayout
 import org.json.JSONObject
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.FixMethodOrder
@@ -231,6 +235,71 @@ class ScreensTest {
         }
     }
 
+    /**
+     * "Check for updates" (D-23), the launcher shortcut. Nothing here reaches
+     * GitHub: with a mock base URL the check returns before asking, so the
+     * three possible replies are handed straight to [MainActivity.reportUpdate],
+     * which is where the check delivers GitHub's.
+     */
+    @Test
+    fun a5_appUpdateCheck() {
+        // Android drops a shortcut it does not like without a word, so ask it
+        // what it took from res/xml/shortcuts.xml.
+        val taken = ctx.getSystemService(ShortcutManager::class.java).manifestShortcuts
+            .associate { it.id to it.intent?.action }
+        assertEquals("shortcuts Android took: $taken", MainActivity.ACTION_FLASH, taken["flash_firmware"])
+        assertEquals("shortcuts Android took: $taken", MainActivity.ACTION_CHECK_UPDATE, taken["check_update"])
+        // Both icons inflate (a bad path throws here) and draw.
+        save("shortcut-icons", icons(R.drawable.ic_shortcut_flash, R.drawable.ic_shortcut_update))
+
+        MainActivity.baseUrlOverride = mock
+        // "Later", tapped just now: the check that runs on its own keeps quiet
+        // for 12 h. The one the user asks for must not.
+        AppUpdate.snooze(ctx)
+        val viaShortcut = Intent(ctx, MainActivity::class.java).setAction(MainActivity.ACTION_CHECK_UPDATE)
+        try {
+            ActivityScenario.launch<MainActivity>(viaShortcut).use { scenario ->
+                Thread.sleep(4_000)
+                val installed = AppUpdate.installedBuild(ctx)
+                fun published(build: Long) =
+                    AppUpdate.Release(build, "van-core-$build.apk", 2_100_000, "3f".repeat(32))
+
+                scenario.onActivity { it.reportUpdate(published(installed + 1)) }
+                Thread.sleep(800)
+                save("app-d-update-asked-newer", screen())
+                assertTrue(
+                    "asked, a newer build is offered despite Later; dialog reads \"${dialogText(scenario)}\"",
+                    dialogText(scenario)?.startsWith("Build ${installed + 1} is ready") == true,
+                )
+                scenario.onActivity { it.updateDialog?.dismiss() }
+
+                scenario.onActivity { it.reportUpdate(published(installed)) }
+                Thread.sleep(800)
+                save("app-e-update-asked-latest", screen())
+                assertEquals(ctx.getString(R.string.upd_latest_body, installed), dialogText(scenario))
+                scenario.onActivity { it.updateDialog?.dismiss() }
+
+                scenario.onActivity { it.reportUpdate(null) }
+                Thread.sleep(800)
+                save("app-f-update-asked-no-answer", screen())
+                assertEquals(ctx.getString(R.string.upd_no_answer_body), dialogText(scenario))
+                scenario.onActivity { it.updateDialog?.dismiss() }
+            }
+        } finally {
+            ctx.getSharedPreferences(AppUpdate.PREFS, Context.MODE_PRIVATE).edit().clear().commit()
+        }
+    }
+
+    /** The message of the update dialog on screen, or null if none is up. */
+    private fun dialogText(scenario: ActivityScenario<MainActivity>): String? {
+        var text: String? = null
+        scenario.onActivity { a ->
+            val d = a.updateDialog?.takeIf { it.isShowing }
+            text = d?.findViewById<TextView>(android.R.id.message)?.text?.toString()
+        }
+        return text
+    }
+
     /** Poll until [cond] holds, up to 90 s. False on timeout; the caller reports why. */
     private fun await(timeoutMs: Long = 90_000, cond: () -> Boolean): Boolean {
         val deadline = System.currentTimeMillis() + timeoutMs
@@ -427,6 +496,22 @@ class ScreensTest {
     }
 
     private data class Quad(val suffix: String, val full: Boolean, val w: Int, val h: Int)
+
+    /** Launcher icons side by side at a launcher's size, masked as the device masks them. */
+    private fun icons(vararg ids: Int): Bitmap {
+        val px = (64 * ctx.resources.displayMetrics.density).toInt()
+        val pad = px / 3
+        val bmp = Bitmap.createBitmap(ids.size * (px + pad) + pad, px + 2 * pad, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bmp)
+        canvas.drawColor(Color.rgb(0x3A, 0x4E, 0x5C))
+        ids.forEachIndexed { i, id ->
+            val icon = ctx.getDrawable(id) ?: error("no drawable $id")
+            val x = pad + i * (px + pad)
+            icon.setBounds(x, pad, x + px, pad + px)
+            icon.draw(canvas)
+        }
+        return bmp
+    }
 
     /** Lays the view out at a widget-cell size (dp) on a wallpaper-ish ground. */
     private fun draw(view: View, wDp: Int, hDp: Int): Bitmap {

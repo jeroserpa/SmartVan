@@ -26,7 +26,7 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Long-press the icon -> Flash firmware (D-24). -->
+            <!-- Long-press the icon -> Flash firmware (D-24), Check for updates (D-23). -->
             <meta-data
                 android:name="android.app.shortcuts"
                 android:resource="@xml/shortcuts" />

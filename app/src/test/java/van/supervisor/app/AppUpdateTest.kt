@@ -78,4 +78,20 @@ class AppUpdateTest {
         assertFalse("snoozed", AppUpdate.isOffer(r, installed = 180, snoozeUntil = now + 1, now = now))
         assertTrue("snooze over", AppUpdate.isOffer(r, installed = 180, snoozeUntil = now, now = now))
     }
+
+    /**
+     * The launcher shortcut's check: "Later" was about the check that runs on
+     * its own, so asking past it gets the question. Asking never makes an old
+     * or the same build worth installing.
+     */
+    @Test
+    fun askingGoesPastLaterButNotPastTheBuildNumber() {
+        val r = AppUpdate.parse(file())!!
+        val now = 1_000_000L
+        val later = now + AppUpdate.SNOOZE_MS
+        assertTrue("snoozed, but asked", AppUpdate.isOffer(r, installed = 180, snoozeUntil = later, now = now, asked = true))
+        assertTrue("asked, not snoozed", AppUpdate.isOffer(r, installed = 180, snoozeUntil = 0, now = now, asked = true))
+        assertFalse("asked, same build", AppUpdate.isOffer(r, installed = 187, snoozeUntil = later, now = now, asked = true))
+        assertFalse("asked, older build published", AppUpdate.isOffer(r, installed = 190, snoozeUntil = 0, now = now, asked = true))
+    }
 }

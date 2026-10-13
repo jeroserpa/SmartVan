@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Long-press the app icon -> "Flash firmware" (D-24). The way in that needs
      nothing from the firmware currently on van-core; the Diag page's button
-     only exists on builds that carry it. -->
+     only exists on builds that carry it.
+
+     And -> "Check for updates" (D-23): the app's own update check, asked for
+     rather than waited for. It skips the 15 min limit and "Later", and always
+     says what it found. -->
 <shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
     <shortcut
         android:enabled="true"
@@ -11,6 +15,17 @@
         android:shortcutShortLabel="@string/sc_flash_short">
         <intent
             android:action="van.supervisor.app.FLASH_FIRMWARE"
+            android:targetClass="van.supervisor.app.MainActivity"
+            android:targetPackage="van.supervisor.app" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_update"
+        android:shortcutId="check_update"
+        android:shortcutLongLabel="@string/sc_update_long"
+        android:shortcutShortLabel="@string/sc_update_short">
+        <intent
+            android:action="van.supervisor.app.CHECK_UPDATE"
             android:targetClass="van.supervisor.app.MainActivity"
             android:targetPackage="van.supervisor.app" />
     </shortcut>

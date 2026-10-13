@@ -8,6 +8,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.Build
+import androidx.annotation.VisibleForTesting
 import androidx.core.app.PendingIntentCompat
 import androidx.core.content.pm.PackageInfoCompat
 import java.io.ByteArrayOutputStream
@@ -37,7 +38,8 @@ import java.util.Properties
  *
  * And all of it is optional. No internet, GitHub down, a release half-way
  * through being replaced: the check comes back empty and nothing else in the
- * app notices (CLAUDE.md section 5.5).
+ * app notices (CLAUDE.md section 5.5). Only a check the user asked for, from
+ * the launcher shortcut, says so.
  */
 object AppUpdate {
 
@@ -51,7 +53,8 @@ object AppUpdate {
     /** A check is a few hundred bytes, but no reason to repeat one within minutes. */
     const val CHECK_EVERY_MS = 15 * 60 * 1000L
 
-    private const val PREFS = "app_update"
+    @VisibleForTesting
+    internal const val PREFS = "app_update"
     private const val SNOOZE_UNTIL = "snooze_until"
     private const val PENDING = "pending_build"
 
@@ -76,9 +79,13 @@ object AppUpdate {
         return Release(build, apk, size, sha)
     }
 
-    /** Whether [r] is worth offering to someone running [installed]. Pure, for the unit test. */
-    fun isOffer(r: Release, installed: Long, snoozeUntil: Long, now: Long): Boolean =
-        r.build > installed && now >= snoozeUntil
+    /**
+     * Whether [r] is worth offering to someone running [installed]. "Later"
+     * quiets the check that runs on its own, not one the user [asked] for:
+     * that one answers whatever was tapped 12 h ago. Pure, for the unit test.
+     */
+    fun isOffer(r: Release, installed: Long, snoozeUntil: Long, now: Long, asked: Boolean = false): Boolean =
+        r.build > installed && (asked || now >= snoozeUntil)
 
     /** The build number of the app that is running: CI's run number, see app/build.gradle.kts. */
     fun installedBuild(context: Context): Long = runCatching {

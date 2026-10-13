@@ -302,6 +302,13 @@ only once: for the first build that has this.
   `app-latest` release. If that names a newer build, it asks: **Update** or
   **Later** (quiet for 12 h). It never installs without the tap: Android
   closes an app to replace it.
+- **Or when asked: long-press the app icon → Check for updates.** The same
+  check, but it ignores the 15 min limit and a "Later", and it always
+  answers: the update question for a newer build, **Up to date** with the
+  build number otherwise, or **No answer from GitHub** when there is no
+  internet. The check on open stays silent in all of those cases, which on
+  2026-10-13 left build 60 unoffered with nothing to tap. Not while a
+  firmware flash is running: installing closes the app and would cut it off.
 - **Update** downloads `van-core-<build>.apk` inside the app. The download
   must match the size and sha256 in the version file, and be this app at
   that build, or it is deleted and nothing is installed. Then Android

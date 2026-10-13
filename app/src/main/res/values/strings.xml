@@ -37,6 +37,16 @@
     <string name="upd_progress">%1$d %%</string>
     <string name="upd_installing">Installing. van-core will close; open it again in a moment.</string>
     <string name="upd_failed">Update failed: %1$s</string>
+    <!-- The check the user asks for, from the launcher shortcut: it always answers. -->
+    <string name="sc_update_short">Check for updates</string>
+    <string name="sc_update_long">Check for app updates</string>
+    <string name="upd_checking">Asking GitHub for a newer build…</string>
+    <string name="upd_not_while_flashing">Not while van-core is being flashed: installing closes the app and would cut the upload off.</string>
+    <string name="upd_latest_title">Up to date</string>
+    <string name="upd_latest_body">This is build %1$d, the newest on GitHub.</string>
+    <string name="upd_ahead_body">This is build %1$d, newer than the newest on GitHub (build %2$d).</string>
+    <string name="upd_no_answer_title">No answer from GitHub</string>
+    <string name="upd_no_answer_body">Couldn\'t reach GitHub. The check needs mobile data or a Wi-Fi with internet; the van Wi-Fi has none.</string>
 
     <!-- Firmware flashing (D-24) -->
     <string name="sc_flash_short">Flash firmware</string>
