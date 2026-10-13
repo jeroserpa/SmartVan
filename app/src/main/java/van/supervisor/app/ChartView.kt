@@ -748,10 +748,17 @@ class ChartView @JvmOverloads constructor(
             raw / mag < 7.5f -> 5f * mag
             else -> 10f * mag
         }
-        val first = ceil(lo / step) * step
+        val first = ceil(lo / step)
         val out = ArrayList<Float>()
-        var v = first
-        while (v <= hi && out.size < 8) { out.add(v); v += step }
+        // Multiplied, not accumulated, and zero snapped to zero: summing the
+        // step drifts, and the axis read "-0.00W".
+        var i = 0
+        while (out.size < 8) {
+            var v = (first + i++) * step
+            if (v > hi) break
+            if (abs(v) < step * 1e-3f) v = 0f
+            out.add(v)
+        }
         return out
     }
 
