@@ -789,3 +789,36 @@ node's log has had no copy that survives a power cut. `VERIFY` the card.
 
 Fixes in D-29. `UNVERIFIED` until the new firmware has run a few days with
 the new "Open sockets" reading in the log.
+
+## M21 — 2026-10-13/14 — first log on the D-29 firmware, 15.8 h, one boot
+
+`soak-20261014-1207.csv`: 5 677 rows, boot 5 (`reset=software`, the OTA),
+20:22 → 12:07, no gaps, BLE up throughout, phone-synced clock from row 2.
+
+**Sockets (D-29) — behaving, `UNVERIFIED` past 49 h.**
+- 4 open at rest, 5 for 19 % of rows, 6–8 only twice: 20:22–20:23 (the phone
+  after the flash) and 12:05–12:06 (the phone downloading this log), back to
+  4–6 within a minute each time. Never past 8 of 16.
+- That is the point of the fix: the phone's connections are released, not
+  left behind. M20 failed after 49 h, so this says nothing yet about day
+  three; the column is there to say it.
+
+**Internal heap minimum** 104.7 kB from boot, then 98.3 kB at 12:06 during
+the log download with 7–8 sockets open — below M14's 102 kB. BLE stayed up.
+Worth watching on the next few downloads, not acting on.
+
+**SD card — still not writing.** `sd_lag` climbs 360 rows/h from 0 at boot
+to 5 676 = every row: nothing has reached the card this boot either (M20 had
+the same over 49 h). `VERIFY` the card itself.
+
+**Both probes read nothing for the first 5 min after boot.** Raw fridge and
+cabin empty from boot until 20:27:30 / 20:27:50, while the filtered fridge
+value sat at 5.125 °C. At 20:27:30 the arbiter forced AC on for "probe
+stale" for ~20 s, as the readings returned. `UNKNOWN` whether this happens at
+every boot or was specific to this one.
+
+**Spare-solar cold limit (D-27) — held.** Two surplus runs, 11:29–11:32 and
+11:42–11:56; raw probe minimum 1.19 °C against the 1 °C floor. On 9 and 12
+Oct the same rule took the cabinet to −3.7 and −0.7 °C (M19).
+
+AC on 41 % of rows. SOC 82–96 %.
