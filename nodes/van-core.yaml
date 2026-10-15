@@ -1453,9 +1453,9 @@ interval:
   #   fast red blink       parking asked, waiting for the confirming hold
   #   red blink, 1 s in 4  parked - the fridge is off on purpose
   #   off                  sleep mode, unless one of the above
-  #   green                cooking AC; blinking in the timer's last minutes
-  #   yellow-amber         AC on for the fridge
-  #   off                  inverter down
+  #   cyan                 cooking AC; blinking in the timer's last minutes
+  #   off                  everything else - normal running, fridge included
+  #                        (owner, 2026-10-15: dark unless there is news)
   #
   # Every cue the buzzer used to give is one of these: there is no buzzer. Full
   # brightness by default - it shines through the enclosure - and tunable
@@ -1483,11 +1483,7 @@ interval:
           } else if (id(sw_sleep_mode).state) {
             // dark
           } else if (id(arbiter)->manual_req()) {
-            g = (!id(arbiter)->manual_warning() || (now / 500u) % 2u == 0u) ? 1.0f : 0.0f;
-          } else if (id(arbiter)->ac_on()) {
-            // Pulled toward yellow, away from the red that means parked or
-            // broken. `UNVERIFIED` by eye on the real LED.
-            r = 1.0f; g = 0.6f;
+            g = b = (!id(arbiter)->manual_warning() || (now / 500u) % 2u == 0u) ? 1.0f : 0.0f;
           }
           const float lvl = id(num_led_brightness).state / 100.0f;
           id(out_led_r)->set_level(r * lvl);

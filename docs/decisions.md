@@ -1623,9 +1623,8 @@ top wins:
 | fast red blink | parking asked, waiting for the confirming hold (was a chirp) |
 | red blink, 1 s in 4 | parked |
 | off | sleep mode, unless one of the above |
-| green, blinking near the end | cooking AC; the blink replaces the timer-warning chirp |
-| yellow-amber | AC on for the fridge |
-| off | inverter down |
+| cyan, blinking near the end | cooking AC; the blink replaces the timer-warning chirp |
+| off | everything else, fridge running included (owner: dark unless there is news) |
 
 The GPIO9-11 outputs stay and get the same colours, for an illuminated button
 if one is fitted; unwired they cost nothing. The buzzer output, its warning
@@ -1644,5 +1643,5 @@ next to the USB socket (M22) is not ours and stays lit - mask it.
 first flash, parked's red blink showed green (`MEASURED` 2026-10-15). Fixed
 here and in the bench configs.
 
-**`UNVERIFIED`**: the amber ratio, by eye through the enclosure.
+
 

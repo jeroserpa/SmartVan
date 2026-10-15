@@ -541,9 +541,9 @@ in §9 Phase 0 before committing to block lengths.
   timer open. With a compressor this small the floor could drop to ~100W if
   finer discrimination is ever needed.
 - Hard ceiling: 3h regardless.
-- Feedback: the board's status LED (D-34) — green = manual active, blinking
-  green in the last minutes before auto-release, amber = fridge-driven, off =
-  inverter down. There is no buzzer.
+- Feedback: the board's status LED (D-34) — cyan = manual active, blinking
+  cyan in the last minutes before auto-release; off in normal running. Red is
+  parked or a fault. There is no buzzer.
 - Debounce: `delayed_on: 50ms` in software is sufficient on its own — it rejects
   both contact bounce and induced transients, since a spike would have to persist
   50ms to register. The optional 100Ω series resistor (and 100nF) are for **GPIO
