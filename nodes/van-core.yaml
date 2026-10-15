@@ -47,10 +47,15 @@ substitutions:
   # longer used: the bezel page and sleep buttons are gone, sleep and parked
   # mode live in the web UI.
   pin_btn: GPIO5
+  # The button's own LED, if the button fitted is an illuminated one. Driven
+  # with the same colours as the status LED below; harmless if not wired.
   pin_led_r: GPIO9
   pin_led_g: GPIO10
   pin_led_b: GPIO11
-  pin_buzzer: GPIO8
+  # The board's own WS2812 (LED2): the status light that works with the screen
+  # off (D-34). `VERIFIED` on GPIO38, GRB (M22). No buzzer is fitted or planned,
+  # so GPIO8 is free and every cue that used to be a chirp is a light.
+  pin_status_led: GPIO38
   # GPIO0 (BOOT) is NOT used as a runtime button: it is a strapping pin, and
   # holding it across a reset silently drops the board into download mode.
   # It is also hard to reach in the enclosure. GPIO6/7 are free again.
@@ -298,7 +303,7 @@ binary_sensor:
   # exists to remove. While parked a tap only wakes the PARKED view.
   #
   # While held past 0.4 s the panel shows what the hold is about to do, filling
-  # as it goes; one chirp when it acts. Every gesture is logged ([button]), so
+  # as it goes; the status LED flashes when it acts. Every gesture is logged ([button]), so
   # a phantom press is visible. Hold time and the fall-back are app settings.
   - platform: gpio
     name: "Button"
@@ -667,18 +672,16 @@ switch:
                 format: "PARKED: AC off, fail-safe disarmed, charge capped at %.0f%%"
                 args: [id(num_parked_charge_max).state]
           else:
-            # Armed, not parked. One chirp and a prompt - the user is about to
-            # walk away, and must not believe the van is parked when it is one
-            # press short of it. Nothing has changed yet: AC still arbitrates
-            # normally and the fail-safe is still armed.
+            # Armed, not parked. A prompt on the screen and a fast red blink on
+            # the status LED (D-34) - the user is about to walk away, and must
+            # not believe the van is parked when it is one press short of it.
+            # Nothing has changed yet: AC still arbitrates normally and the
+            # fail-safe is still armed.
             - logger.log:
                 level: WARN
                 format: "PARK ARMED - confirm within %us to park, or it lapses"
                 args: ["(unsigned) 30"]
             - lambda: id(display_awake) = true;
-            - lambda: id(out_buzzer)->set_level(0.5f);
-            - delay: 120ms
-            - lambda: id(out_buzzer)->set_level(0.0f);
     turn_off_action:
       - lambda: id(arbiter)->park_exit();
       - lambda: id(parked_saved) = false;
@@ -1132,6 +1135,17 @@ number:
     restore_value: true
     entity_category: config
   - platform: template
+    name: "Status LED brightness"
+    id: num_led_brightness
+    unit_of_measurement: "%"
+    min_value: 0
+    max_value: 100
+    step: 5
+    initial_value: 20
+    optimistic: true
+    restore_value: true
+    entity_category: config
+  - platform: template
     name: "Button back to main after"
     id: num_btn_return
     unit_of_measurement: "s"
@@ -1224,8 +1238,23 @@ number:
       - lambda: id(arbiter)->config().surplus_floor_c = x;
 
 # -----------------------------------------------------------------------------
-# Feedback: button LED and buzzer
+# Feedback: the status LED (D-34) and, if fitted, the button's LED
 # -----------------------------------------------------------------------------
+light:
+  # Internal: not a control, and not worth an entity on the page. Linear (no
+  # gamma) so "Status LED brightness" means what it says. Starts off; the 100 ms
+  # LED interval owns it from the first tick.
+  - platform: esp32_rmt_led_strip
+    id: status_led
+    internal: true
+    pin: ${pin_status_led}
+    num_leds: 1
+    chipset: WS2812
+    rgb_order: GRB
+    gamma_correct: 1.0
+    default_transition_length: 0s
+    restore_mode: ALWAYS_OFF
+
 output:
   - platform: ledc
     pin: ${pin_led_r}
@@ -1239,10 +1268,6 @@ output:
     pin: ${pin_led_b}
     id: out_led_b
     frequency: 1000Hz
-  - platform: ledc
-    pin: ${pin_buzzer}
-    id: out_buzzer
-    frequency: 2700Hz
   - platform: ledc
     pin:
       number: ${pin_lcd_bl}
@@ -1274,7 +1299,8 @@ globals:
     type: bool
     restore_value: true
     initial_value: "false"
-  - id: buzzer_last_ms
+  # A hold has just acted (D-33): the status LED flashes until this time.
+  - id: led_flash_until_ms
     type: uint32_t
     restore_value: false
     initial_value: "0"
@@ -1343,14 +1369,6 @@ script:
           id(display_wake_ms) = millis();
       - component.update: van_display
 
-  # One chirp: the button's hold has acted (D-33). Not suppressed in sleep or
-  # parked mode like the timer warning - someone is standing at the button.
-  - id: chirp
-    then:
-      - lambda: id(out_buzzer)->set_level(0.5f);
-      - delay: 60ms
-      - lambda: id(out_buzzer)->set_level(0.0f);
-
 interval:
   # The button's hold (D-33). Acts the moment it reaches "Button hold time",
   # on whatever screen is showing. Before that, redraws twice a second so the
@@ -1371,7 +1389,7 @@ interval:
           }
           id(btn_hold_fired) = true;
           id(btn_input_ms) = now;
-          id(chirp).execute();
+          id(led_flash_until_ms) = now + 300;  // the LED says it acted (D-34)
           const bool parked = id(arbiter)->parked();
           const int pg = (parked && id(park_view)) ? -1 : id(page_idx);
           if (pg == 5) {
@@ -1424,52 +1442,70 @@ interval:
                                                    : k == 1 ? "ON" : "+30 min");
           }
 
-  # Button LED. RED IS RESERVED (D-31): red blink = parked, steady red = a
-  # fault. Green = manual active, yellow-amber = fridge-driven, off = inverter
-  # down. Dim: this is a metre from where someone sleeps.
-  - interval: 1s
+  # The status LED (D-34): the board's WS2812, and the button's LED if fitted.
+  # The one indicator that works with the screen off. RED IS RESERVED (D-31):
+  #
+  #   white flash          a button hold just acted
+  #   steady red           a fault: the fail-safe holding AC on (not the boot window)
+  #   fast red blink       parking asked, waiting for the confirming hold
+  #   red blink, 1 s in 4  parked - the fridge is off on purpose
+  #   off                  sleep mode, unless one of the above
+  #   green                cooking AC; blinking in the timer's last minutes
+  #   yellow-amber         AC on for the fridge
+  #   off                  inverter down
+  #
+  # Every cue the buzzer used to give is one of these: there is no buzzer. Dim
+  # by default ("Status LED brightness") - this is a metre from where someone
+  # sleeps, and sleep mode keeps it dark unless something is wrong.
+  - interval: 100ms
     then:
       - lambda: |-
+          const uint32_t now = millis();
           float r = 0, g = 0, b = 0;
           // A fault is the fail-safe holding AC on for any reason but the
           // boot window, which is routine and over in seconds.
           const bool fault = id(arbiter)->force_on() &&
                              strcmp(id(arbiter)->reason(), "boot") != 0;
-          if (id(arbiter)->parked()) {
-            // A dim red blink, ~1s in 4. In a dark van with a blank screen
-            // this is the only sign that the fridge is deliberately dead - and
-            // the one thing that might stop someone loading food into a parked
-            // van the morning of a trip.
-            r = ((millis() / 1000u) % 4u == 0u) ? 0.20f : 0.0f;
+          if ((int32_t) (id(led_flash_until_ms) - now) > 0) {
+            r = g = b = 1.0f;
           } else if (fault) {
-            r = 0.20f;                       // steady red: something is wrong
+            r = 1.0f;
+          } else if (id(arbiter)->park_pending()) {
+            r = ((now / 250u) % 2u == 0u) ? 1.0f : 0.0f;
+          } else if (id(arbiter)->parked()) {
+            // In a dark van with a blank screen this is the only sign that the
+            // fridge is deliberately dead - and the one thing that might stop
+            // someone loading food into a parked van the morning of a trip.
+            r = ((now / 1000u) % 4u == 0u) ? 1.0f : 0.0f;
+          } else if (id(sw_sleep_mode).state) {
+            // dark
           } else if (id(arbiter)->manual_req()) {
-            g = 0.25f;                       // green: you asked for this
+            g = (!id(arbiter)->manual_warning() || (now / 500u) % 2u == 0u) ? 1.0f : 0.0f;
           } else if (id(arbiter)->ac_on()) {
-            // Fridge-driven. Pulled toward yellow, away from the red that now
-            // means parked or broken. `UNVERIFIED` on the real LED: tune the
-            // ratio by eye, an RGB die's channels are not equally bright.
-            r = 0.16f; g = 0.10f;
+            // Pulled toward yellow, away from the red that means parked or
+            // broken. `UNVERIFIED` by eye on the real LED.
+            r = 1.0f; g = 0.6f;
           }
-          id(out_led_r)->set_level(r);
-          id(out_led_g)->set_level(g);
-          id(out_led_b)->set_level(b);
-
-  # Buzzer: a short chirp while the manual timer is inside its warning window,
-  # at most once every 30s. Suppressed in sleep mode - waking someone to tell
-  # them the inverter is about to turn itself off is absurd.
-  - interval: 5s
-    then:
-      - lambda: |-
-          if (!id(arbiter)->manual_warning()) return;
-          if (id(sw_sleep_mode).state) return;
-          if (id(arbiter)->parked()) return;
-          const uint32_t now = millis();
-          if (now - id(buzzer_last_ms) < 30000) return;
-          id(buzzer_last_ms) = now;
-          id(out_buzzer)->set_level(0.5f);
-      - delay: 120ms
-      - lambda: id(out_buzzer)->set_level(0.0f);
+          const float lvl = id(num_led_brightness).state / 100.0f;
+          id(out_led_r)->set_level(r * lvl);
+          id(out_led_g)->set_level(g * lvl);
+          id(out_led_b)->set_level(b * lvl);
+          // The WS2812 only when it changes: a light call per tick would be
+          // ten a second of nothing.
+          static int shown = -1;
+          const int key = ((int) (r * 9) * 100 + (int) (g * 9) * 10 + (int) (b * 9)) * 101 +
+                          (int) (lvl * 100);
+          if (key == shown) return;
+          shown = key;
+          auto call = id(status_led).make_call();
+          if (r + g + b == 0.0f || lvl <= 0.0f) {
+            call.set_state(false);
+          } else {
+            call.set_state(true);
+            call.set_brightness(lvl);
+            call.set_rgb(r, g, b);
+          }
+          call.perform();
 
   # BENCH REVIEW ONLY - set bench_review to 0 for the van. Cycles the pages so
   # all four can be looked at on a bare board with no button wired. In

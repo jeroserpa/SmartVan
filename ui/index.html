@@ -482,6 +482,7 @@ table.raw td:first-child{color:var(--muted);padding-right:10px;word-break:break-
     <h2>Button</h2>
     <div class="row" data-num="btn_hold"><div class="lbl"><b>Hold time</b><small>a hold does the screen's action: cooking, or sleep / park on their screens</small></div></div>
     <div class="row" data-num="btn_return"><div class="lbl"><b>Back to main screen after</b><small>so the next hold is cooking again</small></div></div>
+    <div class="row" data-num="led_lvl"><div class="lbl"><b>Status LED brightness</b><small>the board's light: red parked or fault, green cooking, amber fridge</small></div></div>
   </div>
 
   <div class="card">
@@ -656,6 +657,7 @@ const NUMS = {
   park_soc:      ["number-parked_charge_max",         5,   "%",   0],
   btn_hold:      ["number-button_hold_time",          0.5, "s",   1],
   btn_return:    ["number-button_back_to_main_after", 1,   "s",   0],
+  led_lvl:       ["number-status_led_brightness",     5,   "%",   0],
 };
 
 /* The arbiter's reason, in words. The state pill already says on or off, so

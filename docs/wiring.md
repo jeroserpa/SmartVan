@@ -78,7 +78,7 @@ through the buck module's ground pad.
 | ESP32-S3, WiFi SoftAP + BLE client | ~160 mA @5V | ~400 mA TX burst |
 | LCD backlight at 80% (60s at a time) | ~30 mA @5V | — |
 | Onboard WS2812, one colour dim | ~5 mA @5V | ~60 mA full white |
-| Buzzer, 2 min/day | — | ~30 mA @5V |
+| ~~Buzzer~~ — none fitted (D-34) | — | — |
 | **12V input, steady state** | **~95 mA ≈ 1.15 W** | ~0.30 A |
 
 Against the §5.4 budget of 2W for the whole control system. It fits, but
@@ -123,7 +123,7 @@ Board: Waveshare ESP32-S3-LCD-1.47 (ESP32-S3R8).
 | 4 | 1-Wire data — `VERIFIED 2026-10-15` on the bench, one DS18B20 (M22) | in/out | 4.7 kΩ to 3V3 at the ESP end (BOM item 3) |
 | 5 | Kitchen AC button, switch between GPIO5 and GND — `VERIFIED 2026-10-15` on the bench (M22) | input, pullup, inverted | 100 Ω series (BOM item 8) |
 | 6 | ~~External page button~~ — `DROPPED 2026-10-15` (D-31): one button only, the kitchen one on GPIO5 does everything. GPIO6 is free | — | — |
-| 8 | Buzzer | LEDC 2.7 kHz | 100 Ω series; MOSFET + flyback if magnetic |
+| 8 | ~~Buzzer~~ — `DROPPED 2026-10-15` (D-34): no buzzer; every cue is the status LED. GPIO8 is free | — | — |
 | 9 | I²C SDA — DS3231 | *proposed* | 4.7 kΩ pull-ups on the module |
 | 10 | I²C SCL — DS3231 | *proposed* | |
 
@@ -359,7 +359,7 @@ the arbiter's button handling deserves its own pass with the tests in `test/`.
 | 1 | Waveshare header — which GPIOs are actually broken out, and the SD pins |
 | 2 | ~~The onboard RGB LED's pin, and whether it is a WS2812 or a plain RGB~~ `CLOSED 2026-10-15`: WS2812B on GPIO38 (M22) |
 | 3 | Physical position of the BOOT switch relative to the header, for the plunger |
-| 4 | Buzzer type — piezo (direct drive) or magnetic (MOSFET + flyback diode) |
+| 4 | ~~Buzzer type~~ `CLOSED 2026-10-15`: no buzzer (D-34) |
 | 5 | Display offsets and rotation on first flash, before the lid cutout is measured |
 
 `CLOSED:` the P310 12V port holding up at low load (BOM D3) — no dropout observed

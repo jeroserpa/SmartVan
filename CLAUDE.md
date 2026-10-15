@@ -199,7 +199,7 @@ D-33 — tap moves, hold does what the screen offers.**
 |---|---|
 | Tap (< 1 s), screen dark | Wake, on the main screen. **Never touches AC** |
 | Tap, screen on | Next screen |
-| Hold 3 s | Acts **at** 3 s, while still held, one chirp — the screen's action: |
+| Hold 3 s | Acts **at** 3 s, while still held, status LED flashes white — the screen's action: |
 | | ENERGY / FRIDGE / WATER / DIAG / PARKED view: **cooking AC** (start 45 min, or +30 min; leaves parked mode) |
 | | COOKING (in the cycle only while cooking): stop cooking |
 | | SLEEP: sleep mode on / off |
@@ -380,7 +380,7 @@ swap stays cheap.
 
    **What remains unmitigated, stated rather than papered over:** a permanent
    BLE failure or a dead node, arriving during an OFF block, leaves the fridge
-   off until a human intervenes. The tools left are alerting (buzzer, LED,
+   off until a human intervenes. The tools left are alerting (status LED,
    display) and the P310's own physical AC button — see §11. A node that is
    merely *crashed* is fine: the watchdog reboots it and boot force-on covers
    the gap. A node with no power is not, though it correlates with the 12V bus
@@ -541,8 +541,9 @@ in §9 Phase 0 before committing to block lengths.
   timer open. With a compressor this small the floor could drop to ~100W if
   finer discrimination is ever needed.
 - Hard ceiling: 3h regardless.
-- Feedback: RGB LED — green = manual active, amber = fridge-driven, off =
-  inverter down. Buzzer beep 2 min before auto-release.
+- Feedback: the board's status LED (D-34) — green = manual active, blinking
+  green in the last minutes before auto-release, amber = fridge-driven, off =
+  inverter down. There is no buzzer.
 - Debounce: `delayed_on: 50ms` in software is sufficient on its own — it rejects
   both contact bounce and induced transients, since a spike would have to persist
   50ms to register. The optional 100Ω series resistor (and 100nF) are for **GPIO
@@ -675,8 +676,8 @@ gate is a **second, deliberate request within 30s**; the first only arms.
 - An arm that is not confirmed **lapses**, and a lapsed arm can never be
   completed later — the next press arms afresh. A half-pressed button must not
   be finishable by an unrelated press an hour on.
-- While armed: one chirp, the display wakes and says `PARK? confirm to disarm
-  fail-safe`, and **nothing has changed yet** — AC still arbitrates normally
+- While armed: the status LED blinks red fast, the display wakes and says
+  `PARK?`, and **nothing has changed yet** — AC still arbitrates normally
   and the fail-safe is still armed.
 
 **The temperature interlock is gone, and so is `Park (force)`.** The interlock
@@ -710,11 +711,11 @@ later — was never covered by the interlock and is unchanged.**
   lever there is — and dropping it to 60% also drops the buffer against a
   fortnight of December. Lower it deliberately for winter storage, not by
   default. Restored to 100% on exit.
-- Blank the display; suppress the buzzer.
+- Blank the display.
 
 #### While parked
-- **A dim red blink on the button LED, ~1s in 4** (blue until D-31: red is now
-  reserved for parked and faults). In a dark van with
+- **A dim red blink on the status LED, ~1s in 4** (blue until D-31: red is now
+  reserved for parked and faults; the board's own LED since D-34). In a dark van with
   a blank screen this is the only sign that the fridge is deliberately dead,
   and it is the mitigation for the one real hazard below.
 - The display page still says `PARKED n.n d — FRIDGE OFF` when woken.
@@ -1312,7 +1313,7 @@ a hard cut here**, and per §5.2 the direction is stated rather than assumed:
   hypothetical (point 2 above).
 
 So a grey sender that is high, stale, or missing raises a **warning** — display
-plus buzzer — and never opens the pump circuit. If a hard cut is ever wanted it
+plus status LED — and never opens the pump circuit. If a hard cut is ever wanted it
 needs two independent conditions to agree, and it still expires on a timeout,
 like the drive inhibit in Phase 4.
 

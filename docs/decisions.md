@@ -1605,3 +1605,40 @@ on the app's settings page. The four band numbers of the parallel attempt are
 gone.
 
 **`UNVERIFIED`** under a real finger until the bench test is logged.
+
+## 2026-10-15 — D-34: the board's LED is the status light; no buzzer
+
+**Context.** The board's own WS2812 (GPIO38, M22) was unused: the firmware
+drove an external RGB LED on GPIO9-11 meant for an illuminated button, and a
+buzzer on GPIO8. The owner: there is no buzzer and probably never will be,
+and the board LED should show status when the screen is off.
+
+**Decision.** The WS2812 is the status light, updated every 100 ms. Priority,
+top wins:
+
+| Colour | Means |
+|---|---|
+| white flash | a button hold just acted (was a chirp) |
+| steady red | fault - the fail-safe holding AC on, boot window excepted |
+| fast red blink | parking asked, waiting for the confirming hold (was a chirp) |
+| red blink, 1 s in 4 | parked |
+| off | sleep mode, unless one of the above |
+| green, blinking near the end | cooking AC; the blink replaces the timer-warning chirp |
+| yellow-amber | AC on for the fridge |
+| off | inverter down |
+
+The GPIO9-11 outputs stay and get the same colours, for an illuminated button
+if one is fitted; unwired they cost nothing. The buzzer output, its warning
+interval and the chirp script are gone; GPIO8 is free.
+
+**Brightness** is an app setting, `Status LED brightness`, default 20 %, with
+no gamma so the number means what it says. Sleep mode keeps the LED dark
+unless something is wrong: it is a metre from a bed.
+
+**Visibility** depends on the enclosure: the LED sits inside the box, so it
+needs the light pipe or window wiring.md §5 asks for. The charger's green LED
+next to the USB socket (M22) is not ours and stays lit - mask it.
+
+**`UNVERIFIED`**: the amber ratio and the default level, by eye through the
+enclosure.
+

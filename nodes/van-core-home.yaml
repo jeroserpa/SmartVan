@@ -34,9 +34,7 @@
 #                             numbers if a block is too long to wait for
 #   Sim: keep screen awake    no page button at home; off to test blanking
 #
-# The onboard RGB LED mirrors the button LED van-core drives on GPIO9-11,
-# which is not fitted: green = manual AC, amber = AC on for the fridge,
-# blue blink = parked.
+# The board's status LED is van-core's own since D-34 (see van-core.yaml).
 #
 # Flash it over USB or from the phone app; flash van-core back the same way.
 
@@ -190,18 +188,6 @@ number:
     set_action:
       - lambda: id(p310)->sim_set_time_factor(x);
 
-light:
-  - platform: esp32_rmt_led_strip
-    id: onboard_rgb
-    name: "Onboard RGB"
-    internal: true
-    pin: GPIO38
-    num_leds: 1
-    chipset: WS2812
-    rgb_order: GRB
-    default_transition_length: 0s
-    restore_mode: ALWAYS_OFF
-
 interval:
   - interval: 1s
     then:
@@ -212,27 +198,6 @@ interval:
             id(display_awake) = true;
             id(display_wake_ms) = millis();
           }
-      - lambda: |-
-          // Intent: show on the board what van-core's button LED would show,
-          // same rules as its 1 s LED interval.
-          int colour = 0;  // 0 off, 1 green, 2 amber, 3 blue
-          if (id(arbiter)->parked())
-            colour = ((millis() / 1000u) % 4u == 0u) ? 3 : 0;
-          else if (id(arbiter)->manual_req())
-            colour = 1;
-          else if (id(arbiter)->ac_on())
-            colour = 2;
-          static int shown = -1;
-          if (colour == shown) return;
-          shown = colour;
-          static const float RGB[4][3] = {{0, 0, 0}, {0, 1, 0}, {1, 0.3f, 0}, {0, 0, 1}};
-          auto call = id(onboard_rgb).make_call();
-          call.set_state(colour != 0);
-          if (colour != 0) {
-            call.set_brightness(0.4f);
-            call.set_rgb(RGB[colour][0], RGB[colour][1], RGB[colour][2]);
-          }
-          call.perform();
   - interval: 60s
     then:
       - logger.log:
