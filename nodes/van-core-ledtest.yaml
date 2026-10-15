@@ -95,10 +95,9 @@ light:
     num_leds: 1
     chipset: WS2812
     # The 1.47B schematic names the part: LED2, WS2812B-0807, DI on RGB_IO
-    # (GPIO38) with a 10k pull-up. GRB is the WS2812B's datasheet order. If
-    # the web UI says red while the LED shows green, this should be RGB; the
-    # cycle covers every colour either way.
-    rgb_order: GRB
+    # (GPIO38) with a 10k pull-up. `MEASURED 2026-10-15`: RGB order, not the
+    # WS2812B datasheet's GRB - with GRB, red showed green.
+    rgb_order: RGB
     # Linear, not the default 2.8: at 2.8 the mid-sweep colours are driven well
     # below full scale, and the point is the brightest the LED can be.
     gamma_correct: 1.0

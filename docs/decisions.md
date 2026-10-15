@@ -1631,14 +1631,18 @@ The GPIO9-11 outputs stay and get the same colours, for an illuminated button
 if one is fitted; unwired they cost nothing. The buzzer output, its warning
 interval and the chirp script are gone; GPIO8 is free.
 
-**Brightness** is an app setting, `Status LED brightness`, default 20 %, with
-no gamma so the number means what it says. Sleep mode keeps the LED dark
+**Brightness** is an app setting, `Status LED brightness`, default 100 %
+(owner: it sits behind the enclosure wall), with no gamma so the number means
+what it says. Sleep mode keeps the LED dark
 unless something is wrong: it is a metre from a bed.
 
 **Visibility** depends on the enclosure: the LED sits inside the box, so it
 needs the light pipe or window wiring.md §5 asks for. The charger's green LED
 next to the USB socket (M22) is not ours and stays lit - mask it.
 
-**`UNVERIFIED`**: the amber ratio and the default level, by eye through the
-enclosure.
+**Colour order.** The part is RGB, not the WS2812B datasheet's GRB: on the
+first flash, parked's red blink showed green (`MEASURED` 2026-10-15). Fixed
+here and in the bench configs.
+
+**`UNVERIFIED`**: the amber ratio, by eye through the enclosure.
 

@@ -53,7 +53,8 @@ substitutions:
   pin_led_g: GPIO10
   pin_led_b: GPIO11
   # The board's own WS2812 (LED2): the status light that works with the screen
-  # off (D-34). `VERIFIED` on GPIO38, GRB (M22). No buzzer is fitted or planned,
+  # off (D-34). `VERIFIED` on GPIO38 (M22); RGB order, not the WS2812B's usual
+  # GRB (`MEASURED 2026-10-15`: parked red showed green). No buzzer is fitted or planned,
   # so GPIO8 is free and every cue that used to be a chirp is a light.
   pin_status_led: GPIO38
   # GPIO0 (BOOT) is NOT used as a runtime button: it is a strapping pin, and
@@ -1141,7 +1142,8 @@ number:
     min_value: 0
     max_value: 100
     step: 5
-    initial_value: 20
+    # Full by default (owner, 2026-10-15): it sits behind the enclosure wall.
+    initial_value: 100
     optimistic: true
     restore_value: true
     entity_category: config
@@ -1250,7 +1252,8 @@ light:
     pin: ${pin_status_led}
     num_leds: 1
     chipset: WS2812
-    rgb_order: GRB
+    # RGB, not the datasheet's GRB: with GRB, red showed green (2026-10-15).
+    rgb_order: RGB
     gamma_correct: 1.0
     default_transition_length: 0s
     restore_mode: ALWAYS_OFF
@@ -1454,9 +1457,9 @@ interval:
   #   yellow-amber         AC on for the fridge
   #   off                  inverter down
   #
-  # Every cue the buzzer used to give is one of these: there is no buzzer. Dim
-  # by default ("Status LED brightness") - this is a metre from where someone
-  # sleeps, and sleep mode keeps it dark unless something is wrong.
+  # Every cue the buzzer used to give is one of these: there is no buzzer. Full
+  # brightness by default - it shines through the enclosure - and tunable
+  # ("Status LED brightness"); sleep mode keeps it dark unless something is wrong.
   - interval: 100ms
     then:
       - lambda: |-

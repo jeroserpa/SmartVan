@@ -341,7 +341,7 @@ The YAML predates this revision. To match:
 |---|---|
 | Delete | `pin_led_r`, `pin_led_g`, `pin_led_b` and the three `ledc` outputs |
 | Delete | `pin_btn_sleep` (GPIO7) and its binary sensor |
-| Add | onboard WS2812B on the `light` platform: GPIO38, GRB, as in `nodes/van-core-ledtest.yaml` (pin `VERIFIED`, M22) |
+| Add | onboard WS2812B on the `light` platform: GPIO38, **RGB order** (not GRB - measured 2026-10-15), as in `nodes/van-core-ledtest.yaml` (pin `VERIFIED`, M22) |
 | Rework | the LED feedback logic onto one addressable LED |
 | Rework | sleep-mode gesture onto the page button's long press; parked mode primarily via the web switch |
 | Change | `pin_btn_page` from an external bezel button to GPIO0, keeping GPIO6 declared for the spare terminal pair |

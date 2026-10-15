@@ -157,7 +157,7 @@ light:
     pin: ${pin_rgb}
     num_leds: 1
     chipset: WS2812
-    rgb_order: GRB
+    rgb_order: RGB  # not GRB: measured 2026-10-15
     default_transition_length: 0s
     restore_mode: ALWAYS_OFF
 
