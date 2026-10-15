@@ -951,3 +951,30 @@ M23's refused write and permanent wedge are both gone.
 **Still `UNVERIFIED`:** the same build against the real P310 (patch 1 writes
 a CCCD the station has never received - D-32), and the button gestures under a
 real finger.
+
+## M25 — 2026-10-15 — bench: the D-33 button under a finger
+
+`nodes/van-core-pcsim-failsafe.yaml` (scripted probe) against
+`tools/p310_sim.py`, every gesture read back from the `[button]` log and the
+station's received writes.
+
+- **Boot came up PARKED** - the parked_saved bug: the previous build's cooking
+  exit had left parked mode in RAM only. The fix is in this build.
+- **Hold on the PARKED view** -> cooking ON, parked left; station got AC ON,
+  USB ON, charge max 100 % (19:33:14). Earlier the same exit left USB off and
+  the cap at 80 %.
+- **Taps** cycle 0-1-2-3-(4)-5-6-0; COOKING (4) appears only while cooking and
+  is skipped once it stops. A tap on a dark screen only wakes.
+- **Hold on COOKING** -> cooking stopped, back to the main screen.
+- **Hold on SLEEP** -> on, panel dark after the toast; a tap still wakes it;
+  hold again -> off.
+- **Hold on PARK** -> armed (`PARK?`); hold again -> PARKED: AC off, USB off,
+  cap 80 %, DC untouched.
+- **Let go at 1.4 s** -> nothing.
+- **Back to main** after ~10 s of quiet: the next tap landed on screen 1.
+- After leaving parked mode, AC stayed on until the (scripted) probe first
+  reported, then went off - the D-32 never-seen-probe rule, by design.
+
+Not tried: leaving parked mode from the PARK screen without cooking (toast 8).
+Each tap's immediate redraw costs ~150 ms of loop (ESPHome warns >50 ms); a
+one-off per press, accepted.
