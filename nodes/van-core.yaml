@@ -40,6 +40,8 @@ substitutions:
   # --- pins: external wiring, all on 3.5mm pluggable screw terminals ---
   # Connectors are keyed by pin count so they cannot be mis-plugged at 11pm in
   # a car park: 2-pin = 12V in, 3-pin = 1-Wire, 4-pin = button+LED.
+  # GPIO4 and GPIO5 `VERIFIED 2026-10-15` on the bench with
+  # van-core-inputs.yaml: a DS18B20 on 4, the button between 5 and GND (M22).
   pin_onewire: GPIO4
   pin_btn_manual: GPIO5   # kitchen, illuminated momentary
   pin_btn_page: GPIO6     # bezel: wake / cycle pages

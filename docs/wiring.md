@@ -104,7 +104,7 @@ Board: Waveshare ESP32-S3-LCD-1.47 (ESP32-S3R8).
 | 48 | LCD backlight | LEDC 20 kHz |
 | 14–18? | microSD, SDMMC | `VERIFY`; the card is not in the YAML yet |
 | **0** | **BOOT — now the page/cycle button** | see §4. Strapping pin: held across a reset it drops the board into download mode |
-| **38?** | **Onboard WS2812 RGB — the only indicator** | `VERIFY` the pin; Waveshare S3 boards commonly use GPIO38 |
+| **38** | **Onboard WS2812B RGB — the only indicator** | `VERIFIED 2026-10-15` (M22): LED2, WS2812B-0807, DI on GPIO38 with a 10k pull-up. The small green LED by the USB socket is *not* on a GPIO — it is the charger's status LED, see M22 |
 | 19, 20 | USB D− / D+ | |
 | 43, 44 | UART0 | |
 
@@ -112,8 +112,8 @@ Board: Waveshare ESP32-S3-LCD-1.47 (ESP32-S3R8).
 
 | GPIO | Signal | Mode | Conditioning |
 |---|---|---|---|
-| 4 | 1-Wire data | in/out | 4.7 kΩ to 3V3 at the ESP end (BOM item 3) |
-| 5 | Kitchen AC button | input, pullup, inverted | 100 Ω series (BOM item 8) |
+| 4 | 1-Wire data — `VERIFIED 2026-10-15` on the bench, one DS18B20 (M22) | in/out | 4.7 kΩ to 3V3 at the ESP end (BOM item 3) |
+| 5 | Kitchen AC button, switch between GPIO5 and GND — `VERIFIED 2026-10-15` on the bench (M22) | input, pullup, inverted | 100 Ω series (BOM item 8) |
 | 6 | External page button — **wired to the terminal, unused for now** | input, pullup, inverted | 100 Ω series |
 | 8 | Buzzer | LEDC 2.7 kHz | 100 Ω series; MOSFET + flyback if magnetic |
 | 9 | I²C SDA — DS3231 | *proposed* | 4.7 kΩ pull-ups on the module |
@@ -331,7 +331,7 @@ The YAML predates this revision. To match:
 |---|---|
 | Delete | `pin_led_r`, `pin_led_g`, `pin_led_b` and the three `ledc` outputs |
 | Delete | `pin_btn_sleep` (GPIO7) and its binary sensor |
-| Add | onboard WS2812 on the `light` platform, `VERIFY` pin |
+| Add | onboard WS2812B on the `light` platform: GPIO38, GRB, as in `nodes/van-core-ledtest.yaml` (pin `VERIFIED`, M22) |
 | Rework | the LED feedback logic onto one addressable LED |
 | Rework | sleep-mode gesture onto the page button's long press; parked mode primarily via the web switch |
 | Change | `pin_btn_page` from an external bezel button to GPIO0, keeping GPIO6 declared for the spare terminal pair |
@@ -347,7 +347,7 @@ the arbiter's button handling deserves its own pass with the tests in `test/`.
 | # | Item |
 |---|---|
 | 1 | Waveshare header — which GPIOs are actually broken out, and the SD pins |
-| 2 | The onboard RGB LED's pin, and whether it is a WS2812 or a plain RGB |
+| 2 | ~~The onboard RGB LED's pin, and whether it is a WS2812 or a plain RGB~~ `CLOSED 2026-10-15`: WS2812B on GPIO38 (M22) |
 | 3 | Physical position of the BOOT switch relative to the header, for the plunger |
 | 4 | Buzzer type — piezo (direct drive) or magnetic (MOSFET + flyback diode) |
 | 5 | Display offsets and rotation on first flash, before the lid cutout is measured |

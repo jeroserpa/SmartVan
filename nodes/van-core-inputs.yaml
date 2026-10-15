@@ -1,0 +1,237 @@
+# van-core-inputs - bench check of the kitchen button (GPIO5) and one DS18B20
+# probe (GPIO4), on the pins van-core.yaml uses for them.
+#
+# Not part of the system. It answers two wiring questions before anything is
+# trusted with the fridge:
+#   - does GPIO5 see the button, cleanly, through the same 50 ms debounce
+#     van-core uses - and which gesture would van-core have read from each
+#     press (short = cooking on, long = cancel, see van-core.yaml on_click)
+#   - is there a probe on the GPIO4 bus, what is its address (van-core pins
+#     probes by address, M14), and does it read sensibly
+#
+# Readout, no laptop needed:
+#   - the onboard RGB LED is green while the button is held
+#   - the screen shows the temperature, the probe address, the button state
+#     and the last press's length and gesture
+#   - the same in the web UI and, at DEBUG, on the USB serial log
+#
+# The 1-Wire bus is searched once at boot: connect the probe BEFORE powering
+# the board, or press RESET after connecting it.
+#
+# NOTHING CONTROLS THE P310 WHILE THIS RUNS - no BLE, no arbiter (CLAUDE.md
+# section 5.2). It keeps van-core's SoftAP, OTA password and web server so the
+# phone app can put van-core back over it; see van-core-ledtest.yaml.
+
+substitutions:
+  node_name: van-core-inputs
+  friendly_name: Van core input test
+  # Same pins as van-core.yaml.
+  pin_onewire: GPIO4
+  pin_btn_manual: GPIO5
+  pin_rgb: GPIO38
+  pin_lcd_sclk: GPIO40
+  pin_lcd_mosi: GPIO45
+  pin_lcd_cs: GPIO42
+  pin_lcd_dc: GPIO41
+  pin_lcd_rst: GPIO39
+
+esphome:
+  name: ${node_name}
+  friendly_name: ${friendly_name}
+  comment: "Bench test: kitchen button on GPIO5, DS18B20 on GPIO4"
+  min_version: 2025.7.0
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      # As van-core (D-29): the OTA upload that puts van-core back must never
+      # be refused for want of a socket.
+      CONFIG_LWIP_MAX_SOCKETS: "16"
+  flash_size: 16MB
+
+packages:
+  base: !include ../common/base.yaml
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [web_server_idf]
+
+# DEBUG rather than base.yaml's INFO: every reading and every button edge goes
+# to the serial log, and the 1-Wire search result is printed at boot.
+logger:
+  level: DEBUG
+
+wifi:
+  ap:
+    ssid: !secret wifi_ssid
+    password: !secret wifi_password
+
+globals:
+  - id: presses
+    type: int
+    initial_value: "0"
+  - id: press_start
+    type: uint32_t
+    initial_value: "0"
+  - id: last_ms
+    type: uint32_t
+    initial_value: "0"
+  # 0 none yet, 1 short, 2 between short and long, 3 long, 4 over 10 s.
+  - id: last_kind
+    type: int
+    initial_value: "0"
+
+# -----------------------------------------------------------------------------
+# Button: wired to GND, internal pull-up, exactly as van-core.yaml.
+# -----------------------------------------------------------------------------
+binary_sensor:
+  - platform: gpio
+    id: btn
+    name: "Button GPIO5"
+    pin:
+      number: ${pin_btn_manual}
+      mode:
+        input: true
+        pullup: true
+      inverted: true
+    filters:
+      - delayed_on: 50ms
+      - delayed_off: 50ms
+    on_press:
+      - lambda: |-
+          // Intent: count debounced presses and time them from the same edge
+          // van-core's on_click measures from.
+          id(press_start) = millis();
+          id(presses) += 1;
+      - light.turn_on:
+          id: onboard_rgb
+          red: 0%
+          green: 100%
+          blue: 0%
+          brightness: 40%
+    on_release:
+      - light.turn_off: onboard_rgb
+      - lambda: |-
+          // Intent: say which gesture van-core would have taken this press
+          // for, using its on_click windows (50-900 ms short, 1-10 s long).
+          const uint32_t ms = millis() - id(press_start);
+          id(last_ms) = ms;
+          if (ms <= 900) id(last_kind) = 1;
+          else if (ms < 1000) id(last_kind) = 2;
+          else if (ms <= 10000) id(last_kind) = 3;
+          else id(last_kind) = 4;
+          static const char *const KIND[] = {"", "short: cooking on", "between: ignored",
+                                             "long: cancel", "over 10 s: ignored"};
+          ESP_LOGI("inputs", "press %d: %u ms -> %s", id(presses), (unsigned) ms,
+                   KIND[id(last_kind)]);
+
+# -----------------------------------------------------------------------------
+# Probe: one DS18B20, 3-wire, on the van-core bus pin. The driver also enables
+# the internal pull-up, so a bare probe on a short lead usually reads even
+# without the 4.7k - fit the 4.7k anyway; that is what van-core is built for.
+# -----------------------------------------------------------------------------
+one_wire:
+  - platform: gpio
+    pin: ${pin_onewire}
+    id: bus_1w
+
+sensor:
+  # No address: with a single probe on the bus the driver uses whatever it
+  # found. Its address is on the screen, for van-core.yaml.
+  - platform: dallas_temp
+    one_wire_id: bus_1w
+    id: probe_temp
+    name: "Probe GPIO4"
+    update_interval: 2s
+    accuracy_decimals: 2
+
+light:
+  - platform: esp32_rmt_led_strip
+    id: onboard_rgb
+    name: "Onboard RGB"
+    pin: ${pin_rgb}
+    num_leds: 1
+    chipset: WS2812
+    rgb_order: GRB
+    default_transition_length: 0s
+    restore_mode: ALWAYS_OFF
+
+# -----------------------------------------------------------------------------
+# Screen. Same panel settings as van-core.yaml; backlight held on for the bench.
+# -----------------------------------------------------------------------------
+switch:
+  - platform: gpio
+    pin:
+      number: GPIO46
+      ignore_strapping_warning: true
+    name: "LCD backlight"
+    restore_mode: ALWAYS_ON
+
+spi:
+  clk_pin: ${pin_lcd_sclk}
+  mosi_pin: ${pin_lcd_mosi}
+
+font:
+  # The degree sign is not in ESPHome's default glyph set; declare it.
+  - file: "gfonts://Roboto@500"
+    id: f_big
+    size: 40
+    bpp: 4
+    glyphs: &glyphs " !%()+,-./0123456789:?ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz°"
+  - file: "gfonts://Roboto"
+    id: f_small
+    size: 16
+    bpp: 4
+    glyphs: *glyphs
+
+display:
+  - platform: st7789v
+    id: van_display
+    model: Custom
+    width: 172
+    height: 320
+    offset_width: 34
+    offset_height: 0
+    rotation: 90
+    cs_pin: ${pin_lcd_cs}
+    dc_pin: ${pin_lcd_dc}
+    reset_pin: ${pin_lcd_rst}
+    update_interval: 250ms
+    lambda: |-
+      // Intent: both bench answers at a glance - what the GPIO4 probe reads
+      // and which probe it is; whether GPIO5 sees the button, and how van-core
+      // would have read the last press.
+      const Color GREY(150, 150, 150), WHITE(255, 255, 255);
+      const Color GREEN(0, 220, 0), RED(255, 70, 70);
+      it.fill(Color(0, 0, 0));
+
+      const auto &devs = id(bus_1w)->get_devices();
+      if (devs.empty())
+        it.print(10, 4, id(f_small), RED, "PROBE GPIO4   none found at boot");
+      else if (devs.size() > 1)
+        it.printf(10, 4, id(f_small), RED, "PROBE GPIO4   %u on the bus", (unsigned) devs.size());
+      else
+        it.printf(10, 4, id(f_small), GREY, "PROBE GPIO4   0x%016llx",
+                  (unsigned long long) devs[0]);
+      const float t = id(probe_temp).state;
+      if (std::isnan(t))
+        it.print(10, 22, id(f_big), RED, "no reading");
+      else
+        it.printf(10, 22, id(f_big), WHITE, "%.2f °C", t);
+
+      it.print(10, 80, id(f_small), GREY, "BUTTON GPIO5");
+      const bool held = id(btn).state;
+      it.print(10, 98, id(f_big), held ? GREEN : WHITE, held ? "PRESSED" : "released");
+
+      static const char *const KIND[] = {"", "short: cooking on", "between: ignored",
+                                         "long: cancel", "over 10 s: ignored"};
+      if (id(presses) == 0)
+        it.print(10, 148, id(f_small), GREY, "no presses yet");
+      else
+        it.printf(10, 148, id(f_small), GREY, "#%d   %u ms   %s", id(presses),
+                  (unsigned) id(last_ms), KIND[id(last_kind)]);

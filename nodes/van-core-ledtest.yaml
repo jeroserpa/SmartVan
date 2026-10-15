@@ -1,0 +1,137 @@
+# van-core-ledtest - onboard RGB LED at full intensity, cycling every colour.
+#
+# Not part of the system. It exists to judge how much of the onboard WS2812
+# gets through a printed lid or light pipe (docs/wiring.md section 5): which
+# colours read through the material, and how much light leaks where it should
+# not. The LCD backlight is held OFF so the panel cannot light the enclosure
+# from inside and spoil the comparison.
+#
+# Sequence, repeating every 20 s:
+#   red, yellow, green, cyan, blue, magenta, white - 2 s each, held steady so
+#   colours can be compared side by side; then a 6 s sweep round the whole hue
+#   circle with one channel always at 255.
+#
+# NOTHING CONTROLS THE P310 WHILE THIS RUNS. No BLE, no arbiter: the inverter
+# stays latched in whatever state it was in when this was flashed (CLAUDE.md
+# section 5.2). Flash it with AC ON, and flash van-core back when done.
+#
+# The return trip is the reason this is not a ten-line config. It keeps
+# van-core's own SoftAP, OTA password and web server, so the phone app
+# (D-24) can flash it and then flash van-core back over it, with no laptop. A
+# test image without Wi-Fi would strand the board on it until a USB cable
+# turns up. The node name starts with `van-core` so the app's image check
+# accepts it.
+
+substitutions:
+  node_name: van-core-ledtest
+  friendly_name: Van core LED test
+  # `VERIFIED 2026-10-14` against the vendor wiki for the 1.47B
+  # (waveshare.com/wiki/ESP32-S3-LCD-1.47B, "RGB Light Beads": RGB_Control =
+  # GPIO38). Not a strapping pin.
+  pin_rgb: GPIO38
+
+esphome:
+  name: ${node_name}
+  friendly_name: ${friendly_name}
+  comment: "Bench test: onboard RGB colour cycle at full intensity"
+  min_version: 2025.7.0
+  on_boot:
+    - priority: -100
+      then:
+        - logger.log:
+            level: WARN
+            format: "LED test firmware: no BLE, no arbiter - nothing is controlling the P310"
+        - light.turn_on:
+            id: onboard_rgb
+            brightness: 100%
+            effect: "Colour cycle"
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      # Same as van-core (D-29): enough sockets that a browser tab left open
+      # cannot crowd out the OTA upload that puts van-core back.
+      CONFIG_LWIP_MAX_SOCKETS: "16"
+  flash_size: 16MB
+
+packages:
+  base: !include ../common/base.yaml
+
+external_components:
+  # The web server with the stuck-stream fix (D-29), for the same reason as the
+  # socket count above: the flash back to van-core must not be refused.
+  - source:
+      type: local
+      path: ../components
+    components: [web_server_idf]
+
+# Same SoftAP as van-core, so the phone rejoins it without being told.
+# captive_portal stays absent for the reasons given in van-core.yaml.
+wifi:
+  ap:
+    ssid: !secret wifi_ssid
+    password: !secret wifi_password
+
+# LCD backlight held off: the panel is a far bigger light source than the LED,
+# and from inside the box it would light the whole enclosure. Switchable from
+# the web UI for a comparison. GPIO46 is a strapping pin; fine as an output
+# after boot (van-core.yaml header).
+switch:
+  - platform: gpio
+    pin:
+      number: GPIO46
+      ignore_strapping_warning: true
+    name: "LCD backlight"
+    restore_mode: ALWAYS_OFF
+
+light:
+  - platform: esp32_rmt_led_strip
+    id: onboard_rgb
+    name: "Onboard RGB"
+    pin: ${pin_rgb}
+    num_leds: 1
+    chipset: WS2812
+    # The 1.47B schematic names the part: LED2, WS2812B-0807, DI on RGB_IO
+    # (GPIO38) with a 10k pull-up. GRB is the WS2812B's datasheet order. If
+    # the web UI says red while the LED shows green, this should be RGB; the
+    # cycle covers every colour either way.
+    rgb_order: GRB
+    # Linear, not the default 2.8: at 2.8 the mid-sweep colours are driven well
+    # below full scale, and the point is the brightest the LED can be.
+    gamma_correct: 1.0
+    default_transition_length: 0s
+    restore_mode: ALWAYS_ON
+    effects:
+      - addressable_lambda:
+          name: "Colour cycle"
+          update_interval: 16ms
+          lambda: |-
+            // Intent: hold each primary, secondary and white long enough to
+            // compare them through the material, then sweep every hue in
+            // between - always with at least one channel at full scale.
+            static const Color HOLDS[] = {
+                Color(255, 0, 0),     Color(255, 255, 0), Color(0, 255, 0),
+                Color(0, 255, 255),   Color(0, 0, 255),   Color(255, 0, 255),
+                Color(255, 255, 255),
+            };
+            const uint32_t N = sizeof(HOLDS) / sizeof(HOLDS[0]);
+            const uint32_t HOLD_MS = 2000, SWEEP_MS = 6000;
+            const uint32_t t = millis() % (N * HOLD_MS + SWEEP_MS);
+            if (t < N * HOLD_MS) {
+              it[0] = HOLDS[t / HOLD_MS];
+              return;
+            }
+            // Six ramps of 255 steps: red->yellow->green->cyan->blue->magenta->red.
+            const uint32_t x = (t - N * HOLD_MS) * 1530 / SWEEP_MS;
+            const uint8_t f = x % 255;
+            switch (x / 255) {
+              case 0: it[0] = Color(255, f, 0); break;
+              case 1: it[0] = Color(255 - f, 255, 0); break;
+              case 2: it[0] = Color(0, 255, f); break;
+              case 3: it[0] = Color(0, 255 - f, 255); break;
+              case 4: it[0] = Color(f, 0, 255); break;
+              default: it[0] = Color(255, 0, 255 - f); break;
+            }

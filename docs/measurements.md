@@ -822,3 +822,37 @@ every boot or was specific to this one.
 Oct the same rule took the cabinet to −3.7 and −0.7 °C (M19).
 
 AC on 41 % of rows. SOC 82–96 %.
+
+## M22 — 2026-10-14/15 — bench: button on GPIO5, probe on GPIO4, the two onboard LEDs
+
+The 1.47B on the laptop over USB, no P310. Two bench configs, both keeping
+van-core's SoftAP and OTA so the phone app can flash van-core back over them:
+`nodes/van-core-ledtest.yaml` and `nodes/van-core-inputs.yaml`.
+
+**Kitchen button — GPIO5, `VERIFIED`.** A momentary switch between GPIO5 and
+GND, read with the internal pull-up, inverted, 50 ms debounce each way:
+exactly van-core.yaml's settings, so the firmware needs no change. The first
+attempt had a wiring fault on the button, corrected by the owner (what it was
+is not recorded). During it the board's USB port dropped off the laptop and
+did not come back until re-plugged.
+
+**Fridge probe bus — GPIO4, `VERIFIED`.** One DS18B20 reads on GPIO4 once
+rewired (owner's report). Its address was not recorded. **van-core pins its
+probes by address (M14)**: if this probe is not one of the two already in
+van-core.yaml, its address must go in before it is fitted, or van-core sees
+no fridge probe and holds AC on. The bench screen shows the address on its
+top line. Whether the 4.7 kΩ pull-up was fitted is not recorded; the GPIO
+1-Wire driver also enables the internal pull-up.
+
+**Onboard RGB LED — GPIO38, `VERIFIED`.** Vendor schematic: LED2,
+WS2812B-0807, DI on `RGB_IO` = GPIO38 with a 10 kΩ pull-up to 3V3. Cycled
+through every colour at full scale under van-core-ledtest. Closes wiring.md
+§10 item 2.
+
+**The small green LED by the USB socket is the charger's, not ours.** LED1
+hangs off the ETA6098 charger's STAT pin, fed from VBUS through R3 (3 kΩ). No
+GPIO touches it, so firmware cannot turn it off. With no battery fitted it is
+lit whenever the board has 5 V, and power fed in on the header's 5 V pin
+lands on the same VBUS net, so it will be lit in the van too: ~1 mA, and a
+green glow 300 mm from a bed. Either lift LED1 (or R3, which also saves the
+1 mA) or mask it in the enclosure; the charger works the same without it.
