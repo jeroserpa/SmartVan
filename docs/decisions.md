@@ -1565,3 +1565,43 @@ while it lasts, which is the point.
 **`UNVERIFIED` on the real P310.** Fix 1 sends the station a CCCD write it has
 never received. Run the van build against the P310 once before relying on
 it: no "notifications not enabled" line at boot, and station data flowing.
+
+## 2026-10-15 — D-33: tap moves, hold does what the screen offers
+
+**Context.** D-30/D-31 gave the one button timed holds: 1-3 s cooking, 5 s+
+cancel, sleep and parked in the app only. A parallel attempt used more bands
+(5-10 s sleep, 10 s parked). The owner, after trying them: a cooking hold
+should act *at* 3 s, which only works if nothing longer exists; and sleep and
+parked should be reached by going to their own screen. Same day, and the
+parked-mode switch turned out to be dead in the app (no WebChromeClient, so
+every `confirm()` returned false - fixed separately).
+
+**Decision.** One hold length, and its meaning is the screen's:
+
+- Tap: wake (on the main screen), then next screen. Never touches AC.
+- Hold 3 s: acts at 3 s while held. ENERGY / FRIDGE / WATER / DIAG / PARKED
+  view = cooking (start or +30, leaving parked mode through the switch);
+  COOKING (only in the cycle while cooking) = stop; SLEEP = toggle; PARK =
+  park, asking first - a second hold confirms (D-14) - or leave if parked.
+- Let go between 1 s and 3 s: nothing.
+- Back to ENERGY after 10 s without input, so the next hold is cooking again
+  and an action screen never waits for a stray press.
+
+**Why this rather than bands.** It is the standard pattern for one-button
+devices (tap = move, hold = select): one duration to learn, an action that
+fires when reached instead of on a release you have to time, and the rare,
+consequential actions are only reachable on purpose. Cooking keeps the
+property section 6 asks for - never more than one hold away, even on a dark
+screen. Cancel comes back to the button without a second duration, via the
+COOKING screen.
+
+**Feedback.** While held past 0.4 s the panel says what the hold will do and
+fills towards it, redrawn twice a second - only while held, since a full redraw
+costs ~140 ms of loop. One chirp when it acts; D-31's toasts confirm (now also
+sleep on/off and parked-off). Every gesture is logged.
+
+**Tunable.** `Button hold time` (3 s) and `Button back to main after` (10 s),
+on the app's settings page. The four band numbers of the parallel attempt are
+gone.
+
+**`UNVERIFIED`** under a real finger until the bench test is logged.

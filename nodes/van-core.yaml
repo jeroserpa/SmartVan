@@ -271,27 +271,35 @@ binary_sensor:
       name: "P310 DC output active"
       id: p310_dc_active
 
-  # --- the one button: screen AND manual AC (D-30) ---
+  # --- the one button (D-30), screen-context holds (D-33) ---
   #
-  #   tap  (<0.9s)  wake the screen; while awake, next page.  NEVER touches AC.
-  #   hold 1-3s     manual AC: start 45 min, or +30 min if running.
-  #                 Also the parked-mode exit - see below.
-  #   hold 5-20s    cancel manual AC.
-  #   0.9-1s, 3-5s  nothing. Dead bands, so a hesitant release does neither.
+  #   tap   (< 1 s)   screen dark: wake, landing on the main screen
+  #                   screen on:   next screen.  NEVER touches AC.
+  #   hold  (3 s)     acts the moment it reaches the hold time - no guessing
+  #                   when to let go - and does what the SCREEN offers:
+  #                     ENERGY / FRIDGE / WATER / DIAG / PARKED view
+  #                                   cooking AC: start 45 min, or +30 min
+  #                                   (and leaves parked mode, through the switch)
+  #                     COOKING       stop cooking (this screen exists only
+  #                                   while cooking is on)
+  #                     SLEEP         sleep mode on / off
+  #                     PARK          park: asks first ("PARK?"), a second
+  #                                   hold confirms (D-14); while parked, leaves
+  #   let go between 1 s and the hold time: nothing - the way to back out.
   #
-  # Tap is the screen and hold is AC because a tap is what happens when you
-  # glance at the panel. Were it the other way round, every glance would arm
-  # the inverter for 45 min - the ~48 W leak this project exists to remove, and
-  # one that goes unnoticed for days.
+  # Screens cycle ENERGY > FRIDGE > WATER > DIAG > (COOKING) > SLEEP > PARK and
+  # fall back to ENERGY after "Button back to main after" seconds of quiet, so
+  # the next hold is cooking again and an action screen never waits for a
+  # stray press. Cooking is never more than one hold away, from any screen,
+  # dark or lit: you should not have to page through a UI with a pan heating.
   #
-  # PARKED: a tap only wakes the panel, which then says PARKED. It must NOT
-  # exit: with one button a glance at the screen would otherwise un-park the
-  # van and hold AC on for weeks - a flat pack, the one outcome here that
-  # damages hardware (CLAUDE.md section 6 "Parked mode"). The hold does exit,
-  # because manual_press() exits parked mode: wanting 230V is the deliberate act.
+  # A tap is what a glance at the panel costs, so it must not arm the
+  # inverter: every glance would otherwise be the ~48 W leak this project
+  # exists to remove. While parked a tap only wakes the PARKED view.
   #
-  # Releases are timed, so feedback comes while holding: one chirp at 1s
-  # ("let go now for AC"), two at 5s ("let go now to cancel") - hold_feedback.
+  # While held past 0.4 s the panel shows what the hold is about to do, filling
+  # as it goes; one chirp when it acts. Every gesture is logged ([button]), so
+  # a phantom press is visible. Hold time and the fall-back are app settings.
   - platform: gpio
     name: "Button"
     id: btn_main
@@ -306,71 +314,54 @@ binary_sensor:
       # 50ms in software rejects both contact bounce and induced transients. The
       # wire is short now, but the box is still a metre from a 3300W inverter,
       # and a phantom hold arms it for 45 min. Both edges filtered by the same
-      # amount, so on_click durations equal the real press.
+      # amount, so measured durations equal the real press.
       - delayed_on: 50ms
       - delayed_off: 50ms
     on_press:
-      - script.execute: hold_feedback
+      - lambda: |-
+          // Intent: start timing. A dark screen wakes now, on the main screen;
+          // what the press means is decided on release (tap) or at the hold
+          // time (hold - see the 100 ms interval).
+          const uint32_t now = millis();
+          id(btn_press_ms) = now;
+          id(btn_input_ms) = now;
+          id(btn_hold_fired) = false;
+          id(btn_woke) = !id(display_awake);
+          if (id(btn_woke)) {
+            id(page_idx) = 0;
+            id(park_view) = true;
+          }
+          id(display_awake) = true;
+          id(display_wake_ms) = now;
     on_release:
-      - script.stop: hold_feedback
-      # Stopping the script mid-chirp would leave the buzzer sounding.
-      - lambda: id(out_buzzer)->set_level(0.0f);
-    on_click:
-      - min_length: 50ms
-        max_length: 900ms
-        then:
-          - lambda: |-
-              // First tap wakes; later taps cycle. The screen is dark most of
-              // the time, so cycling a blank display is never useful. A tap
-              // during a toast only dismisses it - the page it uncovers is
-              // the one you were on.
-              // Parked: a wake lands on the PARKED screen, the next tap leaves
-              // it for the page you were on, and only then do taps cycle.
-              if (id(toast_kind) != 0)
-                id(toast_kind) = 0;
-              else if (!id(display_awake))
-                id(park_view) = true;
-              else if (id(arbiter)->parked() && id(park_view))
-                id(park_view) = false;
-              else
-                id(page_idx) = (id(page_idx) + 1) % 4;
-              id(display_awake) = true;
-              id(display_wake_ms) = millis();
-          - component.update: van_display
-      - min_length: 1s
-        max_length: 3s
-        then:
-          # Leaving parked mode goes through the switch, not just the arbiter:
-          # its off action clears parked_saved and restores USB and the 100%
-          # charge cap. manual_press() alone exits in RAM only, and the next
-          # brownout would re-park a van that now has food in it.
-          - if:
-              condition:
-                lambda: return id(arbiter)->parked();
-              then:
-                - switch.turn_off: sw_parked
-                - lambda: id(toast_unparked) = true;
-              else:
-                - lambda: id(toast_unparked) = false;
-          - lambda: |-
-              const bool was_on = id(arbiter)->manual_req();
-              id(arbiter)->manual_press();
-              id(toast_added_s) = id(arbiter)->manual_added_s();
-              const uint32_t ext_s = id(arbiter)->config().manual_extend_ms / 1000u;
-              id(toast_kind) = id(toast_unparked) ? 5
-                             : !was_on ? 1 : id(toast_added_s) >= ext_s ? 2 : 3;
-          - script.execute:
-              id: show_toast
-              kind: !lambda return id(toast_kind);
-      - min_length: 5s
-        max_length: 20s
-        then:
-          - lambda: |-
-              id(toast_was_on) = id(arbiter)->manual_req();
-              id(arbiter)->manual_cancel();
-          - script.execute:
-              id: show_toast
-              kind: 4
+      - lambda: |-
+          // Intent: a tap navigates. A hold has already acted while held, and a
+          // release between a tap and the hold time is backing out.
+          id(btn_input_ms) = millis();
+          if (id(btn_hold_fired)) return;
+          const uint32_t held = millis() - id(btn_press_ms);
+          if (held >= 1000) {
+            ESP_LOGI("button", "let go at %.1f s - nothing", held / 1000.0f);
+            return;
+          }
+          if (id(btn_woke)) {
+            ESP_LOGI("button", "tap -> wake");
+          } else if (id(toast_kind) != 0) {
+            // A tap during a toast only dismisses it: the screen it uncovers
+            // is the one you were on.
+            id(toast_kind) = 0;
+            ESP_LOGI("button", "tap -> dismiss");
+          } else if (id(arbiter)->parked() && id(park_view)) {
+            id(park_view) = false;
+            ESP_LOGI("button", "tap -> pages (still parked)");
+          } else {
+            // COOKING (4) is in the cycle only while there is cooking to stop.
+            int p = id(page_idx);
+            do { p = (p + 1) % 7; } while (p == 4 && !id(arbiter)->manual_req());
+            id(page_idx) = p;
+            ESP_LOGI("button", "tap -> screen %d", p);
+          }
+      - component.update: van_display
 
   # --- arbiter state, exposed for the web UI and for logging ---
   - platform: template
@@ -651,8 +642,8 @@ switch:
     # Two flips, not one. The first arms and the switch springs back to off -
     # its state is read from the arbiter, so an armed-but-unconfirmed request
     # simply does not show as parked, which is the feedback. The second flip
-    # inside the confirm window commits (D-14). Since D-30 this switch is the
-    # only way in: there is no button gesture for parking any more.
+    # inside the confirm window commits (D-14). The button's PARK screen calls
+    # the same switch (D-33), so both ways in get the identical guard.
     turn_on_action:
       - lambda: id(arbiter)->park_request();
       - if:
@@ -727,8 +718,12 @@ button:
     # tap's own "first press wakes" behaviour.
     on_press:
       - lambda: |-
-          if (id(display_awake))
-            id(page_idx) = (id(page_idx) + 1) % 4;
+          id(btn_input_ms) = millis();
+          if (id(display_awake)) {
+            int p = id(page_idx);
+            do { p = (p + 1) % 7; } while (p == 4 && !id(arbiter)->manual_req());
+            id(page_idx) = p;
+          }
           id(display_awake) = true;
           id(display_wake_ms) = millis();
 
@@ -1124,24 +1119,10 @@ number:
     on_value:
       - lambda: id(arbiter)->config().manual_initial_ms = (uint32_t)(x * 60000);
 
-  # --- the button's gesture bands (D-31), in seconds held. Under "short press"
-  # is a short press; up to "cooking" starts cooking AC; from "sleep" up to
-  # "parked" toggles sleep; reaching "parked" while held asks to park. Checked
-  # in that order, so if two bands are set to overlap the earlier one wins.
+  # --- the button (D-33), tunable from the app ---
   - platform: template
-    name: "Button short press under"
-    id: num_btn_short
-    unit_of_measurement: "s"
-    min_value: 0.3
-    max_value: 3
-    step: 0.1
-    initial_value: 1
-    optimistic: true
-    restore_value: true
-    entity_category: config
-  - platform: template
-    name: "Button cooking hold up to"
-    id: num_btn_cook
+    name: "Button hold time"
+    id: num_btn_hold
     unit_of_measurement: "s"
     min_value: 1
     max_value: 10
@@ -1151,22 +1132,11 @@ number:
     restore_value: true
     entity_category: config
   - platform: template
-    name: "Button sleep hold from"
-    id: num_btn_sleep
+    name: "Button back to main after"
+    id: num_btn_return
     unit_of_measurement: "s"
-    min_value: 2
-    max_value: 20
-    step: 0.5
-    initial_value: 5
-    optimistic: true
-    restore_value: true
-    entity_category: config
-  - platform: template
-    name: "Button parked hold"
-    id: num_btn_park
-    unit_of_measurement: "s"
-    min_value: 5
-    max_value: 30
+    min_value: 3
+    max_value: 60
     step: 1
     initial_value: 10
     optimistic: true
@@ -1289,7 +1259,8 @@ globals:
     type: uint32_t
     restore_value: false
     initial_value: "0"
-  # Which of the four display pages is showing. A plain index rather than
+  # Which screen is showing (D-33): 0 ENERGY, 1 FRIDGE, 2 WATER, 3 DIAG,
+  # 4 COOKING (only while cooking), 5 SLEEP, 6 PARK. A plain index rather than
   # ESPHome `pages:` so the status strip is drawn in one place.
   - id: page_idx
     type: int
@@ -1308,7 +1279,8 @@ globals:
     restore_value: false
     initial_value: "0"
   # The action toast (D-31). Kind: 0 none, 1 AC on, 2 extended, 3 clipped by
-  # the 3h ceiling, 4 cancelled, 5 AC on AND parked mode left. Set by the
+  # the 3h ceiling, 4 cancelled, 5 AC on AND parked mode left; D-33 adds
+  # 6 sleep on, 7 sleep off, 8 parked mode left without AC. Set by the
   # button, drawn and expired by the display lambda.
   - id: toast_kind
     type: int
@@ -1330,6 +1302,25 @@ globals:
     type: bool
     restore_value: false
     initial_value: "false"
+  # The button (D-33): when the press began, when the button was last touched
+  # (for the fall-back to the main screen), whether this press woke the screen,
+  # and whether its hold has already acted.
+  - id: btn_press_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: btn_input_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: btn_woke
+    type: bool
+    restore_value: false
+    initial_value: "false"
+  - id: btn_hold_fired
+    type: bool
+    restore_value: false
+    initial_value: "false"
   # Parked: a wake shows the big PARKED screen first; the next tap goes to the
   # ordinary pages.
   - id: park_view
@@ -1347,32 +1338,92 @@ script:
       - lambda: |-
           id(toast_kind) = kind;
           // Leaving parked mode gets longer: it re-arms the fail-safe.
-          id(toast_until_ms) = millis() + (kind == 5 ? 4000 : 2500);
+          id(toast_until_ms) = millis() + ((kind == 5 || kind == 8) ? 4000 : 2500);
           id(display_awake) = true;
           id(display_wake_ms) = millis();
       - component.update: van_display
 
-  # Hold feedback for the one button. Started on press, stopped on release, so
-  # the chirps mark the moments a release changes meaning. Not suppressed in
-  # sleep or parked mode like the timer warning: someone is standing at the
-  # button pressing it.
-  - id: hold_feedback
-    mode: restart
+  # One chirp: the button's hold has acted (D-33). Not suppressed in sleep or
+  # parked mode like the timer warning - someone is standing at the button.
+  - id: chirp
     then:
-      - delay: 1s
-      - lambda: id(out_buzzer)->set_level(0.5f);
-      - delay: 60ms
-      - lambda: id(out_buzzer)->set_level(0.0f);
-      - delay: 3940ms                      # 5s from press
-      - lambda: id(out_buzzer)->set_level(0.5f);
-      - delay: 60ms
-      - lambda: id(out_buzzer)->set_level(0.0f);
-      - delay: 80ms
       - lambda: id(out_buzzer)->set_level(0.5f);
       - delay: 60ms
       - lambda: id(out_buzzer)->set_level(0.0f);
 
 interval:
+  # The button's hold (D-33). Acts the moment it reaches "Button hold time",
+  # on whatever screen is showing. Before that, redraws twice a second so the
+  # panel shows what is coming - a full redraw is ~140 ms, so only while held.
+  - interval: 100ms
+    then:
+      - lambda: |-
+          if (!id(btn_main).state || id(btn_hold_fired)) return;
+          const uint32_t now = millis();
+          const uint32_t held = now - id(btn_press_ms);
+          if (held < (uint32_t) (id(num_btn_hold).state * 1000.0f)) {
+            static uint32_t last_draw = 0;
+            if (held >= 400 && now - last_draw >= 500) {
+              last_draw = now;
+              id(van_display).update();
+            }
+            return;
+          }
+          id(btn_hold_fired) = true;
+          id(btn_input_ms) = now;
+          id(chirp).execute();
+          const bool parked = id(arbiter)->parked();
+          const int pg = (parked && id(park_view)) ? -1 : id(page_idx);
+          if (pg == 5) {
+            id(sw_sleep_mode).toggle();
+            const bool on = id(sw_sleep_mode).state;
+            id(show_toast).execute(on ? 6 : 7);
+            // Sleep blanks the panel: show the toast, then go dark.
+            if (on) id(display_wake_ms) = now - 57000;
+            ESP_LOGI("button", "hold on SLEEP -> sleep %s", on ? "ON" : "OFF");
+          } else if (pg == 6) {
+            if (parked) {
+              id(sw_parked).turn_off();
+              id(page_idx) = 0;
+              id(show_toast).execute(8);
+              ESP_LOGI("button", "hold on PARK -> parked mode OFF");
+            } else {
+              // The same switch the app flips: the first request arms, a second
+              // within 30 s commits (D-14). Arming shows PARK? on this screen.
+              id(sw_parked).turn_on();
+              if (id(arbiter)->parked()) {
+                id(page_idx) = 0;
+                id(park_view) = true;
+                ESP_LOGW("button", "hold on PARK -> PARKED");
+              } else {
+                ESP_LOGW("button", "hold on PARK -> armed, hold again to confirm");
+              }
+              id(van_display).update();
+            }
+          } else if (pg == 4) {
+            id(toast_was_on) = id(arbiter)->manual_req();
+            id(arbiter)->manual_cancel();
+            id(page_idx) = 0;
+            id(show_toast).execute(4);
+            ESP_LOGI("button", "hold on COOKING -> cooking stopped");
+          } else {
+            // Every other screen, the PARKED view included: cooking. Leaving
+            // parked mode goes through the switch, not just the arbiter: its
+            // off action clears parked_saved and restores USB and the 100%
+            // charge cap. manual_press() alone exits in RAM only, and the next
+            // brownout would re-park a van that now has food in it.
+            id(toast_unparked) = parked;
+            if (parked) id(sw_parked).turn_off();
+            const bool was_on = id(arbiter)->manual_req();
+            id(arbiter)->manual_press();
+            id(toast_added_s) = id(arbiter)->manual_added_s();
+            const uint32_t ext_s = id(arbiter)->config().manual_extend_ms / 1000u;
+            const int k = parked ? 5 : !was_on ? 1 : id(toast_added_s) >= ext_s ? 2 : 3;
+            id(show_toast).execute(k);
+            ESP_LOGI("button", "hold -> cooking %s", k == 5 ? "ON, parked mode left"
+                                                   : k == 1 ? "ON" : "+30 min");
+          }
+
   # Button LED. RED IS RESERVED (D-31): red blink = parked, steady red = a
   # fault. Green = manual active, yellow-amber = fridge-driven, off = inverter
   # down. Dim: this is a metre from where someone sleeps.
@@ -1436,10 +1487,21 @@ interval:
     then:
       - lambda: |-
           // Sleep mode blanks the screen as it starts (sw_sleep_mode on_turn_on),
-          // not continuously: with one button (D-31) a deliberate press at night
+          // not continuously: with one button (D-33) a deliberate press at night
           // must still be able to show something, for the usual 60 s.
           if (id(display_awake) && (millis() - id(display_wake_ms)) > 60000)
             id(display_awake) = false;
+          // Back to the main screen after a quiet spell (D-33), so the next
+          // hold is cooking again and an action screen never waits for a stray
+          // press. COOKING goes as soon as there is nothing left to stop.
+          if (id(page_idx) == 4 && !id(arbiter)->manual_req())
+            id(page_idx) = 0;
+          const bool off_main = id(page_idx) != 0 || (id(arbiter)->parked() && !id(park_view));
+          if (!${bench_review} && off_main &&
+              millis() - id(btn_input_ms) > (uint32_t) (id(num_btn_return).state * 1000.0f)) {
+            id(page_idx) = 0;
+            id(park_view) = true;
+          }
           // bench_review pins it on: with no button wired, nothing can
           // wake the panel once it blanks, so a bare board goes dark 60s after
           // boot and stays dark. Set bench_review to 0 for the van.
@@ -1507,7 +1569,8 @@ font:
     id: f_toast
     size: 80
     bpp: 4
-    glyphs: "+0123456789ADEFKMNOPRX"
+    # D-33 adds ":" (time left on COOKING) and "?" (PARK? on the PARK screen).
+    glyphs: "+0123456789:?ADEFKMNOPRX"
   - file: "gfonts://Roboto@500"
     id: f_sub
     size: 26
@@ -1580,6 +1643,30 @@ display:
       using display::TextAlign;
       it.fill(bg());
 
+      // ---- hold bar (D-33) -------------------------------------------------
+      // While the button is held past a tap and before the hold acts: what it
+      // is about to do, filling towards the hold time. Letting go before it
+      // fills is how you back out, so the words must say what you would get.
+      auto hold_bar = [&]() {
+        if (!id(btn_main).state || id(btn_hold_fired)) return;
+        const uint32_t held = millis() - id(btn_press_ms);
+        if (held < 400) return;
+        const float f = std::min(1.0f, held / (id(num_btn_hold).state * 1000.0f));
+        const bool pk = id(arbiter)->parked();
+        const int hp = (pk && id(park_view)) ? -1 : id(page_idx);
+        const char *what;
+        if (hp == 4)      what = "STOP COOKING";
+        else if (hp == 5) what = id(sw_sleep_mode).state ? "SLEEP OFF" : "SLEEP ON";
+        else if (hp == 6) what = pk ? "LEAVE PARKED MODE"
+                               : id(arbiter)->park_pending() ? "CONFIRM: PARK" : "PARK (asks first)";
+        else              what = pk ? "LEAVE PARKED + COOKING"
+                               : id(arbiter)->manual_req() ? "COOKING +30 MIN" : "COOKING ON";
+        it.filled_rectangle(5, 136, 310, 31, bg());
+        it.rectangle(10, 139, 300, 26, fg());
+        it.filled_rectangle(11, 140, (int) (298 * f), 24, (hp == 6 && !pk) ? bad() : good());
+        it.print(160, 152, id(f_row), fg(), TextAlign::CENTER, what);
+      };
+
       // ---- action toast (D-31) ---------------------------------------------
       // What the button just did, for 2.5 s (4 s for leaving parked mode). A
       // hold is timed and otherwise silent, so this is its confirmation. It
@@ -1596,6 +1683,25 @@ display:
         for (int i = 0; i < 5; i++)
           it.rectangle(i, i, 320 - 2 * i, 172 - 2 * i, col);
 
+        if (k == 6 || k == 7) {
+          // Sleep mode (D-33). The moon colour, and the ceiling it will hold,
+          // because that is the food decision being made (section 6).
+          it.print(160, 30, id(f_sub), water(), TextAlign::CENTER, "SLEEP MODE");
+          it.print(160, 88, id(f_toast), k == 6 ? water() : fg(), TextAlign::CENTER,
+                   k == 6 ? "ON" : "OFF");
+          if (k == 6) snprintf(tb, sizeof tb, "fridge ceiling %.1f°C tonight", id(num_sleep_ceiling).state);
+          else        snprintf(tb, sizeof tb, "normal schedule");
+          it.print(160, 147, id(f_row), dim(), TextAlign::TOP_CENTER, tb);
+          return;
+        }
+        if (k == 8) {
+          // Parked mode left from the PARK screen, without cooking (D-33).
+          it.filled_rectangle(12, 12, 296, 31, bad());
+          it.print(160, 28, id(f_sub), ink(), TextAlign::CENTER, "PARKED MODE OFF", bad());
+          it.print(160, 92, id(f_toast), good(), TextAlign::CENTER, "OFF");
+          it.print(160, 147, id(f_row), good(), TextAlign::TOP_CENTER, "fail-safe armed - normal schedule");
+          return;
+        }
         if (k == 5) {
           // Leaving parked mode: the one toast that is about more than the
           // timer, because the fail-safe has just been re-armed.
@@ -1650,8 +1756,9 @@ display:
         char pb[32];
         snprintf(pb, sizeof pb, "fridge OFF - %.1f d", id(arbiter)->parked_for_s() / 86400.0f);
         it.print(160, 112, id(f_sub), fg(), TextAlign::CENTER, pb);
-        it.print(160, 147, id(f_row), dim(), TextAlign::TOP_CENTER,
-                 "hold 1-3 s to leave and turn AC on");
+        snprintf(pb, sizeof pb, "hold %.0f s: leave + cooking AC", id(num_btn_hold).state);
+        it.print(160, 147, id(f_row), dim(), TextAlign::TOP_CENTER, pb);
+        hold_bar();
         return;
       }
 
@@ -1727,14 +1834,19 @@ display:
       // Everything here is a STATE, and every state that matters at distance is
       // already in the frame colour. This is the close-up confirmation of what
       // the frame can only hint at.
-      static const char *PAGES[4] = {"ENERGY", "FRIDGE", "WATER", "DIAG"};
+      static const char *PAGES[7] = {"ENERGY", "FRIDGE", "WATER", "DIAG",
+                                     "COOKING", "SLEEP", "PARK"};
       const int pg = id(page_idx);
       it.print(10, 8, id(f_lbl), amber(), PAGES[pg]);
       if (parked)      it.print(66, 8, id(f_lbl), bad(), "PARKED");
       else if (park_q) it.print(66, 8, id(f_lbl), bad(), "PARK?");
       else if (force)  it.print(66, 8, id(f_lbl), bad(),   "FAIL-SAFE");
-      for (int i = 0; i < 4; i++)
-        it.filled_circle(150 + 9 * i, 14, 3, i == pg ? amber() : faint());
+      // One dot per screen in the cycle; COOKING only while there is any.
+      for (int i = 0, x = 150; i < 7; i++) {
+        if (i == 4 && !manual) continue;
+        it.filled_circle(x, 14, 3, i == pg ? amber() : faint());
+        x += 9;
+      }
 
       int ix = 296;
       if (parked)     ac_symbol(it, ix, 6, 16, bad(), true);
@@ -1863,7 +1975,7 @@ display:
         hero("--", dim());
         it.print(10, 147, id(f_row), dim(), "van-water not installed (Phase 2)");
 
-      } else {
+      } else if (pg == 3) {
         // ---- DIAGNOSTICS ---------------------------------------------------
         // DELIBERATELY DENSE, and the one page with NO hero. It is read at 30cm
         // with a multimeter in the other hand, so distance legibility is
@@ -1908,4 +2020,40 @@ display:
         } else {
           row(1, 5, "charge cap", dim(), "--");
         }
+
+      } else {
+        // ---- ACTION SCREENS (D-33) -----------------------------------------
+        // What a hold does here, as the hero, and how long to hold, as the
+        // walk-up line. The frame keeps the inverter's colour like any page.
+        const float hs = id(num_btn_hold).state;
+        if (pg == 4) {
+          // COOKING: in the cycle only while cooking is on.
+          const uint32_t left_s = id(arbiter)->manual_remaining_s();
+          snprintf(b, sizeof b, "%u:%02u", (unsigned) (left_s / 3600u), (unsigned) ((left_s / 60u) % 60u));
+          it.print(160, 80, id(f_toast), good(), TextAlign::CENTER, b);
+          snprintf(b, sizeof b, "hold %.0f s: stop cooking", hs);
+          it.print(160, 147, id(f_row), dim(), TextAlign::TOP_CENTER, b);
+        } else if (pg == 5) {
+          // SLEEP
+          it.print(160, 80, id(f_toast), sleep_ ? water() : dim(), TextAlign::CENTER, sleep_ ? "ON" : "OFF");
+          snprintf(b, sizeof b, "hold %.0f s: sleep %s", hs, sleep_ ? "OFF" : "ON");
+          it.print(160, 147, id(f_row), dim(), TextAlign::TOP_CENTER, b);
+        } else {
+          // PARK. Arming is the first hold; the second confirms (D-14), and
+          // the consequence is spelled out before it, not after.
+          if (parked) {
+            it.print(160, 80, id(f_toast), bad(), TextAlign::CENTER, "ON");
+            snprintf(b, sizeof b, "hold %.0f s: leave parked mode", hs);
+          } else if (park_q) {
+            it.print(160, 72, id(f_toast), bad(), TextAlign::CENTER, "PARK?");
+            it.print(160, 118, id(f_row), fg(), TextAlign::CENTER, "fridge OFF, fail-safe disarmed");
+            snprintf(b, sizeof b, "hold %.0f s again to confirm", hs);
+          } else {
+            it.print(160, 80, id(f_toast), dim(), TextAlign::CENTER, "OFF");
+            snprintf(b, sizeof b, "hold %.0f s to park (asks first)", hs);
+          }
+          it.print(160, 147, id(f_row), park_q ? bad() : dim(), TextAlign::TOP_CENTER, b);
+        }
       }
+
+      hold_bar();

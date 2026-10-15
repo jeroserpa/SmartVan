@@ -192,15 +192,25 @@ holding it during a reset drops the board into download mode, which is a
 confusing failure to debug months later. All user controls get free GPIOs and
 external buttons.
 
-**`REVISED 2026-10-15`, D-30 — one button, on GPIO5, short wire.** Screen and
-manual AC share it, told apart by how long it is held:
+**`REVISED 2026-10-15`, D-30 — one button, on GPIO5, short wire;
+D-33 — tap moves, hold does what the screen offers.**
 
 | Gesture | Action |
 |---|---|
-| Tap (< 0.9 s) | Wake display; while awake, next page. **Never touches AC** |
-| Hold 1–3 s (one chirp at 1 s) | Manual AC: start 45 min, or +30 min. Also exits parked mode |
-| Hold 5–20 s (two chirps at 5 s) | Cancel manual AC |
-| Sleep mode, parked mode | Web UI only |
+| Tap (< 1 s), screen dark | Wake, on the main screen. **Never touches AC** |
+| Tap, screen on | Next screen |
+| Hold 3 s | Acts **at** 3 s, while still held, one chirp — the screen's action: |
+| | ENERGY / FRIDGE / WATER / DIAG / PARKED view: **cooking AC** (start 45 min, or +30 min; leaves parked mode) |
+| | COOKING (in the cycle only while cooking): stop cooking |
+| | SLEEP: sleep mode on / off |
+| | PARK: park — asks first (`PARK?`), a second hold confirms (D-14); while parked, leaves |
+| Let go between 1 s and 3 s | Nothing — the way to back out |
+
+Screens: ENERGY → FRIDGE → WATER → DIAG → (COOKING) → SLEEP → PARK, back to
+ENERGY after 10 s without input, so the next hold is cooking again. Cooking is
+one hold from anywhere, dark screen included. While held, the panel shows what
+the hold is about to do and fills towards it. Hold time (3 s) and the fall-back
+(10 s) are app settings. Every gesture is logged (`[button]`).
 
 A tap is what a glance at the panel costs, so it must not arm the inverter,
 and while parked it only wakes the panel. Taps stay safe; only a deliberate
@@ -655,7 +665,7 @@ question that matters is whether the mode can be entered by mistake.
 **Parking is a human decision, and the arbiter does not second-guess it.** The
 gate is a **second, deliberate request within 30s**; the first only arms.
 
-- **Button:** two 10 s holds (D-31; was two long presses on a bezel button).
+- **Button:** on the PARK screen, two holds (D-33).
   The switch reads its state from the arbiter, so an armed-but-unconfirmed
   request still shows *off* and the second hold lands on the same gesture —
   nothing new to remember.
@@ -690,8 +700,8 @@ of asking. **The residual hazard below — park correctly, then load food a week
 later — was never covered by the interlock and is unchanged.**
 
 #### Entering
-- **Gesture:** hold the button 10 s, twice (D-31; 5–10 s is sleep mode). Or
-  the `Parked mode` switch in the web UI.
+- **Gesture:** step to the PARK screen and hold twice (D-33). Or the
+  `Parked mode` switch in the web UI.
 - Shed `usb`. **Never `dc`** — the 12V habitation bus, and therefore van-core
   itself, hangs off it; shedding it is unrecoverable without walking to the
   P310 (`measurements.md` 2026-08-18).
@@ -715,11 +725,13 @@ later — was never covered by the interlock and is unchanged.**
   stale-probe trip from storage.
 
 #### Leaving
-- Any of: a 10 s hold again, the web switch, **or a cooking hold** — someone
+- Any of: a hold on the PARK screen, the web switch, **or a cooking hold** — someone
   back in the van wanting 230V is a deliberate press of a dedicated button, so
   treat it as the exit gesture rather than ignoring it and looking broken. With
-  one button (D-31) a short press only wakes the screen and shows the PARKED
-  page; the 1–3 s cooking hold or a 10 s hold leaves.
+  one button a tap only wakes the screen and shows the PARKED view; a hold
+  there leaves and starts cooking, a hold on the PARK screen leaves without
+  (D-33). Either way it goes through the switch, so USB, the charge cap and
+  the saved state are restored.
 - Exit re-arms the boot force-on window: AC comes on immediately and the
   thermostat takes over once the probes have reported. Coming out of parked
   mode is exactly when food gets loaded, and a cabinet sitting at 20 °C should
