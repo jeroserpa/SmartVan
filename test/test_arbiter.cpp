@@ -493,6 +493,24 @@ static void test_manual() {
     CHECK(!s.core.outputs().manual_req);
   }
 
+  CASE("each press reports what it actually added, clipped at the 3h ceiling");
+  {
+    Sim s;
+    s.settle();
+    s.in.output_power_w = 1500.0f;
+    s.core.manual_press(s.t);
+    CHECK(s.core.outputs().manual_added_s == 45u * 60u);   // start: 0:45
+    s.run(1 * MIN);
+    s.core.manual_press(s.t);
+    CHECK(s.core.outputs().manual_added_s == 30u * 60u);   // 1:15
+    for (int i = 0; i < 3; i++)
+      s.core.manual_press(s.t);                            // 1:45, 2:15, 2:45
+    s.core.manual_press(s.t);                              // 3:00 - only 15 fit
+    CHECK(s.core.outputs().manual_added_s == 15u * 60u);
+    s.core.manual_press(s.t);                              // at the ceiling
+    CHECK(s.core.outputs().manual_added_s == 0u);
+  }
+
   CASE("auto-release when nothing above the release floor is drawing");
   {
     Sim s;

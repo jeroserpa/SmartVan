@@ -10,13 +10,13 @@
 # What to look for (station side: python tools/p310_sim.py, its log and page):
 #
 #   A. Probe never reports. AC must stay ON from boot to minute 3 - reason
-#      "boot", then "probe stale" - and only then go OFF. Before D-30 it went
+#      "boot", then "probe stale" - and only then go OFF. Before D-32 it went
 #      off at ~1 min (M23).
 #   B. Station goes quiet with AC off. Once AC is off, set the simulator to
 #      silent (/set?silent=1). Within ~110 s van-core must command AC ON
 #      (reason "link stale") and the simulator must receive it. At ~150 s
 #      ESP-FBot drops the link and reconnects. Un-silence (/set?silent=0): data
-#      must flow again with no reboot. Before D-30 the ON was refused and the
+#      must flow again with no reboot. Before D-32 the ON was refused and the
 #      link stayed wedged until a reboot (M23).
 
 substitutions:

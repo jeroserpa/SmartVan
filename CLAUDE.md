@@ -192,31 +192,32 @@ holding it during a reset drops the board into download mode, which is a
 confusing failure to debug months later. All user controls get free GPIOs and
 external buttons.
 
-**`DECIDED 2026-10-15` (D-31): there is one button — the illuminated one in
-the kitchen — and there will only ever be one.** The board's own BOOT switch is
-hard to reach in the enclosure as well as being a strapping pin. Everything is
-a gesture on that one button (`nodes/van-core.yaml`, `btn_manual`):
+**`REVISED 2026-10-15`, D-30 — one button, on GPIO5, short wire.** Screen and
+manual AC share it, told apart by how long it is held:
 
 | Gesture | Action |
 |---|---|
-| Short press, screen dark | Wake the screen — nothing else |
-| Short press, screen on | Next page |
-| Hold 1–3 s | Cooking AC: start 45 min, or +30 min if running (§6) |
-| Hold 5–10 s | Sleep mode on/off |
-| Hold 10 s | Parked mode: asks ("PARK?" + chirp); hold again within 30 s to confirm. While parked, one hold leaves |
+| Tap (< 0.9 s) | Wake display; while awake, next page. **Never touches AC** |
+| Hold 1–3 s (one chirp at 1 s) | Manual AC: start 45 min, or +30 min. Also exits parked mode |
+| Hold 5–20 s (two chirps at 5 s) | Cancel manual AC |
+| Sleep mode, parked mode | Web UI only |
 
-Gesture map is the owner's (2026-10-15). The four band edges are `number`
-entities ("Button …") on the app's settings page, so they can be tuned without
-a reflash. 3–5 s is a dead zone. Holds act whatever the screen was doing; only
-the short press is swallowed by a dark screen, so a glance never arms the
-inverter. **Cancelling cooking is not on the button**: the app's "Manual AC
-cancel", or the automatic release once the load drops. Every gesture is
-logged (`[button] held 2.1 s -> cooking AC`) so a phantom press is visible.
-Sleep mode blanks the screen when it starts but a press still wakes it for the
-usual 60 s.
+A tap is what a glance at the panel costs, so it must not arm the inverter,
+and while parked it only wakes the panel. Taps stay safe; only a deliberate
+hold reaches AC.
+
+**Every hold answers on the panel (D-31)** for 2.5 s: AC symbol + `ON`, a
+stopwatch + `+30` (or `+12` / `MAX` at the 3 h ceiling), struck symbol +
+`OFF`. Leaving parked mode gets its own 4 s screen, `PARKED MODE OFF` over
+`ON`. While parked, a tap wakes to `PARKED` in big red first.
+
+**Red means parked or broken, nowhere else** — LED and panel frame alike:
+red blink = parked, steady red = fail-safe holding AC on for a fault,
+green = manual, yellow-amber = fridge, off = inverter down.
+
 
 ~~**Optional upgrade — rotary encoder with push**~~ — `WITHDRAWN 2026-10-15`
-(D-31): one button, by decision. Threshold tuning stays on the phone UI.
+(D-30): one button, by decision. Threshold tuning stays on the phone UI.
 
 `VERIFY before laying out the carrier board:` how many GPIOs the Waveshare header
 actually breaks out. Needed: SPI (display), SDMMC (card), I2C (RTC), 1-Wire,
@@ -702,7 +703,8 @@ later — was never covered by the interlock and is unchanged.**
 - Blank the display; suppress the buzzer.
 
 #### While parked
-- **A dim blue blink on the kitchen button LED, ~1s in 4.** In a dark van with
+- **A dim red blink on the button LED, ~1s in 4** (blue until D-31: red is now
+  reserved for parked and faults). In a dark van with
   a blank screen this is the only sign that the fridge is deliberately dead,
   and it is the mitigation for the one real hazard below.
 - The display page still says `PARKED n.n d — FRIDGE OFF` when woken.
@@ -745,7 +747,8 @@ trip a week later and drive off" — the old interlock could not either, since b
 then it has long since passed. That is the two-days-of-spoiled-food failure of
 §5.2 arriving through a side door, and it is the hazard that actually matters.
 
-Mitigations available today: the blue LED, the display page, and the pre-trip
+Mitigations available today: the red LED blink, the big red PARKED screen
+that any tap wakes to (D-31), and the pre-trip
 checklist in §11. **The proper mitigation is Phase 4** — `van-vehicle` runs on
 switched ignition, so its very existence is a key-on signal, and key-on should
 clear parked mode. Until then this is a procedural guard, not an engineered
@@ -1669,7 +1672,7 @@ custom firmware justified.
   in a panic at midnight.
 - **And confirm parked mode is OFF before loading food.** It is the one state
   in which the previous check is expected to fail: parked, all three faults
-  resolve to AC OFF by design (§6 "Parked mode"). Blue blink on the kitchen
+  resolve to AC OFF by design (§6 "Parked mode"). Red blink on the kitchen
   button = still parked.
 
 ---

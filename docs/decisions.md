@@ -1452,7 +1452,86 @@ recovering from M20 needed one.
 from the node. Watch "Open sockets" in History over a few days of normal
 use: it should sit around 4–8 and fall back after the phone leaves.
 
-## 2026-10-15 — D-30: the station link and the boot probe check, fixed on a laptop test rig
+---
+
+## 2026-10-15 — D-30: one button does the screen and manual AC
+
+**Decision.** van-core has a single physical button, on **GPIO5** with a
+short wire. A **tap** (< 0.9 s) wakes the panel and cycles pages. A **hold of
+1–3 s** is the manual AC request (start 45 min, or +30 min). A **hold of
+5–20 s** cancels it. Releases at 0.9–1 s and 3–5 s do nothing. A chirp at
+1 s and a double chirp at 5 s mark when to let go. The bezel page and sleep
+buttons (GPIO6, GPIO7) are removed, and sleep and parked mode are web-UI
+only. This supersedes the button half of `docs/wiring.md` §2–§5 and §9.
+
+**Why tap = screen and hold = AC, not the reverse.** Looking at the panel is
+the frequent action, and a tap is what it costs. Were the tap AC, every glance
+would arm the inverter for 45 min, about 36 Wh of station overhead each time,
+unnoticed. That is the leak §6 `manual_req` warns about. Hold over
+double-click: the hold is harder to trigger by accident, and the 1 s chirp
+gives the timing.
+
+**A tap no longer exits parked mode.** Before, any press of the kitchen
+button exited (`manual_press()` → `park_exit()`). With one button that would
+let a glance at the screen un-park the van, holding AC on until the pack is
+flat (§6 "Parked mode"). The tap now only wakes the panel, which says PARKED.
+The 1–3 s hold still exits, because wanting 230V is the deliberate act it
+always was. No arbiter change: the split is entirely in the YAML.
+
+**What is lost.** Sleep and parked mode have no physical gesture, so the
+phone is needed to enter either. Parked was already web-first (wiring.md §4).
+Sleep mode is a nightly action, so watch whether the phone is a nuisance for
+it. If it is, a 3–5 s hold is the free slot.
+
+**`UNVERIFIED`**: config validates on ESPHome 2026.8.0; not yet flashed.
+
+---
+
+## 2026-10-15 — D-31: the button answers on the panel, and red means parked or broken
+
+**Decision.** Every hold of the button (D-30) takes over the panel for 2.5 s
+to show what it did:
+
+| Hold result | Panel |
+|---|---|
+| Manual AC started | AC mark + `ON`, green frame, "manual AC - 45 min left" |
+| Extended | Stopwatch + `+30`, ring = time left as a share of the 3 h ceiling |
+| Clipped at 3 h | Stopwatch + `+12` or `MAX`, amber |
+| Cancelled | Struck AC mark + `OFF`, grey. Says if AC stays on for the fridge, or if nothing was on |
+| Parked mode left | 4 s: red `PARKED MODE OFF` band over AC mark + `ON`, "fail-safe armed" |
+
+While parked, a tap wakes the panel to a full-screen **`PARKED`** in big red
+with the days parked and how to leave. The next tap goes to the ordinary
+pages, which keep a red frame. A tap during a toast just dismisses it.
+
+**Red is reserved.** Parked moves from blue to red on the panel and the LED
+(blink, ~1 s in 4). Steady red on the LED = the fail-safe is holding AC on
+for a fault (not the boot window). Fridge-driven AC is pulled from amber
+toward yellow, so red on the LED means only parked or a fault.
+
+**Why.** A hold is timed and makes no other sound or sight. Without an
+answer, "did that take?" gets settled by pressing again, which is how a
+45 min request quietly becomes 1 h 15. The parked screen is red and full
+size because loading food into a fridge that is off on purpose is the hazard
+§6 cannot engineer away; the panel is where the hand already is.
+
+**Arbiter change, small:** `manual_press()` now reports what it actually
+added (`manual_added_s`), so the panel can say `+12` or `MAX` instead of
+promising `+30`. Host test added.
+
+**Bug fixed along the way.** Holding the button in a parked van exited
+parked mode in the arbiter only. `parked_saved` stayed true (so the next
+reboot re-parked a van now carrying food), USB stayed off and the charge cap
+stayed at the parked value. The hold now goes through `sw_parked`'s off
+action, like the web switch.
+
+**`UNVERIFIED`**: layout checked as a 1:1 mock with Roboto metrics; the
+display lambda type-checks against ESPHome 2026.8.0's headers; the config
+validates. Not compiled for the board (component registry unreachable from
+the session that wrote it) and not flashed. The LED yellow-amber ratio needs
+tuning by eye on the real LED.
+
+## 2026-10-15 — D-32: the station link and the boot probe check, fixed on a laptop test rig
 
 **Context.** M23: the van firmware run against a simulated P310 on the laptop
 (`tools/p310_sim.py`, `nodes/van-core-pcsim.yaml`) failed the CLAUDE.md §5.2
@@ -1486,47 +1565,3 @@ while it lasts, which is the point.
 **`UNVERIFIED` on the real P310.** Fix 1 sends the station a CCCD write it has
 never received. Run the van build against the P310 once before relying on
 it: no "notifications not enabled" line at boot, and station data flowing.
-
-## 2026-10-15 — D-31: one button does everything
-
-**Context.** The owner: "there is only one button and there will always be
-only one". The board's BOOT switch is hard to reach in the enclosure (and a
-strapping pin). The config had three: kitchen cooking button (GPIO5), bezel
-page button (GPIO6), bezel sleep/park button (GPIO7) - two of which will never
-exist, so the screen could not be woken or paged from the van at all.
-
-**Decision - the owner's gesture map.** Table in CLAUDE.md §2 "Button map";
-implementation at `btn_manual` in `van-core.yaml`.
-
-| Gesture | Action |
-|---|---|
-| Short press | Screen dark: wake. Screen on: next page |
-| Hold 1-3 s | Cooking AC: start, or +30 min |
-| Hold 5-10 s | Sleep mode on/off |
-| Hold 10 s | Parked: asks, a second 10 s hold confirms |
-
-A first version of this entry put cooking on the short press; the owner
-corrected it the same day. The useful property survives either way: **a short
-press on a dark screen only wakes it**, so a glance at the fridge never arms
-the inverter - the commonest press, and §6 already treats a phantom arming
-press as a leak to design against.
-
-**Tunable from the app.** The band edges are four `number`s (`Button short
-press under`, `cooking hold up to`, `sleep hold from`, `parked hold`),
-restored across reboots and listed on the page's settings tab. Gestures are
-classified on release from the hold time (parked: while still held), not by
-`on_multi_click`, whose timings are compile-time. Bands are checked in order,
-so a mis-set overlap resolves to the earlier band.
-
-**Cancel is no longer on the button.** It was a long press when cooking had a
-dedicated button; with one button the owner gave the long holds to sleep and
-parked. Cancel is the app's "Manual AC cancel", or §6's automatic release.
-
-**Every gesture is logged** at INFO (`[button] held 2.1 s -> cooking AC`).
-
-**Sleep mode no longer force-blanks the screen** every second - it blanks on
-entry and then follows the 60 s timeout, so a press at night can show
-something.
-
-**`UNVERIFIED`**: compiled and flashed on the bench rig; not yet pressed by a
-person.

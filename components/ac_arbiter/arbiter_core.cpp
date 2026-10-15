@@ -408,12 +408,17 @@ void ArbiterCore::manual_press(uint32_t now_ms) {
     manual_start_ms_ = now_ms;
     manual_deadline_ms_ = now_ms + cfg_.manual_initial_ms;
     manual_busy_ms_ = now_ms;  // grace starts now; do not release on stale idle
+    out_.manual_added_s = cfg_.manual_initial_ms / 1000u;
     return;
   }
   // Extend, but never past the hard ceiling measured from the first press.
+  const uint32_t before = manual_deadline_ms_;
   const uint32_t extended = manual_deadline_ms_ + cfg_.manual_extend_ms;
   const uint32_t ceiling = manual_start_ms_ + cfg_.manual_max_ms;
   manual_deadline_ms_ = (static_cast<int32_t>(extended - ceiling) > 0) ? ceiling : extended;
+  // Signed: a deadline already at the ceiling adds nothing, never "negative".
+  const int32_t added = static_cast<int32_t>(manual_deadline_ms_ - before);
+  out_.manual_added_s = added > 0 ? static_cast<uint32_t>(added) / 1000u : 0u;
 }
 
 void ArbiterCore::manual_cancel(uint32_t now_ms) {

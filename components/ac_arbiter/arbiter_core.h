@@ -167,6 +167,10 @@ struct ArbiterOutputs {
   bool inhibit_active = false; // drive inhibit, after its hard timeout
   bool manual_warning = false; // within manual_warn_ms of auto-release
   uint32_t manual_remaining_s = 0;
+  // What the LAST manual_press() actually granted: the initial period on a
+  // start, +extend on an extension, less (down to 0) when the 3h ceiling clips
+  // it. Lets the display say "+12" or "MAX" instead of promising "+30".
+  uint32_t manual_added_s = 0;
   bool parked = false;         // long-term storage: AC held off, fail-safe disarmed
   bool park_pending = false;   // armed by one request, waiting for the confirming one
   uint32_t parked_for_s = 0;   // since entry, or since the last reboot while parked

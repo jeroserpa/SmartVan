@@ -5,7 +5,7 @@ at commit `2b22754e7691c081b403ed46c3c931136b7e4cec` — the commit
 `nodes/van-core.yaml` used to pin from GitHub. Everything here is upstream's
 code, byte for byte, except three blocks in `fbot.cpp` marked
 `van-supervisor patch 1/2/3`. Apache-2.0, see `LICENSE` (copied from that
-commit). Used by `nodes/van-core.yaml` since D-30 (2026-10-15).
+commit). Used by `nodes/van-core.yaml` since D-32 (2026-10-15).
 
 All three were found on the laptop test rig (`tools/p310_sim.py` +
 `nodes/van-core-pcsim*.yaml`, measurements.md M23) and are invisible on the

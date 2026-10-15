@@ -918,11 +918,11 @@ change the van build:
 - Arbiter: hold the boot force-on until the probe has reported once, or count
   a probe never seen since boot as stale.
 
-## M24 — 2026-10-15 — D-30 fixes re-run on the laptop rig: both pass
+## M24 — 2026-10-15 — D-32 fixes re-run on the laptop rig: both pass
 
 `nodes/van-core-pcsim-failsafe.yaml` (scripted probe: silent 3 min after boot,
-then 2.0 C) against `tools/p310_sim.py`, with the D-30 arbiter and ESP-FBot
-fixes and the D-31 one-button map. One boot throughout, no USB drop, board
+then 2.0 C) against `tools/p310_sim.py`, with the D-32 arbiter and ESP-FBot
+fixes and a one-button gesture map since replaced (D-33). One boot throughout, no USB drop, board
 untouched. A first attempt was spoilt by an unplug mid-run; this is the
 clean re-run.
 
@@ -949,5 +949,5 @@ by itself in 4 s, and the node returns to normal 6 s after the station does.
 M23's refused write and permanent wedge are both gone.
 
 **Still `UNVERIFIED`:** the same build against the real P310 (patch 1 writes
-a CCCD the station has never received - D-30), and the D-31 gestures under a
+a CCCD the station has never received - D-32), and the button gestures under a
 real finger.
