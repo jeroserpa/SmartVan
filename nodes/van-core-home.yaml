@@ -1,0 +1,240 @@
+# van-core-home - the real van-core firmware against a SIMULATED P310.
+# FOR TESTING AT HOME. NEVER FLASH THIS TO THE BOARD IN THE VAN.
+#
+# Everything in van-core.yaml runs unchanged: the arbiter and its scheduler,
+# the fail-safes, the kitchen button and manual timer, sleep and parked mode,
+# the display, /ui, the log. Only two things are swapped:
+#
+#   - the P310. components/sim/fbot answers to the same YAML as ESP-FBot and
+#     behaves like it where van-core can tell, but behind it is a small model
+#     of the station, the fridge on its AC output, solar, and a cooking load.
+#     No BLE at all.
+#   - the fridge probe. The cabinet temperature comes from that model, so it
+#     cools while AC is on and warms while it is off, and the scheduler has
+#     something that answers back. The real DS18B20 on GPIO4, whatever its
+#     address, shows as "Cabin temperature" (display and log only).
+#
+# Why it must never go in the van: van-core here believes it is commanding a
+# station that does not exist. The real P310 stays latched in whatever state
+# it was in, and nothing will change it (CLAUDE.md section 5.2). The image is
+# named van-core-home and logs a warning every minute to make that obvious.
+#
+# Driving the simulation - stock web UI at http://192.168.4.1/, the "Sim:"
+# entities (the van UI at /ui shows the van side as usual):
+#   Sim: station link up      off = BLE lost: writes dropped, data stops
+#   Sim: station data frozen  link claims up, no data: the link_stale fail-safe
+#   Sim: fridge probe failed  probe goes silent: probe-stale fail-safe
+#   Sim: fridge temperature   set the cabinet, e.g. 11 C for the hard override
+#   Sim: solar input          spare solar for surplus_req
+#   Sim: cooking load         an AC load, for the manual timer's 150 W release
+#   Sim: ambient              what the cabinet warms towards
+#   Sim: battery              set the state of charge
+#   Sim: time factor          speeds up the fridge and battery, not the
+#                             arbiter's timers - shorten those with its own
+#                             numbers if a block is too long to wait for
+#   Sim: keep screen awake    no page button at home; off to test blanking
+#
+# The onboard RGB LED mirrors the button LED van-core drives on GPIO9-11,
+# which is not fitted: green = manual AC, amber = AC on for the fridge,
+# blue blink = parked.
+#
+# Flash it over USB or from the phone app; flash van-core back the same way.
+
+substitutions:
+  node_name: van-core-home
+
+packages:
+  core: !include van-core.yaml
+
+esphome:
+  comment: "HOME TEST: van-core against a simulated P310. Not for the van."
+  on_boot:
+    - priority: -100
+      then:
+        - logger.log:
+            level: WARN
+            format: "HOME TEST BUILD: the P310 is SIMULATED - this node controls nothing real"
+
+# The simulated station, in place of ESP-FBot. Listed after van-core.yaml's
+# own sources, so this `fbot` is the one ESPHome loads.
+external_components:
+  - source:
+      type: local
+      path: ../components/sim
+    components: [fbot]
+
+# No station, so no BLE.
+esp32_ble_tracker: !remove
+ble_client: !remove
+
+sensor:
+  # The cabinet, from the model. Same id and name as the real probe, so the
+  # arbiter, display and log read it unchanged. Silent while "probe failed",
+  # which is what drives the real timeout filter in van-core.yaml.
+  - id: !remove fridge_temp_raw
+  - platform: template
+    name: "Fridge temperature (raw)"
+    id: fridge_temp_raw
+    unit_of_measurement: "°C"
+    device_class: temperature
+    accuracy_decimals: 2
+    update_interval: 10s
+    lambda: |-
+      // Intent: the simulated cabinet, or nothing at all while the sim says
+      // the probe has failed - silence, not NAN, like a probe that is gone.
+      if (id(p310)->sim_probe_failed()) return {};
+      return id(p310)->sim_fridge_c();
+
+  # The real probe on GPIO4, without the address van-core pins, so any single
+  # probe on the bench shows up.
+  - id: !remove cabin_temp
+  - platform: dallas_temp
+    one_wire_id: bus_1w
+    name: "Cabin temperature"
+    id: cabin_temp
+    update_interval: 30s
+    accuracy_decimals: 1
+
+switch:
+  # State read back from the simulation, so DISABLED: a restore would run the
+  # turn_off action at boot and start the station disconnected.
+  - platform: template
+    name: "Sim: station link up"
+    restore_mode: DISABLED
+    lambda: return id(p310)->sim_link_up();
+    turn_on_action:
+      - lambda: id(p310)->sim_set_link_up(true);
+    turn_off_action:
+      - lambda: id(p310)->sim_set_link_up(false);
+  - platform: template
+    name: "Sim: station data frozen"
+    restore_mode: DISABLED
+    lambda: return id(p310)->sim_frozen();
+    turn_on_action:
+      - lambda: id(p310)->sim_set_frozen(true);
+    turn_off_action:
+      - lambda: id(p310)->sim_set_frozen(false);
+  - platform: template
+    name: "Sim: fridge probe failed"
+    restore_mode: DISABLED
+    lambda: return id(p310)->sim_probe_failed();
+    turn_on_action:
+      - lambda: id(p310)->sim_set_probe_failed(true);
+    turn_off_action:
+      - lambda: id(p310)->sim_set_probe_failed(false);
+  - platform: template
+    name: "Sim: keep screen awake"
+    id: sw_sim_screen
+    optimistic: true
+    restore_mode: ALWAYS_ON
+
+number:
+  - platform: template
+    name: "Sim: fridge temperature"
+    unit_of_measurement: "°C"
+    min_value: -5
+    max_value: 30
+    step: 0.5
+    update_interval: 2s
+    lambda: return id(p310)->sim_fridge_c();
+    set_action:
+      - lambda: id(p310)->sim_set_fridge_c(x);
+  - platform: template
+    name: "Sim: solar input"
+    unit_of_measurement: "W"
+    min_value: 0
+    max_value: 750
+    step: 10
+    update_interval: 2s
+    lambda: return id(p310)->sim_solar_w();
+    set_action:
+      - lambda: id(p310)->sim_set_solar_w(x);
+  - platform: template
+    name: "Sim: cooking load"
+    unit_of_measurement: "W"
+    min_value: 0
+    max_value: 3000
+    step: 50
+    update_interval: 2s
+    lambda: return id(p310)->sim_cooking_w();
+    set_action:
+      - lambda: id(p310)->sim_set_cooking_w(x);
+  - platform: template
+    name: "Sim: ambient"
+    unit_of_measurement: "°C"
+    min_value: 0
+    max_value: 45
+    step: 0.5
+    update_interval: 2s
+    lambda: return id(p310)->sim_ambient_c();
+    set_action:
+      - lambda: id(p310)->sim_set_ambient_c(x);
+  - platform: template
+    name: "Sim: battery"
+    unit_of_measurement: "%"
+    min_value: 0
+    max_value: 100
+    step: 1
+    update_interval: 2s
+    lambda: return id(p310)->sim_soc();
+    set_action:
+      - lambda: id(p310)->sim_set_soc(x);
+  - platform: template
+    name: "Sim: time factor"
+    unit_of_measurement: "x"
+    min_value: 1
+    max_value: 120
+    step: 1
+    update_interval: 2s
+    lambda: return id(p310)->sim_time_factor();
+    set_action:
+      - lambda: id(p310)->sim_set_time_factor(x);
+
+light:
+  - platform: esp32_rmt_led_strip
+    id: onboard_rgb
+    name: "Onboard RGB"
+    internal: true
+    pin: GPIO38
+    num_leds: 1
+    chipset: WS2812
+    rgb_order: GRB
+    default_transition_length: 0s
+    restore_mode: ALWAYS_OFF
+
+interval:
+  - interval: 1s
+    then:
+      - lambda: |-
+          // Intent: no page button at home, so hold the panel awake - but
+          // never over sleep or parked mode, which blank it on purpose.
+          if (id(sw_sim_screen).state && !id(sw_sleep_mode).state && !id(arbiter)->parked()) {
+            id(display_awake) = true;
+            id(display_wake_ms) = millis();
+          }
+      - lambda: |-
+          // Intent: show on the board what van-core's button LED would show,
+          // same rules as its 1 s LED interval.
+          int colour = 0;  // 0 off, 1 green, 2 amber, 3 blue
+          if (id(arbiter)->parked())
+            colour = ((millis() / 1000u) % 4u == 0u) ? 3 : 0;
+          else if (id(arbiter)->manual_req())
+            colour = 1;
+          else if (id(arbiter)->ac_on())
+            colour = 2;
+          static int shown = -1;
+          if (colour == shown) return;
+          shown = colour;
+          static const float RGB[4][3] = {{0, 0, 0}, {0, 1, 0}, {1, 0.3f, 0}, {0, 0, 1}};
+          auto call = id(onboard_rgb).make_call();
+          call.set_state(colour != 0);
+          if (colour != 0) {
+            call.set_brightness(0.4f);
+            call.set_rgb(RGB[colour][0], RGB[colour][1], RGB[colour][2]);
+          }
+          call.perform();
+  - interval: 60s
+    then:
+      - logger.log:
+          level: WARN
+          format: "HOME TEST BUILD: the P310 is SIMULATED - this node controls nothing real"

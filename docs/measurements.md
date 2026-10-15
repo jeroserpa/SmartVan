@@ -856,3 +856,98 @@ lit whenever the board has 5 V, and power fed in on the header's 5 V pin
 lands on the same VBUS net, so it will be lit in the van too: ~1 mA, and a
 green glow 300 mm from a bed. Either lift LED1 (or R3, which also saves the
 1 mA) or mask it in the enclosure; the charger works the same without it.
+
+## M23 — 2026-10-15 — bench: the van firmware against a simulated P310 on the laptop
+
+**Setup.** `tools/p310_sim.py` on the laptop (a WinRT GATT server speaking the
+P310's Modbus-over-BLE, model behind it). The board runs
+`nodes/van-core-pcsim.yaml`: `van-core.yaml` plus a patched ESP-FBot and a hook
+that finds the simulator. **No fridge probe reading** throughout: the GPIO4 bus
+reports no devices / "bus reset failed", although M22 had a probe reading
+there. Times are laptop clock.
+
+**1. Windows advertises a GATT server from a random address.** Seen by a scan
+from this board: the P310 service came from 58:A0:E7:E4:52:67, after a restart
+from 61:56:D0:C5:AA:82 (random, resolvable), never from the adapter's
+94:E7:0B:0D:79:D2. van-core connects by address, so the pcsim build follows
+whichever address advertises service 0xA002, only while the client is idle.
+A station killed abruptly also leaves its service registered on the laptop for
+a few minutes; a reconnect in that window finds the dead copy.
+
+**2. ESP-FBot never switches notifications on (ESPHome 2026.8).** Every connect
+logs `REG_FOR_NOTIFY after services released, notifications not enabled`, and
+the simulator's replies reached 0 subscribers. Cause and one-line fix in
+`components/fbot/README.md`; with it, the client subscribes (max notification
+514 bytes) and data flows. **Inference, `VERIFY` on the van:** the real P310
+must notify without being asked, or nothing would ever have worked; the same
+warning line should be in van-core's boot log there.
+
+**3. A probe that never reports leaves AC off from minute 1 to minute 5 after
+boot.** `AC ON (boot)`, then the station received `AC OFF` at 17:41:37, about a
+minute after the reset, with no probe reading at any point. `ArbiterCore::begin()`
+back-dates the probe as fresh at boot, so `TEMP_STALE` only fires 5 min later;
+in between, `update_fridge_()` holds the initial `fridge_req = false` on the
+assumption that "force_on is already covering this" - which it is not once
+the 60 s boot window ends. Consistent with M21 (both probes empty for the
+first 5 min after boot, then "probe stale"). The return to AC on at 5 min was
+not observed here: test 4 started first.
+
+**4. A silent station while AC is off: the fail-safe never gets to act.**
+Station silenced at 17:41:48 with AC off; the BLE link stayed up. ESP-FBot
+counts three 15 s poll timeouts and marks the station disconnected after
+~45 s - before van-core's `link_stale` (60 s). From then on the arbiter's ON
+command is refused: `Cannot change switch 'ac': device is disconnected`. This
+is the CLAUDE.md §5.2 row "AC OFF, link still alive" - the one case the
+fail-safe is supposed to be able to act in - and it could not.
+
+**5. And it never recovers on its own.** Station answering again from
+17:44:25. At 17:46:07 the last poll was 214 s old: after max poll failures
+ESP-FBot stops polling (`send_read_request()` returns while not connected) and
+only a BLE connect event marks it connected again - and the link never
+dropped. Writes still refused. Only a reboot recovered it: reconnect, then
+`AC ON` at the station at 17:46:49. Nothing in van-core.yaml reboots it, so
+**in the van, a station that goes quiet for ~45 s while AC is off leaves the
+fridge off until a human intervenes.**
+
+**Fixes proposed, none applied.** All three are in safety-relevant code and
+change the van build:
+- ESP-FBot: on max poll failures, disconnect the BLE client so it reconnects;
+  or keep polling and mark connected on the next reply.
+- van-core.yaml: order the timeouts so `link_stale` fires while ESP-FBot still
+  accepts writes (e.g. ESP-FBot `poll_timeout: 30s`, giving 90 s against 60 s).
+- Arbiter: hold the boot force-on until the probe has reported once, or count
+  a probe never seen since boot as stale.
+
+## M24 — 2026-10-15 — D-30 fixes re-run on the laptop rig: both pass
+
+`nodes/van-core-pcsim-failsafe.yaml` (scripted probe: silent 3 min after boot,
+then 2.0 C) against `tools/p310_sim.py`, with the D-30 arbiter and ESP-FBot
+fixes and the D-31 one-button map. One boot throughout, no USB drop, board
+untouched. A first attempt was spoilt by an unplug mid-run; this is the
+clean re-run.
+
+**A - probe never reports at boot.** Boot ~18:22:17. AC held ON with no
+probe reading until the script started reporting 2.0 C; `AC OFF (off)` at
+18:25:31, received by the station at once. M23's AC-off at ~1 min is gone.
+
+**B - station goes quiet with AC off.** Silenced 18:25:41 (last reply
+~18:25:36).
+
+| Time | Event | Since last reply |
+|---|---|---|
+| 18:26:36 | ESP-FBot poll timeout 1/3 | 60 s |
+| 18:27:26 | `AC ON (link stale)`; station receives it, AC on at 18:27:28 | 110 s |
+| 18:27:31 | poll timeout 2/3 | 115 s |
+| 18:27:36-18:28:16 | arbiter re-sends every 10 s (station readback stale) | |
+| 18:28:21 | poll timeout 3/3, `dropping the BLE link to reconnect` | 165 s |
+| 18:28:25 | reconnected; re-subscribed 18:28:27 | |
+| 18:28:35 | station answering again | |
+| 18:28:41 | `AC OFF (off)` - fail-safe released, thermostat back | |
+
+The fail-safe's ON now lands 55 s before ESP-FBot gives up, the link recovers
+by itself in 4 s, and the node returns to normal 6 s after the station does.
+M23's refused write and permanent wedge are both gone.
+
+**Still `UNVERIFIED`:** the same build against the real P310 (patch 1 writes
+a CCCD the station has never received - D-30), and the D-31 gestures under a
+real finger.

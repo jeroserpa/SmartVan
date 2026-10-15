@@ -192,27 +192,35 @@ holding it during a reset drops the board into download mode, which is a
 confusing failure to debug months later. All user controls get free GPIOs and
 external buttons.
 
-| Control | Location | Action |
-|---|---|---|
-| Wake / cycle | Enclosure bezel | Wake display; subsequent presses cycle pages |
-| Sleep mode | Enclosure bezel | Long press toggles sleep mode |
-| Manual AC | Kitchen, illuminated | Manual AC request (see §6) |
+**`DECIDED 2026-10-15` (D-31): there is one button — the illuminated one in
+the kitchen — and there will only ever be one.** The board's own BOOT switch is
+hard to reach in the enclosure as well as being a strapping pin. Everything is
+a gesture on that one button (`nodes/van-core.yaml`, `btn_manual`):
 
-**Why not a touchscreen board:** the screen is blanked most of the time (60s
-timeout — no night-light, no wasted backlight), so a touch UI cannot be the input
-method; something physical must wake it first. A physical button is needed
-regardless, at which point touch only saves one button. Physical buttons also
-work with wet hands, cold hands, and in the dark without looking.
+| Gesture | Action |
+|---|---|
+| Short press, screen dark | Wake the screen — nothing else |
+| Short press, screen on | Next page |
+| Hold 1–3 s | Cooking AC: start 45 min, or +30 min if running (§6) |
+| Hold 5–10 s | Sleep mode on/off |
+| Hold 10 s | Parked mode: asks ("PARK?" + chirp); hold again within 30 s to confirm. While parked, one hold leaves |
 
-**Optional upgrade — rotary encoder with push** (ESPHome `rotary_encoder`)
-replaces wake + cycle with one knob: turn to move through pages, press to
-wake/select. Pays off most for **threshold tuning**, since every setpoint is an
-adjustable `number` — a knob at the fridge beats tapping through a phone browser.
-Retrofits cleanly to the same terminal block; skip it to keep Phase 1 lean.
+Gesture map is the owner's (2026-10-15). The four band edges are `number`
+entities ("Button …") on the app's settings page, so they can be tuned without
+a reflash. 3–5 s is a dead zone. Holds act whatever the screen was doing; only
+the short press is swallowed by a dark screen, so a glance never arms the
+inverter. **Cancelling cooking is not on the button**: the app's "Manual AC
+cancel", or the automatic release once the load drops. Every gesture is
+logged (`[button] held 2.1 s -> cooking AC`) so a phantom press is visible.
+Sleep mode blanks the screen when it starts but a press still wakes it for the
+usual 60 s.
+
+~~**Optional upgrade — rotary encoder with push**~~ — `WITHDRAWN 2026-10-15`
+(D-31): one button, by decision. Threshold tuning stays on the phone UI.
 
 `VERIFY before laying out the carrier board:` how many GPIOs the Waveshare header
 actually breaks out. Needed: SPI (display), SDMMC (card), I2C (RTC), 1-Wire,
-plus three buttons. The S3 has plenty of pins in principle; the header may not
+plus one button. The S3 has plenty of pins in principle; the header may not
 expose them all.
 
 Display pages: SOC/power → fridge temp + arbiter state → water (fresh + grey,
@@ -646,9 +654,10 @@ question that matters is whether the mode can be entered by mistake.
 **Parking is a human decision, and the arbiter does not second-guess it.** The
 gate is a **second, deliberate request within 30s**; the first only arms.
 
-- **Bezel:** two long presses. The switch reads its state from the arbiter, so
-  an armed-but-unconfirmed request still shows *off* and the second press lands
-  on the same gesture — nothing new to remember.
+- **Button:** two 10 s holds (D-31; was two long presses on a bezel button).
+  The switch reads its state from the arbiter, so an armed-but-unconfirmed
+  request still shows *off* and the second hold lands on the same gesture —
+  nothing new to remember.
 - **Web UI:** the modal that spells out the consequence *is* the second
   confirmation, so the page sends the confirming request behind it. One flip
   plus one dialog, never three steps for one decision.
@@ -680,8 +689,8 @@ of asking. **The residual hazard below — park correctly, then load food a week
 later — was never covered by the interlock and is unchanged.**
 
 #### Entering
-- **Gesture:** bezel sleep button, ≥5s (1–4s is still sleep mode). Or the
-  `Parked mode` switch in the web UI.
+- **Gesture:** hold the button 10 s, twice (D-31; 5–10 s is sleep mode). Or
+  the `Parked mode` switch in the web UI.
 - Shed `usb`. **Never `dc`** — the 12V habitation bus, and therefore van-core
   itself, hangs off it; shedding it is unrecoverable without walking to the
   P310 (`measurements.md` 2026-08-18).
@@ -704,10 +713,11 @@ later — was never covered by the interlock and is unchanged.**
   stale-probe trip from storage.
 
 #### Leaving
-- Any of: the bezel gesture again, the web switch, **or a press of the kitchen
-  cooking button** — someone back in the van wanting 230V is a deliberate press
-  of a dedicated button, so treat it as the exit gesture rather than ignoring
-  it and looking broken.
+- Any of: a 10 s hold again, the web switch, **or a cooking hold** — someone
+  back in the van wanting 230V is a deliberate press of a dedicated button, so
+  treat it as the exit gesture rather than ignoring it and looking broken. With
+  one button (D-31) a short press only wakes the screen and shows the PARKED
+  page; the 1–3 s cooking hold or a 10 s hold leaves.
 - Exit re-arms the boot force-on window: AC comes on immediately and the
   thermostat takes over once the probes have reported. Coming out of parked
   mode is exactly when food gets loaded, and a cabinet sitting at 20 °C should

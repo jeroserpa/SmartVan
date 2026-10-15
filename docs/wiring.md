@@ -114,7 +114,7 @@ Board: Waveshare ESP32-S3-LCD-1.47 (ESP32-S3R8).
 |---|---|---|---|
 | 4 | 1-Wire data — `VERIFIED 2026-10-15` on the bench, one DS18B20 (M22) | in/out | 4.7 kΩ to 3V3 at the ESP end (BOM item 3) |
 | 5 | Kitchen AC button, switch between GPIO5 and GND — `VERIFIED 2026-10-15` on the bench (M22) | input, pullup, inverted | 100 Ω series (BOM item 8) |
-| 6 | External page button — **wired to the terminal, unused for now** | input, pullup, inverted | 100 Ω series |
+| 6 | ~~External page button~~ — `DROPPED 2026-10-15` (D-31): one button only, the kitchen one on GPIO5 does everything. GPIO6 is free | — | — |
 | 8 | Buzzer | LEDC 2.7 kHz | 100 Ω series; MOSFET + flyback if magnetic |
 | 9 | I²C SDA — DS3231 | *proposed* | 4.7 kΩ pull-ups on the module |
 | 10 | I²C SCL — DS3231 | *proposed* | |

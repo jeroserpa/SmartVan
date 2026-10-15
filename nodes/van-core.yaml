@@ -43,19 +43,20 @@ substitutions:
   # GPIO4 and GPIO5 `VERIFIED 2026-10-15` on the bench with
   # van-core-inputs.yaml: a DS18B20 on 4, the button between 5 and GND (M22).
   pin_onewire: GPIO4
-  pin_btn_manual: GPIO5   # kitchen, illuminated momentary
-  pin_btn_page: GPIO6     # bezel: wake / cycle pages
-  pin_btn_sleep: GPIO7    # bezel: long press toggles sleep mode
+  # THE ONLY BUTTON (D-31): kitchen, illuminated momentary. It does
+  # everything - wake, pages, cooking AC, sleep, parked; see binary_sensor.
+  pin_btn_manual: GPIO5
   pin_led_r: GPIO9
   pin_led_g: GPIO10
   pin_led_b: GPIO11
   pin_buzzer: GPIO8
   # GPIO0 (BOOT) is NOT used as a runtime button: it is a strapping pin, and
   # holding it across a reset silently drops the board into download mode.
+  # It is also hard to reach in the enclosure. GPIO6/7 are free again.
 
   # --- BENCH REVIEW. SET TO 0 BEFORE THIS GOES IN THE VAN. ---
   # 1 pins the backlight on and auto-cycles the pages, so the panel can be
-  # reviewed on a bare board with no bezel buttons wired. Both behaviours are
+  # reviewed on a bare board with no button wired. Both behaviours are
   # WRONG in the van: a page that changes under you while you are reading it is
   # exactly the animation section 2 forbids, and a backlight that never blanks
   # is a night-light burning the pack. Grep `bench_review` - there are two
@@ -137,28 +138,25 @@ packages:
   base: !include ../common/base.yaml
 
 external_components:
-  # The whole reason this project is ESPHome rather than custom firmware: the
-  # P310 BLE protocol, already solved. Apache-2.0.
-  #
-  # PINNED to the commit van-core has been built and tested with (upstream
-  # HEAD, unchanged since 2026-04-18). This is the link the fridge depends on,
-  # so an upstream change lands after it has been read and bench-tested, not
-  # on whichever compile happens next (CLAUDE.md section 11). Move `ref` to
-  # take a newer version.
-  - source:
-      type: git
-      url: https://github.com/ylianst/esp-fbot
-      ref: 2b22754e7691c081b403ed46c3c931136b7e4cec
-    refresh: never
   # The arbiter (pure state machine, host-tested in test/), the log, the UI,
   # and the socket guard (D-29). web_server_idf here REPLACES ESPHome's own:
   # it is 2026.8.0's, with the fix for stuck event streams that upstream
   # shipped in 2026.10 - see components/web_server_idf/README.md, and delete
   # it from this list when ESPHome moves past 2026.10.
+  #
+  # fbot is ESP-FBot - the P310 BLE protocol, already solved, and the whole
+  # reason this project is ESPHome rather than custom firmware (Apache-2.0).
+  # `CHANGED 2026-10-15` (D-30): a vendored copy of the commit this config used
+  # to pin from GitHub (2b22754e, upstream HEAD since 2026-04-18), with three
+  # marked fixes found on the laptop test rig (M23): notifications were never
+  # switched on, a station that never answered was never timed out, and one
+  # that went quiet for ~45 s wedged the link until a reboot. Details in
+  # components/fbot/README.md. Moving to a newer upstream means re-applying
+  # those three, after reading and bench-testing it (CLAUDE.md section 11).
   - source:
       type: local
       path: ../components
-    components: [ac_arbiter, soak_log, van_ui, net_guard, web_server_idf]
+    components: [ac_arbiter, soak_log, van_ui, net_guard, web_server_idf, fbot]
   # Mounts the card and serves /file. soak_log does the writing, off the main
   # loop; this component's own write actions block it and are not used.
   #
@@ -248,7 +246,15 @@ fbot:
   id: p310
   polling_interval: 5s           # matches the arbiter tick; no point going faster
   settings_polling_interval: 60s # thresholds change rarely
-  poll_timeout: 15s
+  # ESP-FBot gives up after max_poll_failures x poll_timeout with no reply
+  # (here ~150 s) and, patched (D-30), drops the link so it reconnects. Until
+  # then it still accepts writes. It MUST outlast the arbiter's link_stale
+  # fail-safe below, or the ON command that fail-safe exists to send is
+  # refused - which is exactly what 15 s x 3 = 45 s did (M23). The arbiter
+  # fires at sensor_max_age + link_stale + one 5 s tick = 45 + 60 + 5 = 110 s
+  # after the last reply; 150 s leaves 40 s for the write and its re-sends.
+  # Change any of the four numbers, re-check this inequality.
+  poll_timeout: 50s
   max_poll_failures: 3
 
 binary_sensor:
@@ -264,7 +270,24 @@ binary_sensor:
       name: "P310 DC output active"
       id: p310_dc_active
 
-  # --- manual AC request (the cooking button) ---
+  # --- THE button. One, in the kitchen, and there will only ever be one (D-31).
+  #
+  #   short press         screen dark: wake it, nothing else
+  #                       screen on:   next page
+  #   hold 1-3 s          cooking AC: start 45 min, or +30 min if running
+  #   hold 5-10 s         sleep mode on / off
+  #   hold 10 s           parked mode: the first hold asks (chirp, "PARK?"
+  #                       on screen), a second within 30 s confirms; while
+  #                       parked, one hold leaves
+  #
+  # The bands are the four "Button ..." numbers below, so they can be tuned
+  # from the app. A short press is anything under the first; the gap between
+  # cooking and sleep is a dead zone, so a hold that lands between two
+  # meanings does nothing. Holds act whether or not the screen was dark - they
+  # are deliberate; only the short press is swallowed by a dark screen.
+  # Cancelling cooking is the app's "Manual AC cancel", or the automatic
+  # release once the load drops (section 6). A cooking hold while parked also
+  # leaves parked mode: the arbiter treats it as someone back in the van.
   - platform: gpio
     name: "Manual AC button"
     id: btn_manual
@@ -281,69 +304,44 @@ binary_sensor:
       # for days, so this is not decoration.
       - delayed_on: 50ms
       - delayed_off: 50ms
-    on_click:
-      - min_length: 50ms
-        max_length: 900ms
-        then:
-          - lambda: id(arbiter)->manual_press();
-      - min_length: 1s
-        max_length: 10s
-        then:
-          - lambda: id(arbiter)->manual_cancel();
-
-  # --- bezel buttons ---
-  - platform: gpio
-    name: "Page button"
-    id: btn_page
-    internal: true
-    pin:
-      number: ${pin_btn_page}
-      mode:
-        input: true
-        pullup: true
-      inverted: true
-    filters:
-      - delayed_on: 50ms
     on_press:
-      then:
-        - lambda: |-
-            // First press wakes; subsequent presses cycle. The screen is dark
-            // most of the time, so page-cycling a blank display is never useful.
-            if (id(display_awake)) {
+      - lambda: |-
+          // Intent: note when the press began and whether the screen was dark,
+          // then wake it. What the press means is decided by how long it lasts:
+          // on release, or for parked mode while it is still held.
+          id(btn_press_ms) = millis();
+          id(btn_woke) = !id(display_awake);
+          id(btn_hold_fired) = false;
+          id(display_awake) = true;
+          id(display_wake_ms) = millis();
+    on_release:
+      - lambda: |-
+          // Intent: turn the hold time into a gesture, using the tunable bands.
+          // Every gesture is logged: a phantom press arming the inverter is a
+          // leak that goes unnoticed for days (section 6), so it must be visible.
+          if (id(btn_hold_fired)) return;  // the parked hold already acted
+          const float held_s = (millis() - id(btn_press_ms)) / 1000.0f;
+          const char *what = "nothing (between bands)";
+          if (held_s < id(num_btn_short).state) {
+            if (id(btn_woke)) {
+              what = "wake";
+            } else {
               id(page_idx) = (id(page_idx) + 1) % 4;
+              what = "next page";
             }
-            id(display_awake) = true;
-            id(display_wake_ms) = millis();
-
-  - platform: gpio
-    name: "Sleep button"
-    id: btn_sleep
-    internal: true
-    pin:
-      number: ${pin_btn_sleep}
-      mode:
-        input: true
-        pullup: true
-      inverted: true
-    filters:
-      - delayed_on: 50ms
-    on_click:
-      # 1-4s: sleep mode. 5s+: parked mode. Two very different commitments, so
-      # they get two clearly different gestures on the same button rather than
-      # a menu - and the long one is the one you cannot trigger by accident
-      # while reaching past it in the dark.
-      - min_length: 1s
-        max_length: 4s
-        then:
-          - switch.toggle: sw_sleep_mode
-      # Twice: the first long press arms, the second within 30s commits. The
-      # switch reads its state from the arbiter, so an armed request still
-      # reads "off" and the toggle lands on turn_on again - no separate
-      # confirm gesture to remember.
-      - min_length: 5s
-        max_length: 20s
-        then:
-          - switch.toggle: sw_parked
+          } else if (held_s <= id(num_btn_cook).state) {
+            // Leaving parked mode must go through the switch, or its exit steps
+            // never run: USB stayed off, the charge cap stayed at 80 % and
+            // parked_saved stayed true, so the next reboot parked the van again
+            // (found on the rig 2026-10-15).
+            if (id(arbiter)->parked()) id(sw_parked).turn_off();
+            id(arbiter)->manual_press();
+            what = "cooking AC";
+          } else if (held_s >= id(num_btn_sleep).state && held_s < id(num_btn_park).state) {
+            id(sw_sleep_mode).toggle();
+            what = id(sw_sleep_mode).state ? "sleep ON" : "sleep OFF";
+          }
+          ESP_LOGI("button", "held %.1f s -> %s", held_s, what);
 
   # --- arbiter state, exposed for the web UI and for logging ---
   - platform: template
@@ -624,7 +622,7 @@ switch:
     # Two flips, not one. The first arms and the switch springs back to off -
     # its state is read from the arbiter, so an armed-but-unconfirmed request
     # simply does not show as parked, which is the feedback. The second flip
-    # inside the confirm window commits. Same call from the bezel gesture, so
+    # inside the confirm window commits. Same call from the button's parked hold, so
     # both entry paths get the identical guard (D-14).
     turn_on_action:
       - lambda: id(arbiter)->park_request();
@@ -694,10 +692,10 @@ button:
     name: "Next display page"
     id: btn_next_page
     entity_category: diagnostic
-    # The bezel button is the real control; this is its web-UI twin, so the
+    # The button's short press is the real control; this is its web-UI twin, so the
     # panel can be driven from a phone when the enclosure is shut, or before
-    # the bezel buttons are wired at all. Wakes as well as advances, matching
-    # the bezel's own "first press wakes" behaviour.
+    # the button is wired at all. Wakes as well as advances, matching
+    # the button's own "first press wakes" behaviour.
     on_press:
       - lambda: |-
           if (id(display_awake))
@@ -869,6 +867,9 @@ ac_arbiter:
   # not while they are merely late. This is the *only* fail-safe that can still
   # reach the P310 - once ble_connected drops there is no link left to carry an
   # ON command, so BLE_LOST is recovery-on-reconnect and this is the real thing.
+  # Counted from when the data went INVALID, not from the last reply: it fires
+  # ~110 s after the station goes quiet (M23). ESP-FBot's give-up must come
+  # later - see poll_timeout under `fbot:`.
   link_stale: 60s
 
 # -----------------------------------------------------------------------------
@@ -1094,6 +1095,55 @@ number:
     on_value:
       - lambda: id(arbiter)->config().manual_initial_ms = (uint32_t)(x * 60000);
 
+  # --- the button's gesture bands (D-31), in seconds held. Under "short press"
+  # is a short press; up to "cooking" starts cooking AC; from "sleep" up to
+  # "parked" toggles sleep; reaching "parked" while held asks to park. Checked
+  # in that order, so if two bands are set to overlap the earlier one wins.
+  - platform: template
+    name: "Button short press under"
+    id: num_btn_short
+    unit_of_measurement: "s"
+    min_value: 0.3
+    max_value: 3
+    step: 0.1
+    initial_value: 1
+    optimistic: true
+    restore_value: true
+    entity_category: config
+  - platform: template
+    name: "Button cooking hold up to"
+    id: num_btn_cook
+    unit_of_measurement: "s"
+    min_value: 1
+    max_value: 10
+    step: 0.5
+    initial_value: 3
+    optimistic: true
+    restore_value: true
+    entity_category: config
+  - platform: template
+    name: "Button sleep hold from"
+    id: num_btn_sleep
+    unit_of_measurement: "s"
+    min_value: 2
+    max_value: 20
+    step: 0.5
+    initial_value: 5
+    optimistic: true
+    restore_value: true
+    entity_category: config
+  - platform: template
+    name: "Button parked hold"
+    id: num_btn_park
+    unit_of_measurement: "s"
+    min_value: 5
+    max_value: 30
+    step: 1
+    initial_value: 10
+    optimistic: true
+    restore_value: true
+    entity_category: config
+
   - platform: template
     name: "Manual AC release power"
     id: num_manual_release_w
@@ -1228,8 +1278,35 @@ globals:
     type: uint32_t
     restore_value: false
     initial_value: "0"
+  # The one button (D-31): when the press began, whether it began on a dark
+  # screen, and whether the parked hold has already acted on it.
+  - id: btn_press_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: btn_woke
+    type: bool
+    restore_value: false
+    initial_value: "false"
+  - id: btn_hold_fired
+    type: bool
+    restore_value: false
+    initial_value: "false"
 
 interval:
+  # The button's parked gesture (D-31) acts while the button is still held, at
+  # "Button parked hold" seconds: the chirp and the PARK? prompt are the cue to
+  # let go, and a second hold within 30 s confirms.
+  - interval: 100ms
+    then:
+      - lambda: |-
+          if (!id(btn_manual).state || id(btn_hold_fired)) return;
+          if (millis() - id(btn_press_ms) >= (uint32_t) (id(num_btn_park).state * 1000.0f)) {
+            id(btn_hold_fired) = true;
+            ESP_LOGI("button", "held %.0f s -> parked mode request", id(num_btn_park).state);
+            id(sw_parked).toggle();
+          }
+
   # Button LED. Green = manual active, amber = fridge-driven, off = inverter
   # down. Dim: this is a metre from where someone sleeps.
   - interval: 1s
@@ -1268,9 +1345,9 @@ interval:
       - lambda: id(out_buzzer)->set_level(0.0f);
 
   # BENCH REVIEW ONLY - set bench_review to 0 for the van. Cycles the pages so
-  # all four can be looked at on a bare board with no bezel button wired. In
+  # all four can be looked at on a bare board with no button wired. In
   # the van this is exactly wrong: a page that changes while you are reading it
-  # is the animation section 2 forbids, and it would fight the bezel button.
+  # is the animation section 2 forbids, and it would fight the button.
   - interval: 6s
     then:
       - lambda: |-
@@ -1282,18 +1359,19 @@ interval:
   - interval: 1s
     then:
       - lambda: |-
-          if (id(sw_sleep_mode).state)
-            id(display_awake) = false;
+          // Sleep mode blanks the screen as it starts (sw_sleep_mode on_turn_on),
+          // not continuously: with one button (D-31) a deliberate press at night
+          // must still be able to show something, for the usual 60 s.
           if (id(display_awake) && (millis() - id(display_wake_ms)) > 60000)
             id(display_awake) = false;
-          // bench_review pins it on: with no bezel button wired, nothing can
+          // bench_review pins it on: with no button wired, nothing can
           // wake the panel once it blanks, so a bare board goes dark 60s after
           // boot and stays dark. Set bench_review to 0 for the van.
           id(out_backlight)->set_level((${bench_review} || id(display_awake)) ? 0.8f : 0.0f);
 
 # -----------------------------------------------------------------------------
 # Display. Native 320x172 - the LCD-1.47 turned to landscape - four pages
-# cycled by the bezel button. Same instrument-dark language as the bench rig
+# cycled by the button's short press. Same instrument-dark language as the bench rig
 # (nodes/vc_draw.h holds the palette and the three primitives ESPHome lacks),
 # re-laid for the panel the design was drawn for instead of scaled down to it.
 #
@@ -1387,13 +1465,15 @@ display:
     # `VERIFY on first flash`: offsets and rotation for this panel come from the
     # espp board header, not from a datasheet in hand. A 34px offset in the
     # wrong axis shows as a coloured band down one edge.
-    rotation: 90
+    # `CHANGED 2026-10-15`: 90 -> 270, the board as mounted reads upside down
+    # at 90. Rotation is applied in software; the offset is unaffected.
+    rotation: 270
     cs_pin: ${pin_lcd_cs}
     dc_pin: ${pin_lcd_dc}
     reset_pin: ${pin_lcd_rst}
     update_interval: 1s
     # One lambda rather than `pages:` so the status strip is drawn once, not
-    # pasted into four page bodies. Paging is `page_idx`, bumped by the bezel.
+    # pasted into four page bodies. Paging is `page_idx`, bumped by the button.
     # TWO READING DISTANCES, DESIGNED SEPARATELY. `MEASURED 2026-09-11`: this
     # panel is 32.9 x 17.7 mm, so there is no type scale that is both dense and
     # legible from the far end of the van. Rather than split the difference and

@@ -153,6 +153,39 @@ static void test_failsafe() {
     CHECK(!o.force_on);
   }
 
+  // M23: the boot window ended at 60 s with no probe reading at all, and AC
+  // went off until TEMP_STALE fired at 5 min - because the probe was counted
+  // fresh at boot. A probe that has never reported is not "recently fresh".
+  CASE("a probe that never reports keeps AC on past the boot window");
+  {
+    Sim s;
+    s.in.temp_valid = false;
+    const ArbiterOutputs &o = s.run(2 * MIN);
+    CHECK(o.ac_on);
+    CHECK(o.force_on);
+    CHECK(o.reason == AcReason::TEMP_STALE);
+    // The first reading hands over to the thermostat: 3 C is cold, so off.
+    s.in.temp_valid = true;
+    s.run(10 * SEC);
+    CHECK(!o.force_on);
+    CHECK(!o.ac_on);
+  }
+
+  // Same gap one door down: parked mode rolls the probe timer forward, so a
+  // probe that died during storage looked fresh on the way out.
+  CASE("leaving parked mode holds AC on until the probe reports again");
+  {
+    Sim s;
+    s.settle();
+    CHECK(s.park());
+    s.run(10 * MIN);
+    s.in.temp_valid = false;
+    s.core.park_exit(s.t);
+    const ArbiterOutputs &o = s.run(3 * MIN);
+    CHECK(o.ac_on);
+    CHECK(o.reason == AcReason::TEMP_STALE);
+  }
+
   CASE("stale fridge probe forces AC on after the stale timeout, not before");
   {
     Sim s;

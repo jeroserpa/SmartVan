@@ -1,0 +1,53 @@
+# van-core-pcsim - van-core.yaml, connected to tools/p310_sim.py on a laptop
+# instead of the P310. For testing at home. NOT FOR THE VAN.
+#
+# One thing differs from the van build: how the station is found. Everything
+# else - ESP-FBot, the arbiter, the probes, the buttons, the display, /ui, the
+# log - is the production config, so this tests the van firmware itself,
+# including the BLE + SoftAP coexistence and reconnect behaviour that an
+# on-board simulation (van-core-home.yaml) cannot.
+#
+# Why the finding differs: Windows does not advertise a GATT server from the
+# adapter's own address. `MEASURED 2026-10-15` with a scan from this board:
+# the simulator's service came from 58:A0:E7:E4:52:67, a random resolvable
+# address, while the adapter is 94:E7:0B:0D:79:D2 - and resolvable addresses
+# rotate. No Windows API changes that, so the hook below follows whichever
+# address advertises the P310 service (0xA002), and only while the client is
+# idle, so a live connection is never disturbed.
+#
+#   1. On the laptop:  python tools/p310_sim.py
+#   2. Flash this. The ESP finds the laptop and connects as if it were the station.
+#   3. Drive the station from http://127.0.0.1:8310/ on the laptop, and van-core
+#      from its own UI as usual.
+#
+# The fridge temperature stays real: van-core reads its own probe and never
+# the network (CLAUDE.md section 5.1). Put the probe somewhere cold, or the
+# 10 C hard override holds AC on and the scheduler never gets a turn. For the
+# scripted fail-safe test with no probe at all, see van-core-pcsim-failsafe.yaml.
+#
+# In the van this build would connect to nothing: BLE never comes up, and the
+# P310 stays latched in whatever state it was in. Flash van-core back first.
+
+substitutions:
+  node_name: van-core-pcsim
+  # Only the starting point: the hook below replaces it with the address the
+  # simulator actually advertises from.
+  p310_mac: "94:E7:0B:0D:79:D2"
+
+packages:
+  core: !include van-core.yaml
+
+esp32_ble_tracker:
+  on_ble_advertise:
+    - then:
+        - lambda: |-
+            // Intent (TEST BUILD ONLY): follow the simulated station to whatever
+            // address Windows is advertising it from this time, but never while
+            // the client is connecting or connected.
+            if (id(p310_ble)->state() != esp32_ble_tracker::ClientState::IDLE) return;
+            bool p310 = false;
+            for (auto &u : x.get_service_uuids())
+              if (u == esp32_ble_tracker::ESPBTUUID::from_uint16(0xA002)) p310 = true;
+            if (!p310 || x.address_uint64() == id(p310_ble)->get_address()) return;
+            ESP_LOGI("pcsim", "station advertising from %s - following it", x.address_str().c_str());
+            id(p310_ble)->set_address(x.address_uint64());

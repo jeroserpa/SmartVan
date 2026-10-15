@@ -1,0 +1,41 @@
+# van-core-pcsim-failsafe - van-core-pcsim.yaml with a scripted fridge probe,
+# for re-running the M23 fail-safe tests on the laptop rig. NOT FOR THE VAN.
+#
+# The probe is replaced by a script, because both tests need a probe doing
+# something a real one will not do on cue:
+#
+#   0 - 3 min after boot   silent, as if never connected
+#   after that             a steady 2.0 C: cold, so the thermostat wants AC off
+#
+# What to look for (station side: python tools/p310_sim.py, its log and page):
+#
+#   A. Probe never reports. AC must stay ON from boot to minute 3 - reason
+#      "boot", then "probe stale" - and only then go OFF. Before D-30 it went
+#      off at ~1 min (M23).
+#   B. Station goes quiet with AC off. Once AC is off, set the simulator to
+#      silent (/set?silent=1). Within ~110 s van-core must command AC ON
+#      (reason "link stale") and the simulator must receive it. At ~150 s
+#      ESP-FBot drops the link and reconnects. Un-silence (/set?silent=0): data
+#      must flow again with no reboot. Before D-30 the ON was refused and the
+#      link stayed wedged until a reboot (M23).
+
+substitutions:
+  node_name: van-core-pcsim-failsafe
+
+packages:
+  pcsim: !include van-core-pcsim.yaml
+
+sensor:
+  - id: !remove fridge_temp_raw
+  - platform: template
+    name: "Fridge temperature (raw)"
+    id: fridge_temp_raw
+    unit_of_measurement: "°C"
+    device_class: temperature
+    accuracy_decimals: 2
+    update_interval: 10s
+    lambda: |-
+      // Intent: a probe that says nothing for 3 min after boot, then reads a
+      // cold, steady cabinet - see the header for what each phase tests.
+      if (millis() < 3u * 60u * 1000u) return {};
+      return 2.0f;

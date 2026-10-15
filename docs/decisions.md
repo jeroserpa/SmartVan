@@ -1451,3 +1451,82 @@ recovering from M20 needed one.
 **`UNVERIFIED`**: everything above is from the sources and the build, not
 from the node. Watch "Open sockets" in History over a few days of normal
 use: it should sit around 4–8 and fall back after the phone leaves.
+
+## 2026-10-15 — D-30: the station link and the boot probe check, fixed on a laptop test rig
+
+**Context.** M23: the van firmware run against a simulated P310 on the laptop
+(`tools/p310_sim.py`, `nodes/van-core-pcsim.yaml`) failed the CLAUDE.md §5.2
+case it was built for. A station that went quiet while AC was off was
+declared disconnected by ESP-FBot after 45 s, before the arbiter's
+`link_stale` fail-safe could send AC ON, and ESP-FBot then never polled again
+until a reboot. Separately, a probe that never reported left AC off from the
+end of the 60 s boot window until minute 5.
+
+**Decisions.**
+1. **ESP-FBot is vendored** (`components/fbot`, the commit previously pinned
+   from GitHub) with three marked fixes: register for notifications through
+   ESPHome's tracked call, so the CCCD is actually written; start the poll
+   timeout at the first poll, not the first reply; and drop the BLE link when
+   it gives up, so ESPHome reconnects. See `components/fbot/README.md`.
+2. **The timeouts are ordered.** ESP-FBot `poll_timeout` 15 s → 50 s, so it
+   gives up at ~150 s, after the arbiter's link fail-safe at ~110 s
+   (`sensor_max_age` 45 s + `link_stale` 60 s + a 5 s tick). The inequality
+   is written next to `poll_timeout` in `van-core.yaml`.
+3. **A probe that has not reported since boot, or since leaving parked mode,
+   is stale** (`ArbiterCore::temp_seen_`). Two host tests pin it.
+
+**Why vendor rather than wait for upstream.** It is the link the fridge
+depends on, the fixes are small and reviewable, and the rig now reproduces
+the faults on demand — `nodes/van-core-pcsim-failsafe.yaml` replays both.
+
+**What it costs.** Upstream updates to ESP-FBot now mean a diff and three
+re-applied blocks. The silent-station case now reconnects every ~150 s
+while it lasts, which is the point.
+
+**`UNVERIFIED` on the real P310.** Fix 1 sends the station a CCCD write it has
+never received. Run the van build against the P310 once before relying on
+it: no "notifications not enabled" line at boot, and station data flowing.
+
+## 2026-10-15 — D-31: one button does everything
+
+**Context.** The owner: "there is only one button and there will always be
+only one". The board's BOOT switch is hard to reach in the enclosure (and a
+strapping pin). The config had three: kitchen cooking button (GPIO5), bezel
+page button (GPIO6), bezel sleep/park button (GPIO7) - two of which will never
+exist, so the screen could not be woken or paged from the van at all.
+
+**Decision - the owner's gesture map.** Table in CLAUDE.md §2 "Button map";
+implementation at `btn_manual` in `van-core.yaml`.
+
+| Gesture | Action |
+|---|---|
+| Short press | Screen dark: wake. Screen on: next page |
+| Hold 1-3 s | Cooking AC: start, or +30 min |
+| Hold 5-10 s | Sleep mode on/off |
+| Hold 10 s | Parked: asks, a second 10 s hold confirms |
+
+A first version of this entry put cooking on the short press; the owner
+corrected it the same day. The useful property survives either way: **a short
+press on a dark screen only wakes it**, so a glance at the fridge never arms
+the inverter - the commonest press, and §6 already treats a phantom arming
+press as a leak to design against.
+
+**Tunable from the app.** The band edges are four `number`s (`Button short
+press under`, `cooking hold up to`, `sleep hold from`, `parked hold`),
+restored across reboots and listed on the page's settings tab. Gestures are
+classified on release from the hold time (parked: while still held), not by
+`on_multi_click`, whose timings are compile-time. Bands are checked in order,
+so a mis-set overlap resolves to the earlier band.
+
+**Cancel is no longer on the button.** It was a long press when cooking had a
+dedicated button; with one button the owner gave the long holds to sleep and
+parked. Cancel is the app's "Manual AC cancel", or §6's automatic release.
+
+**Every gesture is logged** at INFO (`[button] held 2.1 s -> cooking AC`).
+
+**Sleep mode no longer force-blanks the screen** every second - it blanks on
+entry and then follows the 60 s timeout, so a press at night can show
+something.
+
+**`UNVERIFIED`**: compiled and flashed on the bench rig; not yet pressed by a
+person.

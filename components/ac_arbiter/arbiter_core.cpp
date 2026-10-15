@@ -26,9 +26,13 @@ void ArbiterCore::begin(uint32_t now_ms) {
   // Back-date the anti-short-cycle timer: at boot there is no compressor to
   // protect, and a warm fridge must not wait out a lockout it never earned.
   fridge_since_ms_ = now_ms - cfg_.min_off_ms;
-  // Pretend the probe was fresh and the compressor busy at t=0. Both bias
-  // toward ON, which is the correct direction while nothing is known yet.
+  // Pretend the compressor busy at t=0, which biases toward ON while nothing is
+  // known yet. The probe is NOT pretended fresh: that held TEMP_STALE off until
+  // 5 min after boot, and a probe that never reported left AC off from the end
+  // of the boot window until then (M23). temp_seen_ makes it stale until it
+  // reports; temp_fresh_ms_ only matters once it has.
   temp_fresh_ms_ = now_ms;
+  temp_seen_ = false;
   link_fresh_ms_ = now_ms;
   compressor_busy_ms_ = now_ms;
   manual_busy_ms_ = now_ms;
@@ -96,8 +100,10 @@ const ArbiterOutputs &ArbiterCore::tick(uint32_t now_ms, const ArbiterInputs &in
     park_armed_ = false;
   out_.park_pending = park_armed_;
 
-  if (in.temp_valid)
+  if (in.temp_valid) {
     temp_fresh_ms_ = now_ms;
+    temp_seen_ = true;
+  }
   // Any station-sourced value arriving is proof the BLE link is carrying data.
   // The temperature probe is local and deliberately excluded - a live DS18B20
   // says nothing about whether the P310 is still listening.
@@ -127,7 +133,9 @@ const ArbiterOutputs &ArbiterCore::tick(uint32_t now_ms, const ArbiterInputs &in
     // the thermostat running and it went on commanding a switch nobody was
     // listening to. Commanding ON now is the last moment that can still work.
     out_.reason = AcReason::LINK_STALE;
-  } else if (elapsed(now_ms, temp_fresh_ms_, cfg_.temp_stale_ms)) {
+  } else if (!temp_seen_ || elapsed(now_ms, temp_fresh_ms_, cfg_.temp_stale_ms)) {
+    // Never reported since boot or since leaving parked mode counts as stale
+    // at once: there is nothing for the thermostat to work from.
     out_.reason = AcReason::TEMP_STALE;
   } else if (watchdog_tripped) {
     out_.reason = AcReason::WATCHDOG;
@@ -472,6 +480,9 @@ void ArbiterCore::park_exit(uint32_t now_ms) {
   // let the arbiter take over once the probes have had their say.
   boot_ms_ = now_ms;
   temp_fresh_ms_ = now_ms;
+  // The probe timer was rolled forward all through storage, so a probe that
+  // died then would look fresh here. Make it prove itself again (M23).
+  temp_seen_ = false;
   link_fresh_ms_ = now_ms;
   compressor_busy_ms_ = now_ms;
   manual_busy_ms_ = now_ms;

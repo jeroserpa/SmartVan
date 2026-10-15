@@ -230,6 +230,9 @@ class ArbiterCore {
   uint32_t filt_ms_ = 0;            // last sample folded into temp_filt_
   uint32_t fridge_since_ms_ = 0;    // last fridge_req transition
   uint32_t temp_fresh_ms_ = 0;      // last time temp_valid was true
+  // A valid probe reading since begin() or park_exit(). Until there is one the
+  // probe counts as stale: "never reported" is not "recently fresh" (M23).
+  bool temp_seen_ = false;
   uint32_t link_fresh_ms_ = 0;      // last time the station sent anything
   uint32_t compressor_busy_ms_ = 0; // last time output_power was above idle
 

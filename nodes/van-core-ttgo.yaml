@@ -70,10 +70,13 @@ packages:
 external_components:
   - source: github://ylianst/esp-fbot
     refresh: 1d
-  # The real UI, not ESPHome's stock entity list.
+  # The real UI, not ESPHome's stock entity list. Listed explicitly: components/
+  # also holds a patched copy of fbot, which an unlisted source would load in
+  # place of the upstream one above.
   - source:
       type: local
       path: ../components
+    components: [van_ui]
 
 # The van-core web UI at /ui, gzipped into flash by tools/pack_ui.py.
 #

@@ -474,8 +474,16 @@ table.raw td:first-child{color:var(--muted);padding-right:10px;word-break:break-
 
   <div class="card">
     <h2>Cooking</h2>
-    <div class="row" data-num="man_min"><div class="lbl"><b>Duration</b><small>one press of the kitchen button</small></div></div>
+    <div class="row" data-num="man_min"><div class="lbl"><b>Duration</b><small>one cooking hold of the button</small></div></div>
     <div class="row" data-num="man_w"><div class="lbl"><b>Stops below</b><small>after 10 min under this load</small></div></div>
+  </div>
+
+  <div class="card">
+    <h2>Button</h2>
+    <div class="row" data-num="btn_short"><div class="lbl"><b>Short press under</b><small>wakes the screen, then turns the page</small></div></div>
+    <div class="row" data-num="btn_cook"><div class="lbl"><b>Cooking: hold up to</b><small>longer than a short press, up to this</small></div></div>
+    <div class="row" data-num="btn_sleep"><div class="lbl"><b>Sleep: hold from</b><small>from this up to the parked hold</small></div></div>
+    <div class="row" data-num="btn_park"><div class="lbl"><b>Parked: hold for</b><small>asks to park; hold again within 30 s to confirm</small></div></div>
   </div>
 
   <div class="card">
@@ -648,6 +656,10 @@ const NUMS = {
   sur_soc:       ["number-surplus_minimum_soc",       5,   "%",   0],
   sur_floor:     ["number-surplus_fridge_floor",      0.5, "°C", 1],
   park_soc:      ["number-parked_charge_max",         5,   "%",   0],
+  btn_short:     ["number-button_short_press_under",  0.1, "s",   1],
+  btn_cook:      ["number-button_cooking_hold_up_to", 0.5, "s",   1],
+  btn_sleep:     ["number-button_sleep_hold_from",    0.5, "s",   1],
+  btn_park:      ["number-button_parked_hold",        1,   "s",   0],
 };
 
 /* The arbiter's reason, in words. The state pill already says on or off, so
