@@ -206,6 +206,15 @@ A tap is what a glance at the panel costs, so it must not arm the inverter,
 and while parked it only wakes the panel. Taps stay safe; only a deliberate
 hold reaches AC.
 
+**Every hold answers on the panel (D-31)** for 2.5 s: AC symbol + `ON`, a
+stopwatch + `+30` (or `+12` / `MAX` at the 3 h ceiling), struck symbol +
+`OFF`. Leaving parked mode gets its own 4 s screen, `PARKED MODE OFF` over
+`ON`. While parked, a tap wakes to `PARKED` in big red first.
+
+**Red means parked or broken, nowhere else** — LED and panel frame alike:
+red blink = parked, steady red = fail-safe holding AC on for a fault,
+green = manual, yellow-amber = fridge, off = inverter down.
+
 **Why not a touchscreen board:** the screen is blanked most of the time (60s
 timeout — no night-light, no wasted backlight), so a touch UI cannot be the input
 method; something physical must wake it first. A physical button is needed
@@ -701,7 +710,8 @@ later — was never covered by the interlock and is unchanged.**
 - Blank the display; suppress the buzzer.
 
 #### While parked
-- **A dim blue blink on the kitchen button LED, ~1s in 4.** In a dark van with
+- **A dim red blink on the button LED, ~1s in 4** (blue until D-31: red is now
+  reserved for parked and faults). In a dark van with
   a blank screen this is the only sign that the fridge is deliberately dead,
   and it is the mitigation for the one real hazard below.
 - The display page still says `PARKED n.n d — FRIDGE OFF` when woken.
@@ -743,7 +753,8 @@ trip a week later and drive off" — the old interlock could not either, since b
 then it has long since passed. That is the two-days-of-spoiled-food failure of
 §5.2 arriving through a side door, and it is the hazard that actually matters.
 
-Mitigations available today: the blue LED, the display page, and the pre-trip
+Mitigations available today: the red LED blink, the big red PARKED screen
+that any tap wakes to (D-31), and the pre-trip
 checklist in §11. **The proper mitigation is Phase 4** — `van-vehicle` runs on
 switched ignition, so its very existence is a key-on signal, and key-on should
 clear parked mode. Until then this is a procedural guard, not an engineered
@@ -1667,7 +1678,7 @@ custom firmware justified.
   in a panic at midnight.
 - **And confirm parked mode is OFF before loading food.** It is the one state
   in which the previous check is expected to fail: parked, all three faults
-  resolve to AC OFF by design (§6 "Parked mode"). Blue blink on the kitchen
+  resolve to AC OFF by design (§6 "Parked mode"). Red blink on the kitchen
   button = still parked.
 
 ---

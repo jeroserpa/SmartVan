@@ -1484,3 +1484,49 @@ Sleep mode is a nightly action, so watch whether the phone is a nuisance for
 it. If it is, a 3–5 s hold is the free slot.
 
 **`UNVERIFIED`**: config validates on ESPHome 2026.8.0; not yet flashed.
+
+---
+
+## 2026-10-15 — D-31: the button answers on the panel, and red means parked or broken
+
+**Decision.** Every hold of the button (D-30) takes over the panel for 2.5 s
+to show what it did:
+
+| Hold result | Panel |
+|---|---|
+| Manual AC started | AC mark + `ON`, green frame, "manual AC - 45 min left" |
+| Extended | Stopwatch + `+30`, ring = time left as a share of the 3 h ceiling |
+| Clipped at 3 h | Stopwatch + `+12` or `MAX`, amber |
+| Cancelled | Struck AC mark + `OFF`, grey. Says if AC stays on for the fridge, or if nothing was on |
+| Parked mode left | 4 s: red `PARKED MODE OFF` band over AC mark + `ON`, "fail-safe armed" |
+
+While parked, a tap wakes the panel to a full-screen **`PARKED`** in big red
+with the days parked and how to leave. The next tap goes to the ordinary
+pages, which keep a red frame. A tap during a toast just dismisses it.
+
+**Red is reserved.** Parked moves from blue to red on the panel and the LED
+(blink, ~1 s in 4). Steady red on the LED = the fail-safe is holding AC on
+for a fault (not the boot window). Fridge-driven AC is pulled from amber
+toward yellow, so red on the LED means only parked or a fault.
+
+**Why.** A hold is timed and makes no other sound or sight. Without an
+answer, "did that take?" gets settled by pressing again, which is how a
+45 min request quietly becomes 1 h 15. The parked screen is red and full
+size because loading food into a fridge that is off on purpose is the hazard
+§6 cannot engineer away; the panel is where the hand already is.
+
+**Arbiter change, small:** `manual_press()` now reports what it actually
+added (`manual_added_s`), so the panel can say `+12` or `MAX` instead of
+promising `+30`. Host test added.
+
+**Bug fixed along the way.** Holding the button in a parked van exited
+parked mode in the arbiter only. `parked_saved` stayed true (so the next
+reboot re-parked a van now carrying food), USB stayed off and the charge cap
+stayed at the parked value. The hold now goes through `sw_parked`'s off
+action, like the web switch.
+
+**`UNVERIFIED`**: layout checked as a 1:1 mock with Roboto metrics; the
+display lambda type-checks against ESPHome 2026.8.0's headers; the config
+validates. Not compiled for the board (component registry unreachable from
+the session that wrote it) and not flashed. The LED yellow-amber ratio needs
+tuning by eye on the real LED.

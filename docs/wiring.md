@@ -243,6 +243,8 @@ node, and it is 300 mm from a bed.
 
 Colour scheme unchanged in intent, now on one LED: green = manual AC active,
 amber = fridge-driven, blue slow blink = parked, off = inverter down.
+**`REVISED 2026-10-15`, D-31:** parked is now a red blink, steady red is a
+fault, and fridge-driven is pulled toward yellow so red means only those two.
 
 ---
 

@@ -80,6 +80,16 @@ inline void ac_symbol(display::Display &it, int x, int y, int size, Color c, boo
     it.line(x + (int) (4 * s), y + (int) (4 * s), x + (int) (20 * s), y + (int) (20 * s), c);
 }
 
+// The same mark at toast size. ESPHome draws 1px lines only, which vanish at
+// 96px, so the mark is stamped w x w times one pixel apart. Crude, and a
+// once-per-press cost, not a per-frame one.
+inline void ac_symbol_bold(display::Display &it, int x, int y, int size, Color c, bool struck,
+                           int w = 3) {
+  for (int dx = 0; dx < w; dx++)
+    for (int dy = 0; dy < w; dy++)
+      ac_symbol(it, x + dx, y + dy, size, c, struck);
+}
+
 // A request-flag pill: filled when asserted, hairline outline when not. Shape
 // carries the state as well as colour, so it still reads on a washed-out panel
 // in daylight. The label is blended against the fill, not against black:

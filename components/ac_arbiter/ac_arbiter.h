@@ -97,6 +97,7 @@ class AcArbiter : public PollingComponent {
   bool park_pending() const { return core_.outputs().park_pending; }
   uint32_t parked_for_s() const { return core_.outputs().parked_for_s; }
   uint32_t manual_remaining_s() const { return core_.outputs().manual_remaining_s; }
+  uint32_t manual_added_s() const { return core_.outputs().manual_added_s; }
   const char *reason() const { return van::ac_reason_str(core_.outputs().reason); }
   float fridge_filtered() const {
     return core_.outputs().fridge_filtered_valid ? core_.outputs().fridge_filtered_c : NAN;

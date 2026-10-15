@@ -313,27 +313,56 @@ binary_sensor:
         then:
           - lambda: |-
               // First tap wakes; later taps cycle. The screen is dark most of
-              // the time, so cycling a blank display is never useful.
-              if (id(display_awake))
+              // the time, so cycling a blank display is never useful. A tap
+              // during a toast only dismisses it - the page it uncovers is
+              // the one you were on.
+              // Parked: a wake lands on the PARKED screen, the next tap leaves
+              // it for the page you were on, and only then do taps cycle.
+              if (id(toast_kind) != 0)
+                id(toast_kind) = 0;
+              else if (!id(display_awake))
+                id(park_view) = true;
+              else if (id(arbiter)->parked() && id(park_view))
+                id(park_view) = false;
+              else
                 id(page_idx) = (id(page_idx) + 1) % 4;
               id(display_awake) = true;
               id(display_wake_ms) = millis();
+          - component.update: van_display
       - min_length: 1s
         max_length: 3s
         then:
+          # Leaving parked mode goes through the switch, not just the arbiter:
+          # its off action clears parked_saved and restores USB and the 100%
+          # charge cap. manual_press() alone exits in RAM only, and the next
+          # brownout would re-park a van that now has food in it.
+          - if:
+              condition:
+                lambda: return id(arbiter)->parked();
+              then:
+                - switch.turn_off: sw_parked
+                - lambda: id(toast_unparked) = true;
+              else:
+                - lambda: id(toast_unparked) = false;
           - lambda: |-
+              const bool was_on = id(arbiter)->manual_req();
               id(arbiter)->manual_press();
-              // Show the result: the panel is the only feedback that says
-              // how long the timer now runs.
-              id(display_awake) = true;
-              id(display_wake_ms) = millis();
+              id(toast_added_s) = id(arbiter)->manual_added_s();
+              const uint32_t ext_s = id(arbiter)->config().manual_extend_ms / 1000u;
+              id(toast_kind) = id(toast_unparked) ? 5
+                             : !was_on ? 1 : id(toast_added_s) >= ext_s ? 2 : 3;
+          - script.execute:
+              id: show_toast
+              kind: !lambda return id(toast_kind);
       - min_length: 5s
         max_length: 20s
         then:
           - lambda: |-
+              id(toast_was_on) = id(arbiter)->manual_req();
               id(arbiter)->manual_cancel();
-              id(display_awake) = true;
-              id(display_wake_ms) = millis();
+          - script.execute:
+              id: show_toast
+              kind: 4
 
   # --- arbiter state, exposed for the web UI and for logging ---
   - platform: template
@@ -1218,8 +1247,51 @@ globals:
     type: uint32_t
     restore_value: false
     initial_value: "0"
+  # The action toast (D-31). Kind: 0 none, 1 AC on, 2 extended, 3 clipped by
+  # the 3h ceiling, 4 cancelled, 5 AC on AND parked mode left. Set by the
+  # button, drawn and expired by the display lambda.
+  - id: toast_kind
+    type: int
+    restore_value: false
+    initial_value: "0"
+  - id: toast_until_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: toast_added_s
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: toast_unparked     # this hold also took the van out of parked mode
+    type: bool
+    restore_value: false
+    initial_value: "false"
+  - id: toast_was_on       # for a cancel: was there anything to cancel
+    type: bool
+    restore_value: false
+    initial_value: "false"
+  # Parked: a wake shows the big PARKED screen first; the next tap goes to the
+  # ordinary pages.
+  - id: park_view
+    type: bool
+    restore_value: false
+    initial_value: "true"
 
 script:
+  # Show the action toast for 2.5s (4s for kind 5) and redraw now rather than on the next 1s
+  # tick, so it lands as the finger leaves the button.
+  - id: show_toast
+    parameters:
+      kind: int
+    then:
+      - lambda: |-
+          id(toast_kind) = kind;
+          // Leaving parked mode gets longer: it re-arms the fail-safe.
+          id(toast_until_ms) = millis() + (kind == 5 ? 4000 : 2500);
+          id(display_awake) = true;
+          id(display_wake_ms) = millis();
+      - component.update: van_display
+
   # Hold feedback for the one button. Started on press, stopped on release, so
   # the chirps mark the moments a release changes meaning. Not suppressed in
   # sleep or parked mode like the timer warning: someone is standing at the
@@ -1241,22 +1313,32 @@ script:
       - lambda: id(out_buzzer)->set_level(0.0f);
 
 interval:
-  # Button LED. Green = manual active, amber = fridge-driven, off = inverter
+  # Button LED. RED IS RESERVED (D-31): red blink = parked, steady red = a
+  # fault. Green = manual active, yellow-amber = fridge-driven, off = inverter
   # down. Dim: this is a metre from where someone sleeps.
   - interval: 1s
     then:
       - lambda: |-
           float r = 0, g = 0, b = 0;
+          // A fault is the fail-safe holding AC on for any reason but the
+          // boot window, which is routine and over in seconds.
+          const bool fault = id(arbiter)->force_on() &&
+                             strcmp(id(arbiter)->reason(), "boot") != 0;
           if (id(arbiter)->parked()) {
-            // A dim blue blink, ~1s in 4. In a dark van with a blank screen
+            // A dim red blink, ~1s in 4. In a dark van with a blank screen
             // this is the only sign that the fridge is deliberately dead - and
             // the one thing that might stop someone loading food into a parked
             // van the morning of a trip.
-            b = ((millis() / 1000u) % 4u == 0u) ? 0.15f : 0.0f;
+            r = ((millis() / 1000u) % 4u == 0u) ? 0.20f : 0.0f;
+          } else if (fault) {
+            r = 0.20f;                       // steady red: something is wrong
           } else if (id(arbiter)->manual_req()) {
             g = 0.25f;                       // green: you asked for this
           } else if (id(arbiter)->ac_on()) {
-            r = 0.20f; g = 0.06f;            // amber: the fridge asked for it
+            // Fridge-driven. Pulled toward yellow, away from the red that now
+            // means parked or broken. `UNVERIFIED` on the real LED: tune the
+            // ratio by eye, an RGB die's channels are not equally bright.
+            r = 0.16f; g = 0.10f;
           }
           id(out_led_r)->set_level(r);
           id(out_led_g)->set_level(g);
@@ -1356,6 +1438,15 @@ font:
     # flash for glyphs that can never be drawn. Only what a measurement can
     # contain.
     glyphs: " +-.0123456789L%°"
+  # The button's action toast (D-31): ON / OFF / +30 / MAX beside a 96px icon,
+  # and PARKED across the full width (297px of the 310 inside the frame).
+  # 80px rather than the hero's 112 because it shares the width with the icon,
+  # and it is read by the person whose hand is still on the button.
+  - file: "gfonts://Roboto@700"
+    id: f_toast
+    size: 80
+    bpp: 4
+    glyphs: "+0123456789ADEFKMNOPRX"
   - file: "gfonts://Roboto@500"
     id: f_sub
     size: 26
@@ -1426,6 +1517,81 @@ display:
       using display::TextAlign;
       it.fill(bg());
 
+      // ---- action toast (D-31) ---------------------------------------------
+      // What the button just did, for 2.5 s (4 s for leaving parked mode). A
+      // hold is timed and otherwise silent, so this is its confirmation. It
+      // owns the whole panel, frame included, so it cannot be read as a page.
+      // Reads the arbiter live: manual_press()/cancel() already ran its tick.
+      if (id(toast_kind) != 0 && (int32_t) (millis() - id(toast_until_ms)) >= 0)
+        id(toast_kind) = 0;
+      if (id(toast_kind) != 0) {
+        const int k = id(toast_kind);
+        const uint32_t left_s = id(arbiter)->manual_remaining_s();
+        const unsigned lh = left_s / 3600u, lm = (left_s / 60u) % 60u;
+        const Color col = k == 4 ? dim() : k == 3 ? amber() : good();
+        char tb[48];
+        for (int i = 0; i < 5; i++)
+          it.rectangle(i, i, 320 - 2 * i, 172 - 2 * i, col);
+
+        if (k == 5) {
+          // Leaving parked mode: the one toast that is about more than the
+          // timer, because the fail-safe has just been re-armed.
+          it.filled_rectangle(12, 12, 296, 31, bad());
+          it.print(160, 28, id(f_sub), ink(), TextAlign::CENTER, "PARKED MODE OFF", bad());
+          ac_symbol_bold(it, 40, 50, 84, good(), false);
+          it.print(222, 94, id(f_toast), good(), TextAlign::CENTER, "ON");
+          snprintf(tb, sizeof tb, "fail-safe armed - manual AC %u min", (unsigned) (left_s / 60u));
+          it.print(160, 147, id(f_row), good(), TextAlign::TOP_CENTER, tb);
+          return;
+        }
+        if (k == 1 || k == 4) {
+          ac_symbol_bold(it, 14, 28, 96, col, k == 4);
+          it.print(220, 76, id(f_toast), k == 4 ? fg() : good(), TextAlign::CENTER,
+                   k == 4 ? "OFF" : "ON");
+        } else {
+          // A stopwatch whose ring is the time left as a share of the 3 h
+          // ceiling, so "+30" also shows how much room is left above it.
+          const float max_s = id(arbiter)->config().manual_max_ms / 1000.0f;
+          arc_gauge(it, 62, 80, 50, 40, 100.0f * left_s / max_s, col, faint());
+          it.filled_rectangle(56, 22, 12, 6, col);   // crown
+          it.filled_rectangle(60, 28, 4, 3, col);    // stem
+          snprintf(tb, sizeof tb, "%u:%02u", lh, lm);
+          it.print(62, 80, id(f_sub), fg(), TextAlign::CENTER, tb);
+          const unsigned add_m = id(toast_added_s) / 60u;
+          if (k == 2 || add_m > 0) snprintf(tb, sizeof tb, "+%u", add_m);
+          else                     snprintf(tb, sizeof tb, "MAX");
+          it.print(220, 76, id(f_toast), col, TextAlign::CENTER, tb);
+        }
+        // Walk-up line.
+        char left[20];
+        if (lh) snprintf(left, sizeof left, "%u h %02u left", lh, lm);
+        else    snprintf(left, sizeof left, "%u min left", lm);
+        if (k == 1 || k == 2)  snprintf(tb, sizeof tb, "manual AC - %s", left);
+        else if (k == 3)       snprintf(tb, sizeof tb, "3 h ceiling - %s", left);
+        else if (!id(toast_was_on)) snprintf(tb, sizeof tb, "manual AC was not on");
+        else if (id(arbiter)->ac_on())
+          snprintf(tb, sizeof tb, "manual off - AC stays on: %s", id(arbiter)->reason());
+        else                   snprintf(tb, sizeof tb, "manual AC cancelled");
+        it.print(160, 147, id(f_row), k == 4 ? dim() : col, TextAlign::TOP_CENTER, tb);
+        return;
+      }
+
+      // ---- parked: the first thing a wake shows (D-31) ----------------------
+      // In big red, because the hazard in a parked van is loading food into a
+      // fridge that is off on purpose (CLAUDE.md section 6). A further tap
+      // drops into the ordinary pages, which keep the red frame.
+      if (id(arbiter)->parked() && id(park_view)) {
+        for (int i = 0; i < 5; i++)
+          it.rectangle(i, i, 320 - 2 * i, 172 - 2 * i, bad());
+        it.print(160, 58, id(f_toast), bad(), TextAlign::CENTER, "PARKED");
+        char pb[32];
+        snprintf(pb, sizeof pb, "fridge OFF - %.1f d", id(arbiter)->parked_for_s() / 86400.0f);
+        it.print(160, 112, id(f_sub), fg(), TextAlign::CENTER, pb);
+        it.print(160, 147, id(f_row), dim(), TextAlign::TOP_CENTER,
+                 "hold 1-3 s to leave and turn AC on");
+        return;
+      }
+
       // ---- shared state ----------------------------------------------------
       // Every value the pages draw is read ONCE into a plain local here. Two
       // reasons: each page then draws the same value as its neighbours, and the
@@ -1484,7 +1650,9 @@ display:
       // fits here survives that distance. So the rectangle carries the one fact
       // worth having from the far end of the van: what the inverter is doing.
       // This is the primary channel, not decoration.
-      const Color state_col = parked ? water()
+      // Parked is red (D-31): red means "wrong, or off on purpose" - both are
+      // a fridge you must not load and drive away from.
+      const Color state_col = parked ? bad()
                             : force  ? bad()
                             : manual ? good()
                             : ac_on  ? amber()
@@ -1499,14 +1667,14 @@ display:
       static const char *PAGES[4] = {"ENERGY", "FRIDGE", "WATER", "DIAG"};
       const int pg = id(page_idx);
       it.print(10, 8, id(f_lbl), amber(), PAGES[pg]);
-      if (parked)      it.print(66, 8, id(f_lbl), water(), "PARKED");
-      else if (park_q) it.print(66, 8, id(f_lbl), water(), "PARK?");
+      if (parked)      it.print(66, 8, id(f_lbl), bad(), "PARKED");
+      else if (park_q) it.print(66, 8, id(f_lbl), bad(), "PARK?");
       else if (force)  it.print(66, 8, id(f_lbl), bad(),   "FAIL-SAFE");
       for (int i = 0; i < 4; i++)
         it.filled_circle(150 + 9 * i, 14, 3, i == pg ? amber() : faint());
 
       int ix = 296;
-      if (parked)     ac_symbol(it, ix, 6, 16, water(), true);
+      if (parked)     ac_symbol(it, ix, 6, 16, bad(), true);
       else if (ac_on) ac_symbol(it, ix, 6, 16, force ? bad() : amber(), false);
       else            ac_symbol(it, ix, 6, 16, dim(), true);
       ix -= 19;
@@ -1598,7 +1766,7 @@ display:
         // every state that has one (never silent, section 6).
         const int cy = 147;
         if (parked) {
-          it.printf(10, cy, id(f_row), water(), "PARKED %.1f d - fridge off on purpose",
+          it.printf(10, cy, id(f_row), bad(), "PARKED %.1f d - fridge off on purpose",
                     parked_d);
         } else if (park_q) {
           // Armed but not committed. Says what is about to happen while there
