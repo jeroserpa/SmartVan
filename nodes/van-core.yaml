@@ -41,9 +41,10 @@ substitutions:
   # Connectors are keyed by pin count so they cannot be mis-plugged at 11pm in
   # a car park: 2-pin = 12V in, 3-pin = 1-Wire, 4-pin = button+LED.
   pin_onewire: GPIO4
-  pin_btn_manual: GPIO5   # kitchen, illuminated momentary
-  pin_btn_page: GPIO6     # bezel: wake / cycle pages
-  pin_btn_sleep: GPIO7    # bezel: long press toggles sleep mode
+  # THE ONLY BUTTON (D-30). Short press = screen, hold = AC. GPIO6/7 are no
+  # longer used: the bezel page and sleep buttons are gone, sleep and parked
+  # mode live in the web UI.
+  pin_btn: GPIO5
   pin_led_r: GPIO9
   pin_led_g: GPIO10
   pin_led_b: GPIO11
@@ -262,86 +263,77 @@ binary_sensor:
       name: "P310 DC output active"
       id: p310_dc_active
 
-  # --- manual AC request (the cooking button) ---
+  # --- the one button: screen AND manual AC (D-30) ---
+  #
+  #   tap  (<0.9s)  wake the screen; while awake, next page.  NEVER touches AC.
+  #   hold 1-3s     manual AC: start 45 min, or +30 min if running.
+  #                 Also the parked-mode exit - see below.
+  #   hold 5-20s    cancel manual AC.
+  #   0.9-1s, 3-5s  nothing. Dead bands, so a hesitant release does neither.
+  #
+  # Tap is the screen and hold is AC because a tap is what happens when you
+  # glance at the panel. Were it the other way round, every glance would arm
+  # the inverter for 45 min - the ~48 W leak this project exists to remove, and
+  # one that goes unnoticed for days.
+  #
+  # PARKED: a tap only wakes the panel, which then says PARKED. It must NOT
+  # exit: with one button a glance at the screen would otherwise un-park the
+  # van and hold AC on for weeks - a flat pack, the one outcome here that
+  # damages hardware (CLAUDE.md section 6 "Parked mode"). The hold does exit,
+  # because manual_press() exits parked mode: wanting 230V is the deliberate act.
+  #
+  # Releases are timed, so feedback comes while holding: one chirp at 1s
+  # ("let go now for AC"), two at 5s ("let go now to cancel") - hold_feedback.
   - platform: gpio
-    name: "Manual AC button"
-    id: btn_manual
+    name: "Button"
+    id: btn_main
+    internal: true
     pin:
-      number: ${pin_btn_manual}
+      number: ${pin_btn}
       mode:
         input: true
         pullup: true
       inverted: true
     filters:
-      # 50ms in software rejects both contact bounce and induced transients from
-      # a long run past a 3300W inverter: a spike would have to persist 50ms to
-      # register. A phantom press arms the inverter for 45 min and goes unnoticed
-      # for days, so this is not decoration.
+      # 50ms in software rejects both contact bounce and induced transients. The
+      # wire is short now, but the box is still a metre from a 3300W inverter,
+      # and a phantom hold arms it for 45 min. Both edges filtered by the same
+      # amount, so on_click durations equal the real press.
       - delayed_on: 50ms
       - delayed_off: 50ms
+    on_press:
+      - script.execute: hold_feedback
+    on_release:
+      - script.stop: hold_feedback
+      # Stopping the script mid-chirp would leave the buzzer sounding.
+      - lambda: id(out_buzzer)->set_level(0.0f);
     on_click:
       - min_length: 50ms
         max_length: 900ms
         then:
-          - lambda: id(arbiter)->manual_press();
+          - lambda: |-
+              // First tap wakes; later taps cycle. The screen is dark most of
+              // the time, so cycling a blank display is never useful.
+              if (id(display_awake))
+                id(page_idx) = (id(page_idx) + 1) % 4;
+              id(display_awake) = true;
+              id(display_wake_ms) = millis();
       - min_length: 1s
-        max_length: 10s
+        max_length: 3s
         then:
-          - lambda: id(arbiter)->manual_cancel();
-
-  # --- bezel buttons ---
-  - platform: gpio
-    name: "Page button"
-    id: btn_page
-    internal: true
-    pin:
-      number: ${pin_btn_page}
-      mode:
-        input: true
-        pullup: true
-      inverted: true
-    filters:
-      - delayed_on: 50ms
-    on_press:
-      then:
-        - lambda: |-
-            // First press wakes; subsequent presses cycle. The screen is dark
-            // most of the time, so page-cycling a blank display is never useful.
-            if (id(display_awake)) {
-              id(page_idx) = (id(page_idx) + 1) % 4;
-            }
-            id(display_awake) = true;
-            id(display_wake_ms) = millis();
-
-  - platform: gpio
-    name: "Sleep button"
-    id: btn_sleep
-    internal: true
-    pin:
-      number: ${pin_btn_sleep}
-      mode:
-        input: true
-        pullup: true
-      inverted: true
-    filters:
-      - delayed_on: 50ms
-    on_click:
-      # 1-4s: sleep mode. 5s+: parked mode. Two very different commitments, so
-      # they get two clearly different gestures on the same button rather than
-      # a menu - and the long one is the one you cannot trigger by accident
-      # while reaching past it in the dark.
-      - min_length: 1s
-        max_length: 4s
-        then:
-          - switch.toggle: sw_sleep_mode
-      # Twice: the first long press arms, the second within 30s commits. The
-      # switch reads its state from the arbiter, so an armed request still
-      # reads "off" and the toggle lands on turn_on again - no separate
-      # confirm gesture to remember.
+          - lambda: |-
+              id(arbiter)->manual_press();
+              // Show the result: the panel is the only feedback that says
+              // how long the timer now runs.
+              id(display_awake) = true;
+              id(display_wake_ms) = millis();
       - min_length: 5s
         max_length: 20s
         then:
-          - switch.toggle: sw_parked
+          - lambda: |-
+              id(arbiter)->manual_cancel();
+              id(display_awake) = true;
+              id(display_wake_ms) = millis();
 
   # --- arbiter state, exposed for the web UI and for logging ---
   - platform: template
@@ -622,8 +614,8 @@ switch:
     # Two flips, not one. The first arms and the switch springs back to off -
     # its state is read from the arbiter, so an armed-but-unconfirmed request
     # simply does not show as parked, which is the feedback. The second flip
-    # inside the confirm window commits. Same call from the bezel gesture, so
-    # both entry paths get the identical guard (D-14).
+    # inside the confirm window commits (D-14). Since D-30 this switch is the
+    # only way in: there is no button gesture for parking any more.
     turn_on_action:
       - lambda: id(arbiter)->park_request();
       - if:
@@ -692,10 +684,10 @@ button:
     name: "Next display page"
     id: btn_next_page
     entity_category: diagnostic
-    # The bezel button is the real control; this is its web-UI twin, so the
+    # The button's tap is the real control; this is its web-UI twin, so the
     # panel can be driven from a phone when the enclosure is shut, or before
-    # the bezel buttons are wired at all. Wakes as well as advances, matching
-    # the bezel's own "first press wakes" behaviour.
+    # the button is wired at all. Wakes as well as advances, matching the
+    # tap's own "first press wakes" behaviour.
     on_press:
       - lambda: |-
           if (id(display_awake))
@@ -1226,6 +1218,27 @@ globals:
     type: uint32_t
     restore_value: false
     initial_value: "0"
+
+script:
+  # Hold feedback for the one button. Started on press, stopped on release, so
+  # the chirps mark the moments a release changes meaning. Not suppressed in
+  # sleep or parked mode like the timer warning: someone is standing at the
+  # button pressing it.
+  - id: hold_feedback
+    mode: restart
+    then:
+      - delay: 1s
+      - lambda: id(out_buzzer)->set_level(0.5f);
+      - delay: 60ms
+      - lambda: id(out_buzzer)->set_level(0.0f);
+      - delay: 3940ms                      # 5s from press
+      - lambda: id(out_buzzer)->set_level(0.5f);
+      - delay: 60ms
+      - lambda: id(out_buzzer)->set_level(0.0f);
+      - delay: 80ms
+      - lambda: id(out_buzzer)->set_level(0.5f);
+      - delay: 60ms
+      - lambda: id(out_buzzer)->set_level(0.0f);
 
 interval:
   # Button LED. Green = manual active, amber = fridge-driven, off = inverter

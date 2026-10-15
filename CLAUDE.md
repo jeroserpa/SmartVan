@@ -192,11 +192,19 @@ holding it during a reset drops the board into download mode, which is a
 confusing failure to debug months later. All user controls get free GPIOs and
 external buttons.
 
-| Control | Location | Action |
-|---|---|---|
-| Wake / cycle | Enclosure bezel | Wake display; subsequent presses cycle pages |
-| Sleep mode | Enclosure bezel | Long press toggles sleep mode |
-| Manual AC | Kitchen, illuminated | Manual AC request (see §6) |
+**`REVISED 2026-10-15`, D-30 — one button, on GPIO5, short wire.** Screen and
+manual AC share it, told apart by how long it is held:
+
+| Gesture | Action |
+|---|---|
+| Tap (< 0.9 s) | Wake display; while awake, next page. **Never touches AC** |
+| Hold 1–3 s (one chirp at 1 s) | Manual AC: start 45 min, or +30 min. Also exits parked mode |
+| Hold 5–20 s (two chirps at 5 s) | Cancel manual AC |
+| Sleep mode, parked mode | Web UI only |
+
+A tap is what a glance at the panel costs, so it must not arm the inverter,
+and while parked it only wakes the panel. Taps stay safe; only a deliberate
+hold reaches AC.
 
 **Why not a touchscreen board:** the screen is blanked most of the time (60s
 timeout — no night-light, no wasted backlight), so a touch UI cannot be the input

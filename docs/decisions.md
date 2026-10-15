@@ -1451,3 +1451,36 @@ recovering from M20 needed one.
 **`UNVERIFIED`**: everything above is from the sources and the build, not
 from the node. Watch "Open sockets" in History over a few days of normal
 use: it should sit around 4–8 and fall back after the phone leaves.
+
+---
+
+## 2026-10-15 — D-30: one button does the screen and manual AC
+
+**Decision.** van-core has a single physical button, on **GPIO5** with a
+short wire. A **tap** (< 0.9 s) wakes the panel and cycles pages. A **hold of
+1–3 s** is the manual AC request (start 45 min, or +30 min). A **hold of
+5–20 s** cancels it. Releases at 0.9–1 s and 3–5 s do nothing. A chirp at
+1 s and a double chirp at 5 s mark when to let go. The bezel page and sleep
+buttons (GPIO6, GPIO7) are removed, and sleep and parked mode are web-UI
+only. This supersedes the button half of `docs/wiring.md` §2–§5 and §9.
+
+**Why tap = screen and hold = AC, not the reverse.** Looking at the panel is
+the frequent action, and a tap is what it costs. Were the tap AC, every glance
+would arm the inverter for 45 min, about 36 Wh of station overhead each time,
+unnoticed. That is the leak §6 `manual_req` warns about. Hold over
+double-click: the hold is harder to trigger by accident, and the 1 s chirp
+gives the timing.
+
+**A tap no longer exits parked mode.** Before, any press of the kitchen
+button exited (`manual_press()` → `park_exit()`). With one button that would
+let a glance at the screen un-park the van, holding AC on until the pack is
+flat (§6 "Parked mode"). The tap now only wakes the panel, which says PARKED.
+The 1–3 s hold still exits, because wanting 230V is the deliberate act it
+always was. No arbiter change: the split is entirely in the YAML.
+
+**What is lost.** Sleep and parked mode have no physical gesture, so the
+phone is needed to enter either. Parked was already web-first (wiring.md §4).
+Sleep mode is a nightly action, so watch whether the phone is a nuisance for
+it. If it is, a 3–5 s hold is the free slot.
+
+**`UNVERIFIED`**: config validates on ESPHome 2026.8.0; not yet flashed.

@@ -20,6 +20,14 @@ cut (CLAUDE.md §2).
 >   button on GPIO6, and does not use BOOT. The button and LED design in §2–§5
 >   and the one in the config disagree; settle which is current before the
 >   carrier board, not after.
+>
+> **`SUPERSEDED 2026-10-15` for buttons — D-30.** There is **one** button:
+> **GPIO5 to GND**, short wire, nothing else. Internal pull-up; the 100 Ω and
+> 100 nF were for the 3 m run and are not needed. Tap = screen, hold 1–3 s =
+> manual AC, hold ≥5 s = cancel. **GPIO6/7 are unused**, BOOT is still not a
+> runtime button, and sleep and parked mode are web-UI only. §3's J3, §4 and
+> the BOOT plunger in §7 no longer apply. The LED outputs on GPIO9/10/11 stay
+> in the config, harmless if nothing is wired to them.
 
 Scope: `van-core` only — the ESP module, its carrier board, its enclosure and the
 three cables that leave it. No 230V anywhere in this node: the arbiter commands
