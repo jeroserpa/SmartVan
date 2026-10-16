@@ -470,6 +470,8 @@ table.raw td:first-child{color:var(--muted);padding-right:10px;word-break:break-
     <h2>Night</h2>
     <div class="row" data-num="sleep_ceiling"><div class="lbl"><b>Overnight ceiling</b><small>above 6 °C is too warm for dairy and meat</small></div></div>
     <div class="row" data-num="sleep_target"><div class="lbl"><b>Pre-cool to</b><small>the evening run goes down to this</small></div></div>
+    <div class="row" data-num="sleep_start"><div class="lbl"><b>Sleep starts at</b><small>hour, 23.5 = 23:30; same as end = no schedule</small></div></div>
+    <div class="row" data-num="sleep_end"><div class="lbl"><b>Sleep ends at</b><small>needs the clock: opening the app sets it</small></div></div>
   </div>
 
   <div class="card">
@@ -658,6 +660,8 @@ const NUMS = {
   btn_hold:      ["number-button_hold_time",          0.5, "s",   1],
   btn_return:    ["number-button_back_to_main_after", 1,   "s",   0],
   led_lvl:       ["number-status_led_brightness",     5,   "%",   0],
+  sleep_start:   ["number-sleep_starts_at",           0.5, "h",   1],
+  sleep_end:     ["number-sleep_ends_at",             0.5, "h",   1],
 };
 
 /* The arbiter's reason, in words. The state pill already says on or off, so

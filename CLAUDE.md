@@ -598,6 +598,12 @@ Sequence:
    the normal 4 °C setpoint. Maximum remaining coast from a single run.
 4. **Exit** on schedule or button press; the normal schedule resumes.
 
+**Schedule — `ADDED 2026-10-16`, D-35.** `Sleep starts at` / `Sleep ends at`
+(default 23:00–07:00, app settings) switch sleep mode at the window's edges
+only, so a button or app override holds until the next edge. Needs the
+phone-set clock: after a power cut nothing is scheduled until the app is
+opened, failing toward normal running. A DS3231 would remove that limit.
+
 The old "at most one compressor cycle" goal is retired: it was framed around an
 appliance that cycles on its own. The goal now is simply **no scheduled block
 between roughly 23:00 and 06:00**, which the supervisor controls outright. The

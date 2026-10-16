@@ -1643,5 +1643,19 @@ next to the USB socket (M22) is not ours and stays lit - mask it.
 first flash, parked's red blink showed green (`MEASURED` 2026-10-15). Fixed
 here and in the bench configs.
 
+## 2026-10-16 — D-35: sleep mode on a schedule
 
+**Decision.** Two app settings, `Sleep starts at` and `Sleep ends at` (hours,
+local; default 23:00 and 07:00; equal = off). A 30 s interval switches sleep
+mode **at the edges of the window only**, so turning it off by hand at 02:00
+stays off until the next 23:00, and turning it on early is not undone. Booting
+inside the window turns it on.
+
+**Clock.** The board has no RTC; the time is the phone-set clock in
+`soak_log` (`local_minute_of_day()`), carried across software resets but
+lost on a power cut until the app is opened. With no clock the schedule does
+nothing - normal running, LEDs on, fridge on its normal schedule - which is
+the safe direction. A DS3231 (BOM item 15) closes this.
+
+**`UNVERIFIED`** across a real midnight.
 
