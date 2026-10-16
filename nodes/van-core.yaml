@@ -1448,18 +1448,18 @@ interval:
   # The status LED (D-34): the board's WS2812, and the button's LED if fitted.
   # The one indicator that works with the screen off. RED IS RESERVED (D-31):
   #
+  #   off                  sleep mode - everything below included
   #   white flash          a button hold just acted
   #   steady red           a fault: the fail-safe holding AC on (not the boot window)
   #   fast red blink       parking asked, waiting for the confirming hold
   #   red blink, 1 s in 4  parked - the fridge is off on purpose
-  #   off                  sleep mode, unless one of the above
   #   cyan                 cooking AC; blinking in the timer's last minutes
   #   off                  everything else - normal running, fridge included
   #                        (owner, 2026-10-15: dark unless there is news)
   #
   # Every cue the buzzer used to give is one of these: there is no buzzer. Full
   # brightness by default - it shines through the enclosure - and tunable
-  # ("Status LED brightness"); sleep mode keeps it dark unless something is wrong.
+  # ("Status LED brightness"); sleep mode keeps it dark, faults included.
   - interval: 100ms
     then:
       - lambda: |-
@@ -1469,7 +1469,11 @@ interval:
           // boot window, which is routine and over in seconds.
           const bool fault = id(arbiter)->force_on() &&
                              strcmp(id(arbiter)->reason(), "boot") != 0;
-          if ((int32_t) (id(led_flash_until_ms) - now) > 0) {
+          if (id(sw_sleep_mode).state) {
+            // Sleep mode: every LED dark, faults included (owner, 2026-10-16).
+            // It is a metre from the bed; the screen and the morning check
+            // carry the news instead.
+          } else if ((int32_t) (id(led_flash_until_ms) - now) > 0) {
             r = g = b = 1.0f;
           } else if (fault) {
             r = 1.0f;
@@ -1480,8 +1484,6 @@ interval:
             // fridge is deliberately dead - and the one thing that might stop
             // someone loading food into a parked van the morning of a trip.
             r = ((now / 1000u) % 4u == 0u) ? 1.0f : 0.0f;
-          } else if (id(sw_sleep_mode).state) {
-            // dark
           } else if (id(arbiter)->manual_req()) {
             g = b = (!id(arbiter)->manual_warning() || (now / 500u) % 2u == 0u) ? 1.0f : 0.0f;
           }

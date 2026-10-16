@@ -1618,11 +1618,11 @@ top wins:
 
 | Colour | Means |
 |---|---|
+| off | sleep mode - all of the below included, faults too (owner, 2026-10-16) |
 | white flash | a button hold just acted (was a chirp) |
 | steady red | fault - the fail-safe holding AC on, boot window excepted |
 | fast red blink | parking asked, waiting for the confirming hold (was a chirp) |
 | red blink, 1 s in 4 | parked |
-| off | sleep mode, unless one of the above |
 | cyan, blinking near the end | cooking AC; the blink replaces the timer-warning chirp |
 | off | everything else, fridge running included (owner: dark unless there is news) |
 
@@ -1632,8 +1632,8 @@ interval and the chirp script are gone; GPIO8 is free.
 
 **Brightness** is an app setting, `Status LED brightness`, default 100 %
 (owner: it sits behind the enclosure wall), with no gamma so the number means
-what it says. Sleep mode keeps the LED dark
-unless something is wrong: it is a metre from a bed.
+what it says. Sleep mode keeps the LED dark,
+faults included: it is a metre from a bed.
 
 **Visibility** depends on the enclosure: the LED sits inside the box, so it
 needs the light pipe or window wiring.md §5 asks for. The charger's green LED
