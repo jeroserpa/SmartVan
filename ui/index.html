@@ -483,6 +483,10 @@ table.raw td:first-child{color:var(--muted);padding-right:10px;word-break:break-
     <div class="row" data-num="btn_hold"><div class="lbl"><b>Hold time</b><small>a hold does the screen's action: cooking, or sleep / park on their screens</small></div></div>
     <div class="row" data-num="btn_return"><div class="lbl"><b>Back to main screen after</b><small>so the next hold is cooking again</small></div></div>
     <div class="row" data-num="led_lvl"><div class="lbl"><b>Status LED brightness</b><small>the board's light: red parked or fault, green cooking, amber fridge</small></div></div>
+    <div class="row">
+      <div class="lbl"><b>Screen frame</b><small>the panel's coloured edge for what AC is doing; the label in its corner stays</small></div>
+      <button class="sw" data-sw="frame" role="switch" aria-checked="false" aria-label="Screen frame"></button>
+    </div>
   </div>
 
   <div class="card">
@@ -625,6 +629,7 @@ const E = {
   sw_sleep:   "switch-sleep_mode",
   sw_inhibit: "switch-drive_inhibit__test_",
   sw_parked:  "switch-parked_mode",
+  sw_frame:   "switch-panel_frame",
 
   btn_man:        "button-manual_ac_start",
   btn_man_ext:    "button-manual_ac_extend",
@@ -918,7 +923,8 @@ $$("nav button").forEach(function (b) { b.onclick = function () { showTab(b.data
 
 /* --- switches ----------------------------------------------------------- */
 var SW = { ac: "sw_ac", dc: "sw_dc", usb: "sw_usb", silent: "sw_silent",
-           sleep: "sw_sleep", inhibit: "sw_inhibit", parked: "sw_parked" };
+           sleep: "sw_sleep", inhibit: "sw_inhibit", parked: "sw_parked",
+           frame: "sw_frame" };
 function flip(name, next) {
   var el = $('[data-sw="' + name + '"]');
   var id = E[SW[name]];

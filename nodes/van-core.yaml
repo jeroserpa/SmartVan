@@ -43,6 +43,12 @@ substitutions:
   # GPIO4 and GPIO5 `VERIFIED 2026-10-15` on the bench with
   # van-core-inputs.yaml: a DS18B20 on 4, the button between 5 and GND (M22).
   pin_onewire: GPIO4
+  # The two probes are pinned by 1-Wire address (M14), so a probe that is not
+  # listed here is found on the bus and ignored - van-core then sees no fridge
+  # probe and holds AC on. These are the van's. A bench build with another
+  # probe overrides them (van-core-pcsim.yaml) rather than editing these.
+  fridge_probe: "0xf50e250267176c28"
+  cabin_probe: "0x600e2502e02beb28"
   # THE ONLY BUTTON (D-30). Short press = screen, hold = AC. GPIO6/7 are no
   # longer used: the bezel page and sleep buttons are gone, sleep and parked
   # mode live in the web UI.
@@ -77,10 +83,14 @@ esphome:
   # Pin the toolchain. A routine ESPHome update must not invalidate a working
   # config two days before a trip (CLAUDE.md section 11).
   min_version: 2025.7.0
-  # Palette and the three drawing primitives ESPHome lacks (arc gauge, IEC AC
-  # mark, flag pill). Shared with the bench rig so the two cannot drift.
+  # vc_draw.h: anti-aliased shapes ESPHome lacks (shared with the bench rig).
+  # vc_panel.h: every screen, drawn from a plain struct - the same file
+  # tools/panel_preview/ compiles on a laptop to render them as PNGs (D-36).
   includes:
     - vc_draw.h
+    - vc_panel.h
+    # Push one strip of the framebuffer to the glass: the hold bar's fast path.
+    - vc_flush.h
     - soak_includes.h
     # Synthetic panel data for design review. BENCH ONLY, and display-only -
     # it never reaches the arbiter. See the banner in the file itself.
@@ -361,9 +371,9 @@ binary_sensor:
             id(park_view) = false;
             ESP_LOGI("button", "tap -> pages (still parked)");
           } else {
-            // COOKING (4) is in the cycle only while there is cooking to stop.
+            // COOKING (3) is in the cycle only while there is cooking to stop.
             int p = id(page_idx);
-            do { p = (p + 1) % 7; } while (p == 4 && !id(arbiter)->manual_req());
+            do { p = (p + 1) % 7; } while (p == 3 && !id(arbiter)->manual_req());
             id(page_idx) = p;
             ESP_LOGI("button", "tap -> screen %d", p);
           }
@@ -453,7 +463,7 @@ sensor:
     # Both probes sit on one bus, so both addresses are mandatory - and once
     # they are written down, swapping a probe cannot silently swap the roles.
     # From soak 2 (measurements.md M14): this one read 5-8 C inside the fridge.
-    address: 0xf50e250267176c28  # fridge side-wall probe
+    address: ${fridge_probe}  # fridge side-wall probe
     name: "Fridge temperature (raw)"
     id: fridge_temp_raw
     update_interval: 10s
@@ -495,7 +505,7 @@ sensor:
   # --- cabin ambient, same 1-Wire bus. Correlates directly with duty cycle. ---
   - platform: dallas_temp
     one_wire_id: bus_1w
-    address: 0x600e2502e02beb28  # cabin ambient probe (M14)
+    address: ${cabin_probe}  # cabin ambient probe (M14)
     name: "Cabin temperature"
     id: cabin_temp
     update_interval: 30s
@@ -608,6 +618,18 @@ switch:
     ac_silent:
       name: "P310 silent charging"
       id: ac_silent_switch
+
+  # The coloured state frame round the panel (D-36). The status LED (D-34) now
+  # carries the same news with the screen dark, so whether the panel repeats
+  # it is a matter of taste - the owner's, from the app. The state chip in the
+  # panel's top corner stays either way.
+  - platform: template
+    name: "Panel frame"
+    id: sw_panel_frame
+    icon: "mdi:border-outside"
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
 
   - platform: template
     name: "Sleep mode"
@@ -725,7 +747,7 @@ button:
           id(btn_input_ms) = millis();
           if (id(display_awake)) {
             int p = id(page_idx);
-            do { p = (p + 1) % 7; } while (p == 4 && !id(arbiter)->manual_req());
+            do { p = (p + 1) % 7; } while (p == 3 && !id(arbiter)->manual_req());
             id(page_idx) = p;
           }
           id(display_awake) = true;
@@ -1287,9 +1309,10 @@ globals:
     type: uint32_t
     restore_value: false
     initial_value: "0"
-  # Which screen is showing (D-33): 0 ENERGY, 1 FRIDGE, 2 WATER, 3 DIAG,
-  # 4 COOKING (only while cooking), 5 SLEEP, 6 PARK. A plain index rather than
-  # ESPHome `pages:` so the status strip is drawn in one place.
+  # Which screen is showing (D-33): 0 ENERGY, 1 FRIDGE, 2 WATER, 3 COOKING
+  # (only while cooking), 4 SLEEP, 5 PARK, 6 DIAG - last, since it is read on
+  # purpose, not in passing (D-36). A plain index rather than ESPHome `pages:`
+  # so the status strip is drawn in one place.
   - id: page_idx
     type: int
     restore_value: false
@@ -1320,6 +1343,12 @@ globals:
     restore_value: false
     initial_value: "0"
   - id: toast_added_s
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  # The press whose hold bar is on the glass (D-36): its label is drawn once,
+  # then only the bar moves, and the once-a-second redraw waits until it is gone.
+  - id: hold_bar_press_ms
     type: uint32_t
     restore_value: false
     initial_value: "0"
@@ -1374,20 +1403,43 @@ script:
 
 interval:
   # The button's hold (D-33). Acts the moment it reaches "Button hold time",
-  # on whatever screen is showing. Before that, redraws twice a second so the
-  # panel shows what is coming - a full redraw is ~140 ms, so only while held.
-  - interval: 100ms
+  # on whatever screen is showing. Before that, the panel shows what is coming
+  # and fills towards it.
+  #
+  # `CHANGED 2026-10-16` (D-36): the fill used to be two full redraws a second
+  # (~150 ms each, M26) and visibly stepped. Now one full redraw draws the
+  # label once, then every 40 ms only the bar is redrawn and only its strip is
+  # pushed to the glass (vc_flush.h) - a couple of milliseconds a tick, for
+  # at most the 3 s of a hold. The once-a-second full redraw waits meanwhile.
+  - interval: 40ms
     then:
       - lambda: |-
           if (!id(btn_main).state || id(btn_hold_fired)) return;
           const uint32_t now = millis();
           const uint32_t held = now - id(btn_press_ms);
-          if (held < (uint32_t) (id(num_btn_hold).state * 1000.0f)) {
-            static uint32_t last_draw = 0;
-            if (held >= 400 && now - last_draw >= 500) {
-              last_draw = now;
-              id(van_display).update();
+          const float hold_ms = id(num_btn_hold).state * 1000.0f;
+          if (held < (uint32_t) hold_ms) {
+            if (held < 400) return;
+            // A toast owns the whole panel (D-31): no bar over it.
+            if (id(toast_kind) != 0 && (int32_t) (now - id(toast_until_ms)) < 0) return;
+            if (id(hold_bar_press_ms) != id(btn_press_ms)) {
+              id(hold_bar_press_ms) = id(btn_press_ms);
+              id(van_display).update();  // the label, once per hold
+              return;
             }
+            // The panel as the display: block configures it - keep in step.
+            // 41 is pin_lcd_dc.
+            static const vc::PanelGeom G{172, 320, 34, 0, (gpio_num_t) 41};
+            vc::panel::State s;
+            s.page = id(page_idx);
+            s.parked = id(arbiter)->parked();
+            s.parked_view = s.parked && id(park_view);
+            s.park_q = id(arbiter)->park_pending();
+            s.sleep = id(sw_sleep_mode).state;
+            s.manual = id(arbiter)->manual_req();
+            s.hold_frac = std::min(1.0f, held / hold_ms);
+            const vc::panel::Rect r = vc::panel::hold_progress(*id(van_display), s);
+            vc::flush_rect(id(van_display), G, r.x0, r.y0, r.x1, r.y1);
             return;
           }
           id(btn_hold_fired) = true;
@@ -1395,14 +1447,14 @@ interval:
           id(led_flash_until_ms) = now + 300;  // the LED says it acted (D-34)
           const bool parked = id(arbiter)->parked();
           const int pg = (parked && id(park_view)) ? -1 : id(page_idx);
-          if (pg == 5) {
+          if (pg == 4) {
             id(sw_sleep_mode).toggle();
             const bool on = id(sw_sleep_mode).state;
             id(show_toast).execute(on ? 6 : 7);
             // Sleep blanks the panel: show the toast, then go dark.
             if (on) id(display_wake_ms) = now - 57000;
             ESP_LOGI("button", "hold on SLEEP -> sleep %s", on ? "ON" : "OFF");
-          } else if (pg == 6) {
+          } else if (pg == 5) {
             if (parked) {
               id(sw_parked).turn_off();
               id(page_idx) = 0;
@@ -1421,7 +1473,7 @@ interval:
               }
               id(van_display).update();
             }
-          } else if (pg == 4) {
+          } else if (pg == 3) {
             id(toast_was_on) = id(arbiter)->manual_req();
             id(arbiter)->manual_cancel();
             id(page_idx) = 0;
@@ -1485,7 +1537,10 @@ interval:
           } else if (id(arbiter)->manual_req()) {
             g = b = (!id(arbiter)->manual_warning() || (now / 500u) % 2u == 0u) ? 1.0f : 0.0f;
           }
-          const float lvl = id(num_led_brightness).state / 100.0f;
+          float lvl = id(num_led_brightness).state / 100.0f;
+          // The red cues always show (owner, 2026-10-16), like the panel's red
+          // frame: a brightness turned right down dims them, never to nothing.
+          if (r > 0.0f && g == 0.0f && b == 0.0f) lvl = std::max(lvl, 0.25f);
           id(out_led_r)->set_level(r * lvl);
           id(out_led_g)->set_level(g * lvl);
           id(out_led_b)->set_level(b * lvl);
@@ -1513,8 +1568,24 @@ interval:
   - interval: 6s
     then:
       - lambda: |-
-          if (${bench_review})
-            id(page_idx) = (id(page_idx) + 1) % 4;
+          // The four reading pages: ENERGY, FRIDGE, WATER, DIAG.
+          static const int READING[4] = {0, 1, 2, 6};
+          static int i = 0;
+          if (${bench_review}) {
+            i = (i + 1) % 4;
+            id(page_idx) = READING[i];
+          }
+
+  # The panel's once-a-second redraw (D-36: moved here from the display's own
+  # update_interval). Skipped while a hold bar is filling: a 150 ms full frame
+  # would freeze the bar mid-fill, and the bar's own path keeps it current.
+  - interval: 1s
+    then:
+      - lambda: |-
+          if (id(btn_main).state && !id(btn_hold_fired) &&
+              id(hold_bar_press_ms) == id(btn_press_ms))
+            return;
+          id(van_display).update();
 
   # Display blanking. 60s of no input, or sleep mode, and the backlight goes to
   # zero: no night-light, no wasted backlight, no glow through a printed bezel.
@@ -1529,7 +1600,7 @@ interval:
           // Back to the main screen after a quiet spell (D-33), so the next
           // hold is cooking again and an action screen never waits for a stray
           // press. COOKING goes as soon as there is nothing left to stop.
-          if (id(page_idx) == 4 && !id(arbiter)->manual_req())
+          if (id(page_idx) == 3 && !id(arbiter)->manual_req())
             id(page_idx) = 0;
           const bool off_main = id(page_idx) != 0 || (id(arbiter)->parked() && !id(park_view));
           if (!${bench_review} && off_main &&
@@ -1540,102 +1611,142 @@ interval:
           // bench_review pins it on: with no button wired, nothing can
           // wake the panel once it blanks, so a bare board goes dark 60s after
           // boot and stays dark. Set bench_review to 0 for the van.
-          id(out_backlight)->set_level((${bench_review} || id(display_awake)) ? 0.8f : 0.0f);
+          float bl = (${bench_review} || id(display_awake)) ? 0.8f : 0.0f;
+          // The red cues light a dark panel the way they light the status LED
+          // (owner, 2026-10-16), sleep mode included: steady for a fault - the
+          // boot window is not one - and 1 s in 4 while parked, which is the
+          // PARKED card flashing in an empty van. Dimmed, because nobody asked
+          // for the light; ~0.1 Wh a day while parked.
+          if (bl == 0.0f) {
+            const bool fault = id(arbiter)->force_on() &&
+                               strcmp(id(arbiter)->reason(), "boot") != 0;
+            if (fault) bl = 0.3f;
+            else if (id(arbiter)->parked() && (millis() / 1000u) % 4u == 0u) bl = 0.3f;
+          }
+          id(out_backlight)->set_level(bl);
 
 # -----------------------------------------------------------------------------
-# Display. Native 320x172 - the LCD-1.47 turned to landscape - four pages
-# cycled by the button's short press. Same instrument-dark language as the bench rig
-# (nodes/vc_draw.h holds the palette and the three primitives ESPHome lacks),
-# re-laid for the panel the design was drawn for instead of scaled down to it.
+# Display. Native 320x172 - the LCD-1.47 turned to landscape. ENERGY, FRIDGE,
+# WATER, DIAG, then the action screens (D-33), cycled by the button's tap.
 #
-# What survived the small screen:
-#   - one idea per page, and at most two numbers a metre away can read;
-#   - every STATE lives in the 20px top strip, so pages never repeat it;
-#   - colour never carries meaning alone - shape or words back it up, because
-#     this panel washes out in daylight through a printed bezel;
+# REDESIGNED 2026-10-15 (D-36). Every screen is drawn by nodes/vc_panel.h from
+# a plain struct the lambda below fills; nodes/vc_draw.h has the anti-aliased
+# shapes. tools/panel_preview/ compiles the same header on a laptop and renders
+# every screen and toast to PNG - review a layout change there before flashing.
+#
+# What survived from the first panel, unchanged:
+#   - two reading distances, designed separately (see the lambda);
+#   - one idea per page, one number that reads from across the van;
+#   - colour never carries meaning alone - a word or a shape backs it up,
+#     because this panel washes out in daylight through a printed bezel;
 #   - 1s refresh, no animation: the BLE task must not be starved (section 2).
-#
-# Fonts are 4-bit anti-aliased. On a 1.47" panel that is the single biggest
-# legibility win available and it costs flash only - 16MB here.
 # -----------------------------------------------------------------------------
 spi:
   clk_pin: ${pin_lcd_sclk}
   mosi_pin: ${pin_lcd_mosi}
 
 font:
-  # Compiled in from Google Fonts at build time. Needs internet ON THE BUILD
-  # MACHINE only - compile at home, then join the SoftAP to upload.
+  # Compiled in at build time. Needs internet ON THE BUILD MACHINE only -
+  # compile at home, then join the SoftAP to upload. tools/panel_preview reads
+  # this list too, so the previews use exactly these faces, sizes and glyphs.
   #
   # THE TYPE SCALE IS A LEGIBILITY BUDGET, NOT A TASTE DECISION.
   #
   # `MEASURED 2026-09-11`: this panel is 32.9 x 17.7 mm - 320x172 at 247 ppi,
-  # 0.1028 mm per pixel. Roboto's cap height is ~0.711 em, and a character is
-  # comfortable at roughly 250x its cap height. That arithmetic fixes the whole
-  # scale and leaves nothing to taste:
+  # 0.1028 mm per pixel. A character is comfortable at roughly 250x its cap
+  # height; the model is calibrated against the first panel, whose 15px rows
+  # were reported unreadable past 30 cm, exactly as it predicts (0.27 m).
   #
-  #     px   cap     comfortable
-  #    112   8.2mm   2.05 m   the hero. ONE per page, nothing else this size
-  #     26   1.9mm   0.47 m   units, and the walk-up band's own headline
-  #     17   1.2mm   0.31 m   walk-up detail
-  #     13   1.0mm   0.24 m   the status strip, and DIAG's dense table
+  #     face                    px   cap               comfortable
+  #     Barlow SemiCond 700    132    94 px   9.7 mm   2.4 m   the hero, ONE per page
+  #     Barlow SemiCond 700     80    56 px   5.8 mm   1.4 m   action state, toasts
+  #     Barlow 500              20    14 px   1.4 mm   0.36 m  walk-up line
+  #     Barlow 600 / 500        15    11 px   1.1 mm   0.27 m  strip, chips, DIAG
   #
-  # The first version of this panel topped out at 56px (1.0 m) with 15px rows
-  # and was reported unreadable past 30 cm - which is exactly what the 15px row
-  # predicts (0.27 m). The model is calibrated against that measurement, so the
-  # distances above are predictions rather than hopes.
+  # `CHANGED 2026-10-15` (D-36): Roboto 112 -> Barlow Semi Condensed 132. The
+  # hero's digits grew from 80 to 94 px (2.0 -> 2.4 m) in the same width,
+  # because the condensed face buys the height back. Barlow is drawn from
+  # California highway signs and plates - lettering made to be read at
+  # distance - and its rounded terminals match the panel's rounded corners.
   #
-  # An 8mm cap is 45% of the panel's ENTIRE height. "Readable across the van"
-  # therefore costs one number per page, and no arrangement avoids that - which
-  # is why the pages below are a single hero plus a walk-up band, and not a
-  # dashboard. See the two-distance note on the display lambda.
-  - file: "gfonts://Roboto@700"
+  # A 10 mm cap is most of the panel's height, so "readable across the van"
+  # still costs one number per page, and no arrangement avoids that.
+  - file: "gfonts://Barlow+Semi+Condensed@700"
     id: f_hero
-    size: 112
+    size: 132
     bpp: 4
-    # A 112px 4-bit face with the full Latin range is most of a megabyte of
-    # flash for glyphs that can never be drawn. Only what a measurement can
-    # contain.
-    glyphs: " +-.0123456789L%°"
-  # The button's action toast (D-31): ON / OFF / +30 / MAX beside a 96px icon,
-  # and PARKED across the full width (297px of the 310 inside the frame).
-  # 80px rather than the hero's 112 because it shares the width with the icon,
-  # and it is read by the person whose hand is still on the button.
-  - file: "gfonts://Roboto@700"
-    id: f_toast
+    # A 132px 4-bit face with the full Latin range is megabytes of flash for
+    # glyphs that can never be drawn. Only what a measurement can contain.
+    # The degree sign is NOT in ESPHome's default glyph set: every face that
+    # prints a temperature declares it, or it silently renders as nothing.
+    glyphs: "-.0123456789°"
+  # The unit beside the hero: deliberately small. A full-size "%" was as wide
+  # as a digit and said nothing from across the van.
+  - file: "gfonts://Barlow+Semi+Condensed@600"
+    id: f_unit
+    size: 52
+    bpp: 4
+    glyphs: "%°"
+  # ENERGY's charge (owner, 2026-10-16): smaller than the hero, so the cabin
+  # fits beside it. 66 px digits, 6.8 mm - still ~1.7 m - and the vessel next
+  # to it reads from further away than either.
+  - file: "gfonts://Barlow+Semi+Condensed@700"
+    id: f_soc
+    size: 92
+    bpp: 4
+    glyphs: "-0123456789"
+  # The cabin temperature beside it, and the charge's "%".
+  - file: "gfonts://Barlow+Semi+Condensed@600"
+    id: f_mid
+    size: 36
+    bpp: 4
+    glyphs: "-.0123456789%°"
+  # Action screens (ON / OFF / PARK? / 0:42) and the button's toasts (D-31).
+  - file: "gfonts://Barlow+Semi+Condensed@700"
+    id: f_big
     size: 80
     bpp: 4
-    # D-33 adds ":" (time left on COOKING) and "?" (PARK? on the PARK screen).
     glyphs: "+0123456789:?ADEFKMNOPRX"
-  - file: "gfonts://Roboto@500"
-    id: f_sub
-    size: 26
+  - file: "gfonts://Barlow@600"
+    id: f_title
+    size: 15
     bpp: 4
-    glyphs: &walkup " !%()+,-./0123456789:?ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz°"
-  - file: "gfonts://Roboto"
-    id: f_row
-    size: 17
+    glyphs: &text " !%()+,-./0123456789:?ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz°·"
+  - file: "gfonts://Barlow@500"
+    id: f_body
+    size: 20
     bpp: 4
-    # The degree sign is NOT in ESPHome's default glyph set. Every face that can
-    # print a temperature declares it explicitly, or it silently renders as
-    # nothing and the fridge page reads "4.6" with no unit.
-    glyphs: *walkup
-  - file: "gfonts://Roboto@500"
-    id: f_lbl
-    size: 13
+    glyphs: *text
+  - file: "gfonts://Barlow@500"
+    id: f_small
+    size: 15
     bpp: 4
-    glyphs: *walkup
-
-image:
-  - { id: ico_bt,    file: "mdi:bluetooth",     resize: 14x14, type: BINARY }
-  - { id: ico_btoff, file: "mdi:bluetooth-off", resize: 14x14, type: BINARY }
-  - { id: ico_moon,  file: "mdi:weather-night", resize: 14x14, type: BINARY }
-  - { id: ico_pot,   file: "mdi:pot-steam",     resize: 14x14, type: BINARY }
-  - { id: ico_car,   file: "mdi:car",           resize: 14x14, type: BINARY }
-  - { id: ico_snow,  file: "mdi:snowflake",     resize: 14x14, type: BINARY }
-  - { id: ico_drop,  file: "mdi:water",         resize: 14x14, type: BINARY }
-  - { id: ico_sun,   file: "mdi:weather-sunny", resize: 20x20, type: BINARY }
-  - { id: ico_alt,   file: "mdi:car",           resize: 20x20, type: BINARY }
-  - { id: ico_plug,  file: "mdi:power-plug",    resize: 20x20, type: BINARY }
+    glyphs: *text
+  # Icons as a font rather than images: anti-aliased, and tinted per draw like
+  # text (the old 1-bit images had jagged edges at 14 px). Material Design
+  # Icons, pinned to a release so a glyph cannot move under a rebuild. Code
+  # points are named in vc_panel.h's `icon` namespace.
+  - file: "https://github.com/Templarian/MaterialDesign-Webfont/raw/v7.4.47/fonts/materialdesignicons-webfont.ttf"
+    id: f_icon_s
+    size: 20
+    bpp: 4
+    #       bluetooth     bt-off        night         pot-steam     car           snowflake
+    #       water         parking       arrow-up      arrow-down    tap-hold      check         alert
+    glyphs: &icons ["\U000F00AF", "\U000F00B2", "\U000F0594", "\U000F065A", "\U000F010B", "\U000F0717",
+                    "\U000F058C", "\U000F03E3", "\U000F0737", "\U000F072E", "\U000F0D77", "\U000F012C", "\U000F0026"]
+  - file: "https://github.com/Templarian/MaterialDesign-Webfont/raw/v7.4.47/fonts/materialdesignicons-webfont.ttf"
+    id: f_icon_m
+    size: 22
+    bpp: 4
+    glyphs: *icons
+  - file: "https://github.com/Templarian/MaterialDesign-Webfont/raw/v7.4.47/fonts/materialdesignicons-webfont.ttf"
+    id: f_icon_l
+    # 48 px: the action screens' tile is level with the 80 px ON / OFF beside
+    # it (owner, 2026-10-16). Only the glyphs those tiles and toasts draw.
+    size: 48
+    bpp: 4
+    #       night         pot-steam     parking
+    glyphs: ["\U000F0594", "\U000F065A", "\U000F03E3"]
 
 display:
   - platform: st7789v
@@ -1654,180 +1765,99 @@ display:
     cs_pin: ${pin_lcd_cs}
     dc_pin: ${pin_lcd_dc}
     reset_pin: ${pin_lcd_rst}
-    update_interval: 1s
-    # One lambda rather than `pages:` so the status strip is drawn once, not
-    # pasted into four page bodies. Paging is `page_idx`, bumped by the button.
+    # Redrawn once a second by an interval instead (D-36), so a full frame
+    # never lands in the middle of the hold bar's fast path. Taps and toasts
+    # still redraw at once, as before.
+    update_interval: never
     # TWO READING DISTANCES, DESIGNED SEPARATELY. `MEASURED 2026-09-11`: this
     # panel is 32.9 x 17.7 mm, so there is no type scale that is both dense and
     # legible from the far end of the van. Rather than split the difference and
     # fail at both, every page is built as:
     #
-    #   AT 2 METRES - the frame colour (what the inverter is doing) and one
-    #                 112px hero number. That is the entire distance budget.
-    #   AT 30-50 CM - the status strip, the bars, and the walk-up band. These
-    #                 are deliberately unreadable further away, because making
-    #                 them legible would cost the hero the height it needs.
+    #   FROM ACROSS THE VAN - the rim colour (what the inverter is doing), the
+    #                 analogue column (battery vessel, fridge scale, action
+    #                 icon) and one 140px hero number (D-36).
+    #   AT 30-50 CM - the strip (page, link, the state chip) and the walk-up
+    #                 line. Deliberately unreadable further away, because
+    #                 making them legible would cost the hero its height.
     #
     # DIAG is the deliberate exception: it has no hero, because it is only ever
     # read at arm's length.
     #
-    # One lambda rather than `pages:` so the frame and strip are drawn once
-    # instead of pasted into four page bodies. Paging is `page_idx`.
+    # One lambda rather than `pages:`; paging is `page_idx`, bumped by the
+    # button. The pages themselves are functions in nodes/vc_panel.h.
     lambda: |-
+      // ALL DRAWING IS IN nodes/vc_panel.h. This lambda reads the components
+      // into a plain panel::State and hands it over - which is what lets the
+      // same drawing code compile on a laptop (tools/panel_preview) so every
+      // screen is reviewed as pixels before it is flashed. Nothing here, or
+      // there, reaches the arbiter: the panel only reads (section 5.3).
       using namespace esphome::vc;
-      using display::TextAlign;
-      it.fill(bg());
+      panel::State s;
 
-      // ---- hold bar (D-33) -------------------------------------------------
-      // While the button is held past a tap and before the hold acts: what it
-      // is about to do, filling towards the hold time. Letting go before it
-      // fills is how you back out, so the words must say what you would get.
-      auto hold_bar = [&]() {
-        if (!id(btn_main).state || id(btn_hold_fired)) return;
-        const uint32_t held = millis() - id(btn_press_ms);
-        if (held < 400) return;
-        const float f = std::min(1.0f, held / (id(num_btn_hold).state * 1000.0f));
-        const bool pk = id(arbiter)->parked();
-        const int hp = (pk && id(park_view)) ? -1 : id(page_idx);
-        const char *what;
-        if (hp == 4)      what = "STOP COOKING";
-        else if (hp == 5) what = id(sw_sleep_mode).state ? "SLEEP OFF" : "SLEEP ON";
-        else if (hp == 6) what = pk ? "LEAVE PARKED MODE"
-                               : id(arbiter)->park_pending() ? "CONFIRM: PARK" : "PARK (asks first)";
-        else              what = pk ? "LEAVE PARKED + COOKING"
-                               : id(arbiter)->manual_req() ? "COOKING +30 MIN" : "COOKING ON";
-        it.filled_rectangle(5, 136, 310, 31, bg());
-        it.rectangle(10, 139, 300, 26, fg());
-        it.filled_rectangle(11, 140, (int) (298 * f), 24, (hp == 6 && !pk) ? bad() : good());
-        it.print(160, 152, id(f_row), fg(), TextAlign::CENTER, what);
-      };
-
-      // ---- action toast (D-31) ---------------------------------------------
-      // What the button just did, for 2.5 s (4 s for leaving parked mode). A
-      // hold is timed and otherwise silent, so this is its confirmation. It
-      // owns the whole panel, frame included, so it cannot be read as a page.
-      // Reads the arbiter live: manual_press()/cancel() already ran its tick.
+      // Toast expiry (D-31) lives here rather than in the drawing code,
+      // because it writes a global.
       if (id(toast_kind) != 0 && (int32_t) (millis() - id(toast_until_ms)) >= 0)
         id(toast_kind) = 0;
-      if (id(toast_kind) != 0) {
-        const int k = id(toast_kind);
-        const uint32_t left_s = id(arbiter)->manual_remaining_s();
-        const unsigned lh = left_s / 3600u, lm = (left_s / 60u) % 60u;
-        const Color col = k == 4 ? dim() : k == 3 ? amber() : good();
-        char tb[48];
-        for (int i = 0; i < 5; i++)
-          it.rectangle(i, i, 320 - 2 * i, 172 - 2 * i, col);
 
-        if (k == 6 || k == 7) {
-          // Sleep mode (D-33). The moon colour, and the ceiling it will hold,
-          // because that is the food decision being made (section 6).
-          it.print(160, 30, id(f_sub), water(), TextAlign::CENTER, "SLEEP MODE");
-          it.print(160, 88, id(f_toast), k == 6 ? water() : fg(), TextAlign::CENTER,
-                   k == 6 ? "ON" : "OFF");
-          if (k == 6) snprintf(tb, sizeof tb, "fridge ceiling %.1f°C tonight", id(num_sleep_ceiling).state);
-          else        snprintf(tb, sizeof tb, "normal schedule");
-          it.print(160, 147, id(f_row), dim(), TextAlign::TOP_CENTER, tb);
-          return;
-        }
-        if (k == 8) {
-          // Parked mode left from the PARK screen, without cooking (D-33).
-          it.filled_rectangle(12, 12, 296, 31, bad());
-          it.print(160, 28, id(f_sub), ink(), TextAlign::CENTER, "PARKED MODE OFF", bad());
-          it.print(160, 92, id(f_toast), good(), TextAlign::CENTER, "OFF");
-          it.print(160, 147, id(f_row), good(), TextAlign::TOP_CENTER, "fail-safe armed - normal schedule");
-          return;
-        }
-        if (k == 5) {
-          // Leaving parked mode: the one toast that is about more than the
-          // timer, because the fail-safe has just been re-armed.
-          it.filled_rectangle(12, 12, 296, 31, bad());
-          it.print(160, 28, id(f_sub), ink(), TextAlign::CENTER, "PARKED MODE OFF", bad());
-          ac_symbol_bold(it, 40, 50, 84, good(), false);
-          it.print(222, 94, id(f_toast), good(), TextAlign::CENTER, "ON");
-          snprintf(tb, sizeof tb, "fail-safe armed - manual AC %u min", (unsigned) (left_s / 60u));
-          it.print(160, 147, id(f_row), good(), TextAlign::TOP_CENTER, tb);
-          return;
-        }
-        if (k == 1 || k == 4) {
-          ac_symbol_bold(it, 14, 28, 96, col, k == 4);
-          it.print(220, 76, id(f_toast), k == 4 ? fg() : good(), TextAlign::CENTER,
-                   k == 4 ? "OFF" : "ON");
-        } else {
-          // A stopwatch whose ring is the time left as a share of the 3 h
-          // ceiling, so "+30" also shows how much room is left above it.
-          const float max_s = id(arbiter)->config().manual_max_ms / 1000.0f;
-          arc_gauge(it, 62, 80, 50, 40, 100.0f * left_s / max_s, col, faint());
-          it.filled_rectangle(56, 22, 12, 6, col);   // crown
-          it.filled_rectangle(60, 28, 4, 3, col);    // stem
-          snprintf(tb, sizeof tb, "%u:%02u", lh, lm);
-          it.print(62, 80, id(f_sub), fg(), TextAlign::CENTER, tb);
-          const unsigned add_m = id(toast_added_s) / 60u;
-          if (k == 2 || add_m > 0) snprintf(tb, sizeof tb, "+%u", add_m);
-          else                     snprintf(tb, sizeof tb, "MAX");
-          it.print(220, 76, id(f_toast), col, TextAlign::CENTER, tb);
-        }
-        // Walk-up line.
-        char left[20];
-        if (lh) snprintf(left, sizeof left, "%u h %02u left", lh, lm);
-        else    snprintf(left, sizeof left, "%u min left", lm);
-        if (k == 1 || k == 2)  snprintf(tb, sizeof tb, "manual AC - %s", left);
-        else if (k == 3)       snprintf(tb, sizeof tb, "3 h ceiling - %s", left);
-        else if (!id(toast_was_on)) snprintf(tb, sizeof tb, "manual AC was not on");
-        else if (id(arbiter)->ac_on())
-          snprintf(tb, sizeof tb, "manual off - AC stays on: %s", id(arbiter)->reason());
-        else                   snprintf(tb, sizeof tb, "manual AC cancelled");
-        it.print(160, 147, id(f_row), k == 4 ? dim() : col, TextAlign::TOP_CENTER, tb);
-        return;
+      s.ble    = id(p310_connected).state;
+      s.probe  = id(fridge_temp).has_state() && !std::isnan(id(fridge_temp).state);
+      s.parked = id(arbiter)->parked();
+      s.park_q = id(arbiter)->park_pending();
+      s.force  = id(arbiter)->force_on() && !s.parked;
+      s.manual = id(arbiter)->manual_req();
+      s.sleep  = id(sw_sleep_mode).state;
+      s.drive  = id(sw_drive_inhibit).state;
+      s.ac_on  = id(arbiter)->ac_on();
+      s.fridge_req  = id(arbiter)->fridge_req();
+      s.surplus_req = id(arbiter)->surplus_req();
+      s.reason = id(arbiter)->reason();
+      // The boot window is fail-safe too, but not a fault: amber, not red
+      // (D-31 keeps steady red for a real fault).
+      s.boot   = strcmp(s.reason, "boot") == 0;
+
+      s.have_soc    = id(battery_percent).has_state();
+      s.soc         = s.have_soc ? id(battery_percent).state : 0.0f;
+      s.have_flow   = id(input_watts).has_state() && id(output_watts).has_state();
+      s.win         = s.have_flow ? id(input_watts).state : 0.0f;
+      s.wout        = s.have_flow ? id(output_watts).state : 0.0f;
+      s.have_rem    = id(remaining_minutes).has_state();
+      s.remaining_h = s.have_rem ? id(remaining_minutes).state / 60.0f : NAN;
+      s.fridge_c    = s.probe ? id(fridge_temp).state : NAN;
+      s.have_cabin  = id(cabin_temp).has_state() && !std::isnan(id(cabin_temp).state);
+      s.cabin_c     = s.have_cabin ? id(cabin_temp).state : NAN;
+      s.t_off  = id(num_temp_off).state;
+      s.t_on   = id(num_temp_on).state;
+      s.t_hard = id(num_temp_hard).state;
+      s.sleep_ceiling = id(num_sleep_ceiling).state;
+      s.parked_d      = id(arbiter)->parked_for_s() / 86400.0f;
+      s.manual_left_s = id(arbiter)->manual_remaining_s();
+      s.manual_max_s  = id(arbiter)->config().manual_max_ms / 1000u;
+
+      s.page        = id(page_idx);
+      s.parked_view = s.parked && id(park_view);
+      s.hold_s      = id(num_btn_hold).state;
+      s.rim         = id(sw_panel_frame).state;
+      s.blink       = (millis() / 1000u) % 2u == 0u;
+      // Held past a tap and not yet acted on (D-33): the hold bar.
+      if (id(btn_main).state && !id(btn_hold_fired)) {
+        const uint32_t held = millis() - id(btn_press_ms);
+        s.holding   = held >= 400;
+        s.hold_frac = std::min(1.0f, held / (s.hold_s * 1000.0f));
       }
+      s.toast         = id(toast_kind);
+      s.toast_added_s = id(toast_added_s);
+      s.toast_was_on  = id(toast_was_on);
 
-      // ---- parked: the first thing a wake shows (D-31) ----------------------
-      // In big red, because the hazard in a parked van is loading food into a
-      // fridge that is off on purpose (CLAUDE.md section 6). A further tap
-      // drops into the ordinary pages, which keep the red frame.
-      if (id(arbiter)->parked() && id(park_view)) {
-        for (int i = 0; i < 5; i++)
-          it.rectangle(i, i, 320 - 2 * i, 172 - 2 * i, bad());
-        it.print(160, 58, id(f_toast), bad(), TextAlign::CENTER, "PARKED");
-        char pb[32];
-        snprintf(pb, sizeof pb, "fridge OFF - %.1f d", id(arbiter)->parked_for_s() / 86400.0f);
-        it.print(160, 112, id(f_sub), fg(), TextAlign::CENTER, pb);
-        snprintf(pb, sizeof pb, "hold %.0f s: leave + cooking AC", id(num_btn_hold).state);
-        it.print(160, 147, id(f_row), dim(), TextAlign::TOP_CENTER, pb);
-        hold_bar();
-        return;
-      }
-
-      // ---- shared state ----------------------------------------------------
-      // Every value the pages draw is read ONCE into a plain local here. Two
-      // reasons: each page then draws the same value as its neighbours, and the
-      // bench generator below has exactly one place to intercept.
-      bool ble    = id(p310_connected).state;
-      bool probe  = id(fridge_temp).has_state() && !std::isnan(id(fridge_temp).state);
-      bool parked = id(arbiter)->parked();
-      bool park_q = id(arbiter)->park_pending();
-      bool force  = id(arbiter)->force_on() && !parked;
-      bool manual = id(arbiter)->manual_req();
-      bool sleep_ = id(sw_sleep_mode).state;
-      bool drive  = id(sw_drive_inhibit).state;
-      bool ac_on  = id(arbiter)->ac_on();
-      const char *reason = id(arbiter)->reason();
-
-      bool  have_soc   = id(battery_percent).has_state();
-      float soc        = have_soc ? id(battery_percent).state : 0.0f;
-      bool  have_flow  = id(input_watts).has_state() && id(output_watts).has_state();
-      float win        = have_flow ? id(input_watts).state : 0.0f;
-      float wout       = have_flow ? id(output_watts).state : 0.0f;
-      float fridge_c   = probe ? id(fridge_temp).state : NAN;
-      bool  have_cabin = id(cabin_temp).has_state();
-      float cabin_c    = have_cabin ? id(cabin_temp).state : NAN;
-      bool  have_rem   = id(remaining_minutes).has_state();
-      float remaining_h = have_rem ? id(remaining_minutes).state / 60.0f : NAN;
-      float parked_d   = id(arbiter)->parked_for_s() / 86400.0f;
+      s.uptime_s = millis() / 1000u;
+      s.heap_kb  = esp_get_free_heap_size() / 1024u;
+      s.have_charge_cap = id(p310_charge_max).has_state();
+      s.charge_cap      = s.have_charge_cap ? id(p310_charge_max).state : 0.0f;
 
       // ---- BENCH ONLY: synthetic values so the layout can be judged ---------
       // With no P310 in range and no probes on the bus every field reads "--",
       // which says nothing about the design. vc_demo.h sweeps plausible values
-      // through every frame colour and both degraded paths instead.
+      // through every rim colour and both degraded paths instead.
       //
       // THIS OVERRIDES PIXELS AND NOTHING ELSE. The arbiter has already run,
       // on the real sensors, and cannot see any of it - wiring fake data into
@@ -1836,259 +1866,18 @@ display:
       // Set bench_review to 0 for the van.
       if (${bench_review}) {
         const vc::demo::Frame d = vc::demo::frame(millis());
-        ble = d.ble; probe = d.probe; parked = d.parked; park_q = d.park_q;
-        force = d.force; manual = d.manual; sleep_ = d.sleep_; drive = d.drive;
-        ac_on = d.ac_on; reason = d.reason;
-        have_soc = d.have_soc;   soc = d.soc;
-        have_flow = d.have_flow; win = d.win; wout = d.wout;
-        fridge_c = d.fridge_c;
-        have_cabin = true;       cabin_c = d.cabin_c;
-        have_rem = d.have_flow;  remaining_h = d.remaining_h;
-        parked_d = d.parked_d;
+        s.ble = d.ble; s.probe = d.probe; s.parked = d.parked; s.park_q = d.park_q;
+        s.force = d.force; s.manual = d.manual; s.sleep = d.sleep_; s.drive = d.drive;
+        s.ac_on = d.ac_on; s.reason = d.reason; s.boot = false;
+        s.have_soc = d.have_soc;   s.soc = d.soc;
+        s.have_flow = d.have_flow; s.win = d.win; s.wout = d.wout;
+        s.fridge_c = d.fridge_c;
+        s.have_cabin = true;       s.cabin_c = d.cabin_c;
+        s.have_rem = d.have_flow;  s.remaining_h = d.remaining_h;
+        s.parked_d = d.parked_d;
       }
 
-      const float net = win - wout;
-      char b[40];
-
-      // ---- the frame: the only thing that reads from across the van --------
-      // At two metres a 17mm-tall panel IS a coloured rectangle - no glyph that
-      // fits here survives that distance. So the rectangle carries the one fact
-      // worth having from the far end of the van: what the inverter is doing.
-      // This is the primary channel, not decoration.
-      // Parked is red (D-31): red means "wrong, or off on purpose" - both are
-      // a fridge you must not load and drive away from.
-      const Color state_col = parked ? bad()
-                            : force  ? bad()
-                            : manual ? good()
-                            : ac_on  ? amber()
-                                     : faint();
-      for (int i = 0; i < 5; i++)
-        it.rectangle(i, i, 320 - 2 * i, 172 - 2 * i, state_col);
-
-      // ---- status strip: walk-up only --------------------------------------
-      // Everything here is a STATE, and every state that matters at distance is
-      // already in the frame colour. This is the close-up confirmation of what
-      // the frame can only hint at.
-      static const char *PAGES[7] = {"ENERGY", "FRIDGE", "WATER", "DIAG",
-                                     "COOKING", "SLEEP", "PARK"};
-      const int pg = id(page_idx);
-      it.print(10, 8, id(f_lbl), amber(), PAGES[pg]);
-      if (parked)      it.print(66, 8, id(f_lbl), bad(), "PARKED");
-      else if (park_q) it.print(66, 8, id(f_lbl), bad(), "PARK?");
-      else if (force)  it.print(66, 8, id(f_lbl), bad(),   "FAIL-SAFE");
-      // One dot per screen in the cycle; COOKING only while there is any.
-      for (int i = 0, x = 150; i < 7; i++) {
-        if (i == 4 && !manual) continue;
-        it.filled_circle(x, 14, 3, i == pg ? amber() : faint());
-        x += 9;
-      }
-
-      int ix = 296;
-      if (parked)     ac_symbol(it, ix, 6, 16, bad(), true);
-      else if (ac_on) ac_symbol(it, ix, 6, 16, force ? bad() : amber(), false);
-      else            ac_symbol(it, ix, 6, 16, dim(), true);
-      ix -= 19;
-      it.image(ix, 7, ble ? id(ico_bt) : id(ico_btoff), ble ? good() : bad(), bg());
-      if (sleep_) { ix -= 18; it.image(ix, 7, id(ico_moon), water(), bg()); }
-      if (manual) { ix -= 18; it.image(ix, 7, id(ico_pot),  good(),  bg()); }
-      if (drive)  { ix -= 18; it.image(ix, 7, id(ico_car),  bad(),   bg()); }
-
-      // ---- the hero --------------------------------------------------------
-      // One number, 112px, centred. Nothing else on a page may be this size:
-      // there is only room for one thing that reads at two metres.
-      auto hero = [&](const char *txt, Color c) {
-        it.print(160, 80, id(f_hero), c, TextAlign::CENTER, txt);
-      };
-
-      // =====================================================================
-      if (pg == 0) {
-        // ---- ENERGY: state of charge --------------------------------------
-        // SOC is the number that decides whether the trip continues, so it gets
-        // the height. Flow is a walk-up question.
-        const Color soc_col = !have_soc ? dim()
-                            : soc > 40.0f ? good() : soc > 20.0f ? amber() : bad();
-        if (have_soc) snprintf(b, sizeof b, "%.0f%%", soc);
-        else          snprintf(b, sizeof b, "--");
-        hero(b, soc_col);
-
-        // A SECOND at-distance channel for the same number: length, not glyphs.
-        // A bar reads from further away than the digits above it and degrades
-        // gracefully - at four metres it is still obviously nearly empty.
-        it.rectangle(10, 134, 300, 8, faint());
-        if (have_soc)
-          it.filled_rectangle(11, 135, (int) (298 * soc / 100.0f), 6, soc_col);
-
-        // Walk-up band.
-        const Color net_col = !have_flow ? dim()
-                            : fabsf(net) < 5.0f ? dim() : net > 0 ? good() : amber();
-        if (have_flow) it.printf(10, 147, id(f_row), net_col, "NET %+.0f W", net);
-        else           it.print(10, 147, id(f_row), dim(), "no station data");
-
-        if (!have_flow || !have_rem)
-          it.print(310, 147, id(f_row), dim(), TextAlign::TOP_RIGHT, "--");
-        else if (net > 5.0f)
-          it.print(310, 147, id(f_row), good(), TextAlign::TOP_RIGHT, "charging");
-        else
-          it.printf(310, 147, id(f_row), dim(), TextAlign::TOP_RIGHT, "%.1f h left",
-                    remaining_h);
-
-      } else if (pg == 1) {
-        // ---- FRIDGE: cabinet temperature ----------------------------------
-        const float t      = fridge_c;
-        const float t_off  = id(num_temp_off).state;
-        const float t_on   = id(num_temp_on).state;
-        const float t_hard = id(num_temp_hard).state;
-        // In sleep mode the ceiling IS the on-threshold, and an 8 C ceiling is
-        // a food decision the automation must never make silently (section 6).
-        const float ceil_c = sleep_ ? id(num_sleep_ceiling).state : t_on;
-
-        Color col;
-        if (probe) {
-          col = t > t_hard ? bad() : t > ceil_c ? amber() : fg();
-          snprintf(b, sizeof b, "%.1f°", t);
-        } else {
-          col = bad();
-          snprintf(b, sizeof b, "--°");
-        }
-        hero(b, col);
-
-        // The deadband strip. This is the idea a bare number never gives you:
-        // not "4.6" but "4.6, and this far from the next run". Zones are
-        // satisfied / hysteresis gap / cooling wanted / the hard override.
-        const int sx = 10, sy = 134, sw = 300, sh = 8;
-        auto pos = [&](float v) {
-          if (v < 0.0f) v = 0.0f;
-          if (v > 12.0f) v = 12.0f;
-          return sx + (int) (v / 12.0f * sw);
-        };
-        const int x_off = pos(t_off), x_hard = pos(t_hard);
-        const int x_on = std::max(pos(ceil_c), x_off);
-        it.filled_rectangle(sx, sy, x_off - sx, sh, Color(0x12, 0x3a, 0x4a));
-        it.filled_rectangle(x_off, sy, x_on - x_off, sh, Color(0x2b, 0x2f, 0x28));
-        it.filled_rectangle(x_on, sy, x_hard - x_on, sh, Color(0x5a, 0x3a, 0x12));
-        it.filled_rectangle(x_hard, sy, sx + sw - x_hard, sh, Color(0x4a, 0x1a, 0x14));
-        it.rectangle(sx, sy, sw, sh, faint());
-        if (probe)
-          it.filled_rectangle(pos(t) - 2, sy - 3, 4, sh + 6, fg());
-
-        // Walk-up band: which mode owns the fridge right now. Main's wording,
-        // the distance layout's position; the ceiling in force is named in
-        // every state that has one (never silent, section 6).
-        const int cy = 147;
-        if (parked) {
-          it.printf(10, cy, id(f_row), bad(), "PARKED %.1f d - fridge off on purpose",
-                    parked_d);
-        } else if (park_q) {
-          // Armed but not committed. Says what is about to happen while there
-          // is still time to change your mind - the arm lapses on its own.
-          it.print(10, cy, id(f_row), bad(), "PARK? confirm to disarm fail-safe");
-        } else if (manual) {
-          it.image(10, cy + 1, id(ico_pot), good(), bg());
-          it.printf(30, cy, id(f_row), good(), "manual - %u min left",
-                    (unsigned) (id(arbiter)->manual_remaining_s() / 60));
-        } else if (sleep_) {
-          it.image(10, cy + 1, id(ico_moon), water(), bg());
-          it.printf(30, cy, id(f_row), water(), "sleep - coasting up to %.1f°", ceil_c);
-        } else if (drive) {
-          it.image(10, cy + 1, id(ico_car), bad(), bg());
-          it.print(30, cy, id(f_row), dim(), "drive inhibit - coasting");
-        } else if (id(arbiter)->fridge_req()) {
-          it.printf(10, cy, id(f_row), amber(), "cooling to %.1f°", t_off);
-        } else {
-          it.printf(10, cy, id(f_row), dim(), "satisfied - cools again above %.1f°", ceil_c);
-        }
-
-      } else if (pg == 2) {
-        // ---- WATER: not installed -----------------------------------------
-        // Degrades rather than blanks: van-water is a separate box and its
-        // absence is normal, never a fault.
-        // HOOK: when it lands, the hero is the BINDING CONSTRAINT in litres -
-        // min(fresh remaining, grey headroom) - NOT the fresh level. Two
-        // independent bars invite reading the reassuring one (section 9
-        // Phase 2), so the one number that gets the height must be the one
-        // that actually runs out first, with the binding tank named below it.
-        hero("--", dim());
-        it.print(10, 147, id(f_row), dim(), "van-water not installed (Phase 2)");
-
-      } else if (pg == 3) {
-        // ---- DIAGNOSTICS ---------------------------------------------------
-        // DELIBERATELY DENSE, and the one page with NO hero. It is read at 30cm
-        // with a multimeter in the other hand, so distance legibility is
-        // explicitly not its job and the one-number rule does not apply.
-        auto row = [&](int col, int n, const char *k, Color vc, const char *v) {
-          const int x = col ? 166 : 10;
-          const int y = 30 + n * 19;
-          it.print(x, y, id(f_lbl), dim(), k);
-          it.print(x + 144, y, id(f_lbl), vc, TextAlign::TOP_RIGHT, v);
-        };
-        row(0, 0, "BLE", ble ? fg() : bad(), ble ? "up" : "DOWN");
-        row(0, 1, "probe", probe ? fg() : bad(), probe ? "ok" : "STALE");
-        if (probe) {
-          snprintf(b, sizeof b, "%.1f°", fridge_c);
-          row(0, 2, "fridge", fg(), b);
-        } else {
-          row(0, 2, "fridge", bad(), "--");
-        }
-        if (have_cabin) {
-          snprintf(b, sizeof b, "%.1f°", cabin_c);
-          row(0, 3, "cabin", fg(), b);
-        } else {
-          row(0, 3, "cabin", dim(), "--");
-        }
-        snprintf(b, sizeof b, "%uh %um", (unsigned) (millis() / 3600000UL),
-                 (unsigned) ((millis() / 60000UL) % 60U));
-        row(0, 4, "uptime", fg(), b);
-        row(0, 5, "reason", ac_on ? amber() : dim(), reason);
-
-        row(1, 0, "AP", fg(), "192.168.4.1");
-        snprintf(b, sizeof b, "%u kB", (unsigned) (esp_get_free_heap_size() / 1024));
-        row(1, 1, "heap", fg(), b);
-        snprintf(b, sizeof b, "F%d M%d S%d X%d P%d",
-                 id(arbiter)->fridge_req(), id(arbiter)->manual_req(),
-                 id(arbiter)->surplus_req(), id(arbiter)->force_on(), parked);
-        row(1, 2, "flags", fg(), b);
-        row(1, 3, "sleep", sleep_ ? water() : dim(), sleep_ ? "on" : "off");
-        row(1, 4, "drive inh", drive ? bad() : dim(), drive ? "on" : "off");
-        if (id(p310_charge_max).has_state()) {
-          snprintf(b, sizeof b, "%.0f%%", id(p310_charge_max).state);
-          row(1, 5, "charge cap", fg(), b);
-        } else {
-          row(1, 5, "charge cap", dim(), "--");
-        }
-
-      } else {
-        // ---- ACTION SCREENS (D-33) -----------------------------------------
-        // What a hold does here, as the hero, and how long to hold, as the
-        // walk-up line. The frame keeps the inverter's colour like any page.
-        const float hs = id(num_btn_hold).state;
-        if (pg == 4) {
-          // COOKING: in the cycle only while cooking is on.
-          const uint32_t left_s = id(arbiter)->manual_remaining_s();
-          snprintf(b, sizeof b, "%u:%02u", (unsigned) (left_s / 3600u), (unsigned) ((left_s / 60u) % 60u));
-          it.print(160, 80, id(f_toast), good(), TextAlign::CENTER, b);
-          snprintf(b, sizeof b, "hold %.0f s: stop cooking", hs);
-          it.print(160, 147, id(f_row), dim(), TextAlign::TOP_CENTER, b);
-        } else if (pg == 5) {
-          // SLEEP
-          it.print(160, 80, id(f_toast), sleep_ ? water() : dim(), TextAlign::CENTER, sleep_ ? "ON" : "OFF");
-          snprintf(b, sizeof b, "hold %.0f s: sleep %s", hs, sleep_ ? "OFF" : "ON");
-          it.print(160, 147, id(f_row), dim(), TextAlign::TOP_CENTER, b);
-        } else {
-          // PARK. Arming is the first hold; the second confirms (D-14), and
-          // the consequence is spelled out before it, not after.
-          if (parked) {
-            it.print(160, 80, id(f_toast), bad(), TextAlign::CENTER, "ON");
-            snprintf(b, sizeof b, "hold %.0f s: leave parked mode", hs);
-          } else if (park_q) {
-            it.print(160, 72, id(f_toast), bad(), TextAlign::CENTER, "PARK?");
-            it.print(160, 118, id(f_row), fg(), TextAlign::CENTER, "fridge OFF, fail-safe disarmed");
-            snprintf(b, sizeof b, "hold %.0f s again to confirm", hs);
-          } else {
-            it.print(160, 80, id(f_toast), dim(), TextAlign::CENTER, "OFF");
-            snprintf(b, sizeof b, "hold %.0f s to park (asks first)", hs);
-          }
-          it.print(160, 147, id(f_row), park_q ? bad() : dim(), TextAlign::TOP_CENTER, b);
-        }
-      }
-
-      hold_bar();
+      static const panel::Fonts F{id(f_hero),  id(f_unit),   id(f_big),    id(f_title), id(f_body),
+                                  id(f_small), id(f_icon_s), id(f_icon_m), id(f_icon_l),
+                                  id(f_soc),   id(f_mid)};
+      panel::draw(it, s, F);

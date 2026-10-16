@@ -33,6 +33,9 @@ substitutions:
   # Only the starting point: the hook below replaces it with the address the
   # simulator actually advertises from.
   p310_mac: "94:E7:0B:0D:79:D2"
+  # The bench probe on GPIO4 (M26), standing in for the fridge probe so the
+  # scheduler gets a reading. The cabin probe is not on the bench and reads --.
+  fridge_probe: "0x460e250255219528"
 
 packages:
   core: !include van-core.yaml

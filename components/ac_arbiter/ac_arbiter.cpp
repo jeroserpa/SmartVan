@@ -71,6 +71,14 @@ void AcArbiter::update() {
 
   const van::ArbiterOutputs &out = this->core_.tick(now, in);
 
+  // The reason, whenever it changes. The write log below only speaks when AC
+  // flips, so a reason that moves while AC stays on (boot -> fridge (hard),
+  // say) was invisible in the log (2026-10-16, a panel "stuck" on STARTING).
+  if (static_cast<int>(out.reason) != this->last_reason_) {
+    ESP_LOGI(TAG, "reason: %s (AC %s)", van::ac_reason_str(out.reason), out.ac_on ? "ON" : "OFF");
+    this->last_reason_ = static_cast<int>(out.reason);
+  }
+
   // A write attempted while the link was down never reached the station, but it
   // still updated last_written_ - so on reconnect the arbiter believes AC is
   // already what it asked for and the re-assert would not go out for up to

@@ -129,6 +129,7 @@ class AcArbiter : public PollingComponent {
   bool ble_was_connected_{false};
   uint32_t last_write_ms_{0};
   uint32_t resends_{0};
+  int last_reason_{-1};  // for the reason-change log line
 };
 
 }  // namespace ac_arbiter

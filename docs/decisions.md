@@ -1643,5 +1643,102 @@ next to the USB socket (M22) is not ours and stays lit - mask it.
 first flash, parked's red blink showed green (`MEASURED` 2026-10-15). Fixed
 here and in the bench configs.
 
+## 2026-10-15 — D-36: the panel is redrawn - rounded, anti-aliased, Barlow - and previewed on a laptop
 
+**Context.** The owner, on the panel after D-33: the corners should follow the
+glass, and the whole thing looked old. Both were true. The 5 px square frame
+had its corners cut off by the LCD-1.47's rounded glass; every shape was
+ESPHome's aliased 1 px primitive; the icons were 1-bit images; and a
+full-size "%" or "°" took a digit's width beside the hero while saying
+nothing from across the van.
 
+**Decision.** Same screens, wording, gestures and colour meanings as
+D-26/D-31/D-33; a new visual language:
+
+- **Everything that meets the edge follows the glass.** The state rim is a
+  3 px band with a 9 px fade inwards, on the glass's corner radius; cards,
+  chips and bars are rounded to match. `GLASS_R = 22` in `nodes/vc_panel.h`
+  is read off Waveshare's product photo - no datasheet gives it.
+- **Anti-aliased shapes** (`nodes/vc_draw.h`): signed-distance rasterising,
+  per pixel only at edges. The old primitives stay for the bench rig.
+- **Barlow**, drawn from California highway signs and plates, in place of
+  Roboto. Semi Condensed for numerals: the hero's digits grow from 80 to
+  94 px (8.2 -> 9.7 mm, 2.0 -> 2.4 m by the 250x-cap rule) in the same width.
+- **Small units.** "%" sits on the baseline at 52 px, "°" on the digits' top.
+- **One skeleton per page**: an analogue column that reads from furthest
+  away (the widget's battery vessel, a vertical fridge deadband scale, the
+  action screens' icon tile), the hero to its right, one walk-up line.
+- **The state is a word as well as a colour**: a chip top right - AC OFF,
+  FRIDGE, COOKING, SOLAR, STARTING, FAIL-SAFE, PARK?, PARKED. The boot window
+  is amber STARTING, not red: D-31 keeps steady red for a real fault.
+- **The web page's palette** (`ui/index.html`'s OKLCH hues) on black, and its
+  SOC bands, 30 / 15 % - the panel alone still used 40 / 20.
+- **Icons are Material Design Icons as a 4-bit font**, pinned to v7.4.47,
+  tinted per draw like text.
+- PARKED (the wake screen) is a solid red card; drive inhibit's car icon is
+  no longer red, since red means parked or broken and nothing else.
+
+**How it was checked - and why the lambda changed shape.** The display lambda
+now only reads ids into a plain `panel::State`; all drawing is in
+`nodes/vc_panel.h`. That is what lets `tools/panel_preview/` compile the same
+header on a laptop against a stand-in for ESPHome's display API, with glyphs
+rasterised by ESPHome's own font code from `van-core.yaml`'s font list, and
+render 36 scenes - every page, rim colour, degraded path, action screen, hold
+bar and toast - to PNG, plus a rough "20/20 eye at 2.5 m" sheet. A glyph
+missing from the YAML fails the run; text that leaves the glass's safe area
+is reported. The previous review loop was an HTML mock-up redrawn by hand.
+
+**Cost.** Flash for the fonts (16 MB on this board). Per frame, AA work is
+edge pixels only - corners, the rim's corners, two small rings. `MEASURED`
+on the bench (M26): a redraw takes 153-171 ms against ~150 ms before, so
+roughly +5-15 % once a second; BLE behaved normally, not yet soaked.
+
+**`VERIFY` on the panel:** the corner radius (does the rim sit concentric with
+the glass?), colours and the fade through the real bezel, and the hero from
+the far end of the van.
+
+### After the owner's first look on the bench, 2026-10-16
+
+- **Warmer, calmer green**: OKLCH 155 / 0.17 -> 140 / 0.13 (`#89cc7b`). It was
+  "too flashy"; the panel's green now departs from the web page's on purpose.
+- **DIAG is the last screen**: ENERGY, FRIDGE, WATER, (COOKING), SLEEP, PARK,
+  DIAG. Page indices renumbered (3 COOKING, 4 SLEEP, 5 PARK, 6 DIAG); a hold
+  on DIAG is still cooking.
+- **Bigger action icons**: the tile is 66 px with a 48 px glyph, level with
+  the 80 px ON / OFF beside it; the cooking ring matches.
+- **The frame is a switch, "Panel frame", on the app's Setup page**, default
+  on. The status LED (D-34) carries the same state with the screen dark, so
+  whether the panel repeats it is taste. The corner chip stays either way.
+- **The hold bar is smooth.** It stepped at two full redraws a second. Now
+  one full redraw draws the label, then every 40 ms only the bar is redrawn
+  and only its strip goes to the glass (`nodes/vc_flush.h`, a few kB instead
+  of 110 kB), with its moving end anti-aliased at sub-pixel position. The
+  once-a-second redraw moved from the display's `update_interval` to an
+  interval that waits while a bar is filling.
+- **AC and cooking get their own symbols in the strip.** The IEC AC mark sits
+  next to the chip, white whenever the inverter is on whatever asked for it,
+  dim and struck when off; a pot shows while cooking. Bluetooth now appears
+  only when the link is lost - connected is the normal case. When the icons
+  need the room (cooking in sleep with drive inhibit on) the page pips are
+  left out and the page name stays.
+- **The red cues always show**, and the panel's follow the LED's (D-34): a
+  steady red frame for a fault, a blinking one for PARK? (the LED's fast
+  blink, at the panel's 1 Hz), a red frame while parked - whatever "Panel
+  frame" says; only green and amber are taste. A dark panel, sleep mode
+  included, lights for them: dim and steady for a fault, 1 s in 4 while
+  parked, which flashes the PARKED card in an empty van (~0.1 Wh a day). The
+  LED's red cues no longer go dark with "Status LED brightness" at 0: they
+  keep at least 25 %. They already outranked sleep mode.
+- **ENERGY shows the cabin and what flows.** The charge drops to 92 px
+  (6.8 mm, ~1.7 m) to make room for a right-hand column: the cabin
+  temperature, then IN and OUT, each only while above 5 W (a kilowatt as
+  kW). The net and the time left stay on the walk-up line; "100" loses its
+  "%" to fit, the vessel says full anyway.
+- **A NaN reading draws as missing.** A cabin probe absent from the bus held
+  NaN, and the new cabin field printed "nan" in a face with no letters (the
+  board's log: `Codepoint 'n' not found`); DIAG had shown "nan°" the same
+  way since the first panel. `draw()` now treats every NaN as missing, and
+  the preview has NaN scenes, which fail the run if it comes back.
+- **The arbiter logs its reason whenever it changes**, not only when AC flips:
+  a panel showing STARTING was the first minute after a flash, then
+  `fridge (hard)` - which the log could not show while AC stayed on.

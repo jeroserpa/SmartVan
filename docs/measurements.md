@@ -978,3 +978,30 @@ station's received writes.
 Not tried: leaving parked mode from the PARK screen without cooking (toast 8).
 Each tap's immediate redraw costs ~150 ms of loop (ESPHome warns >50 ms); a
 one-off per press, accepted.
+
+## M26 — 2026-10-16 — bench: the bench probe's address, and the D-36 panel's redraw time
+
+The 1.47B on the laptop over USB, running `nodes/van-core-pcsim.yaml` with the
+D-36 panel, against `tools/p310_sim.py`.
+
+**The bench probe is a third DS18B20: `0x460e250255219528`.** A temporary
+DEBUG build listed one device on GPIO4 - that one - and both configured
+probes (fridge `0xf50e250267176c28`, cabin `0x600e2502e02beb28`) reading an
+all-`FF` scratch pad, i.e. nobody answering. So van-core saw no fridge probe
+and held AC on by design; this is the unrecorded address M22 warned about,
+and probably what M23's "no fridge probe reading throughout" was too.
+`van-core.yaml` now takes both addresses as substitutions (`fridge_probe`,
+`cabin_probe`, defaults unchanged = the van's), and `van-core-pcsim.yaml`
+sets `fridge_probe` to the bench probe. After reflashing, failed reads fell
+from 8 in 45 s (both sensors) to 4 in 75 s - the absent cabin probe's 30 s
+schedule alone - so the fridge probe reads. Not on the bench: the cabin probe.
+
+Side finding: `sd_file_server` (the external component) does not compile with
+CONFIG-level logging on ESPHome 2026.8 (`network::get_use_address` is gone).
+The DEBUG build had to drop it. INFO, the shipping level, is unaffected.
+
+**Redraw time, D-36 panel: 153 / 161 / 171 ms** (ESPHome's "display took a
+long time" warnings in the first 75 s after boot), against **~150 ms** for
+the previous panel (M25). Roughly +5-15 %, from the anti-aliased edges and
+per-pixel fills. BLE connected, subscribed and polled normally throughout;
+not yet soaked.

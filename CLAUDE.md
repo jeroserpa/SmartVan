@@ -206,7 +206,7 @@ D-33 — tap moves, hold does what the screen offers.**
 | | PARK: park — asks first (`PARK?`), a second hold confirms (D-14); while parked, leaves |
 | Let go between 1 s and 3 s | Nothing — the way to back out |
 
-Screens: ENERGY → FRIDGE → WATER → DIAG → (COOKING) → SLEEP → PARK, back to
+Screens: ENERGY → FRIDGE → WATER → (COOKING) → SLEEP → PARK → DIAG, back to
 ENERGY after 10 s without input, so the next hold is cooking again. Cooking is
 one hold from anywhere, dark screen included. While held, the panel shows what
 the hold is about to do and fills towards it. Hold time (3 s) and the fall-back
@@ -224,6 +224,9 @@ stopwatch + `+30` (or `+12` / `MAX` at the 3 h ceiling), struck symbol +
 **Red means parked or broken, nowhere else** — LED and panel frame alike:
 red blink = parked, steady red = fail-safe holding AC on for a fault,
 green = manual, yellow-amber = fridge, off = inverter down.
+The red cues always show (D-36): on the panel whatever the "Panel frame"
+switch says, on a dark panel too (dim for a fault, 1 s in 4 while parked,
+sleep mode included), and on the LED at no less than 25 % brightness.
 
 
 ~~**Optional upgrade — rotary encoder with push**~~ — `WITHDRAWN 2026-10-15`
@@ -248,7 +251,8 @@ gates this node.** Only the framebuffer (110 kB) and `soak_log` use it. The
 constraint is free *internal* heap, which M14 put at **102 kB minimum against
 145 kB at boot**, and that is the pool the BLE stack lives in. LVGL's wins here
 are touch (deliberately absent, §2), animation (explicitly unwanted, above),
-styling (the panel already matches its mockup via `vc_draw.h`) and partial
+styling (anti-aliased, rounded and previewed on a laptop since D-36 -
+`vc_draw.h`, `vc_panel.h`, `tools/panel_preview/`) and partial
 redraw — and M12 recorded **zero BLE drops over 21 h** with the current
 full-frame 1 Hz redraw, so there is no measured problem to fix. Reopening it
 needs a measured loop-time or BLE problem caused by the display, not more free

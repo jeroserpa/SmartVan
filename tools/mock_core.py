@@ -126,6 +126,7 @@ def _init_entities():
     # Parked mode: switch state is read back from the arbiter, so an armed but
     # unconfirmed request still shows off (CLAUDE.md section 6, D-14).
     define("switch-parked_mode", "Parked mode", False)
+    define("switch-panel_frame", "Panel frame", True)
     define("binary_sensor-parked", "Parked", False)
     define("sensor-parked_for", "Parked for", 0.0, "d")
 
