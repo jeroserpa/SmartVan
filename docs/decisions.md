@@ -1618,11 +1618,11 @@ top wins:
 
 | Colour | Means |
 |---|---|
+| off | sleep mode - all of the below included, faults too (owner, 2026-10-16) |
 | white flash | a button hold just acted (was a chirp) |
 | steady red | fault - the fail-safe holding AC on, boot window excepted |
 | fast red blink | parking asked, waiting for the confirming hold (was a chirp) |
 | red blink, 1 s in 4 | parked |
-| off | sleep mode, unless one of the above |
 | cyan, blinking near the end | cooking AC; the blink replaces the timer-warning chirp |
 | off | everything else, fridge running included (owner: dark unless there is news) |
 
@@ -1632,8 +1632,10 @@ interval and the chirp script are gone; GPIO8 is free.
 
 **Brightness** is an app setting, `Status LED brightness`, default 100 %
 (owner: it sits behind the enclosure wall), with no gamma so the number means
-what it says. Sleep mode keeps the LED dark
-unless something is wrong: it is a metre from a bed.
+what it says. Sleep mode keeps the LED dark,
+faults included: it is a metre from a bed. `REVISED 2026-10-16` by D-36: the
+red cues (fault, PARK?, parked) show in sleep mode after all; the rest stays
+dark.
 
 **Visibility** depends on the enclosure: the LED sits inside the box, so it
 needs the light pipe or window wiring.md §5 asks for. The charger's green LED
@@ -1643,7 +1645,23 @@ next to the USB socket (M22) is not ours and stays lit - mask it.
 first flash, parked's red blink showed green (`MEASURED` 2026-10-15). Fixed
 here and in the bench configs.
 
-## 2026-10-15 — D-36: the panel is redrawn - rounded, anti-aliased, Barlow - and previewed on a laptop
+## 2026-10-16 — D-35: sleep mode on a schedule
+
+**Decision.** Two app settings, `Sleep starts at` and `Sleep ends at` (hours,
+local; default 23:00 and 07:00; equal = off). A 30 s interval switches sleep
+mode **at the edges of the window only**, so turning it off by hand at 02:00
+stays off until the next 23:00, and turning it on early is not undone. Booting
+inside the window turns it on.
+
+**Clock.** The board has no RTC; the time is the phone-set clock in
+`soak_log` (`local_minute_of_day()`), carried across software resets but
+lost on a power cut until the app is opened. With no clock the schedule does
+nothing - normal running, LEDs on, fridge on its normal schedule - which is
+the safe direction. A DS3231 (BOM item 15) closes this.
+
+**`UNVERIFIED`** across a real midnight.
+
+## 2026-10-16 — D-36: the panel is redrawn - rounded, anti-aliased, Barlow - and previewed on a laptop
 
 **Context.** The owner, on the panel after D-33: the corners should follow the
 glass, and the whole thing looked old. Both were true. The 5 px square frame
@@ -1728,7 +1746,10 @@ the far end of the van.
   included, lights for them: dim and steady for a fault, 1 s in 4 while
   parked, which flashes the PARKED card in an empty van (~0.1 Wh a day). The
   LED's red cues no longer go dark with "Status LED brightness" at 0: they
-  keep at least 25 %. They already outranked sleep mode.
+  keep at least 25 %. And they show in sleep mode again: the same morning
+  had made sleep mode dark for every LED, faults included (D-34's revision);
+  asked which, the owner chose red in sleep. Everything else, the hold's
+  white flash too, stays dark in sleep.
 - **ENERGY shows the cabin and what flows.** The charge drops to 92 px
   (6.8 mm, ~1.7 m) to make room for a right-hand column: the cabin
   temperature, then IN and OUT, each only while above 5 W (a kilowatt as

@@ -119,6 +119,10 @@ class SoakLog : public Component, public AsyncWebHandler {
   uint16_t boot() const { return this->hdr_->boot; }
   // 0 unknown, 1 phone-synced, 2 carried across a reboot.
   uint8_t clock_state() const { return this->clock_state_; }
+  // Local minute of the day (0-1439) from the phone-set clock, or -1 when the
+  // clock is unknown (after a power cut, until the app is opened). Used by the
+  // sleep schedule, which then does nothing rather than guess.
+  int local_minute_of_day() const;
   // SD copy: 0 not configured, 1 writing, 2 failing (card absent, full, ...).
   uint8_t sd_state() const { return this->sd_state_; }
   uint32_t sd_lag_rows() const;   // rows in the ring not yet on the card

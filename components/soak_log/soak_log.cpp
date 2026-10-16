@@ -176,6 +176,14 @@ uint32_t SoakLog::now_epoch_() const {
   return (uint32_t) ((now_ms() + this->epoch_offset_ms_) / 1000);
 }
 
+int SoakLog::local_minute_of_day() const {
+  const uint32_t epoch = this->now_epoch_();
+  if (epoch == 0)
+    return -1;
+  const int64_t local = (int64_t) epoch + (int64_t) this->hdr_->tz_min * 60;
+  return (int) (((local % 86400) + 86400) % 86400 / 60);
+}
+
 void SoakLog::write_row_() {
   // Sample outside the lock; the values are the main loop's own.
   const size_t n = this->columns_.size();
